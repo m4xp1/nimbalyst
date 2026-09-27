@@ -10,10 +10,12 @@ import {
   workspaceRootPathsAtom,
   selectedFolderPathAtom,
   selectedPathsAtom,
+  flatTreeActiveFileAtom,
   dragStateAtom,
   visibleNodesAtom,
   type RendererFileTreeItem,
 } from '../fileTree';
+import { selectedPathsContainFile } from '../../../utils/fileTreePath';
 
 /**
  * Unit tests for the visibleNodesAtom derivation.
@@ -225,6 +227,19 @@ describe('visibleNodesAtom', () => {
     expect(nodes[0].isMultiSelected).toBe(true);
     expect(nodes[1].isMultiSelected).toBe(false);
     expect(nodes[2].isMultiSelected).toBe(true);
+  });
+
+  it('keeps a revealed Windows file selected when the editor uses forward slashes', () => {
+    const treePath = 'C:\\Work\\docs\\note.md';
+    jotaiStore.set(fileTreeItemsAtom, [{ name: 'note.md', path: treePath, type: 'file' }]);
+    jotaiStore.set(flatTreeActiveFileAtom, 'c:/Work/docs/note.md');
+    jotaiStore.set(selectedPathsAtom, new Set([treePath]));
+
+    expect(selectedPathsContainFile(jotaiStore.get(selectedPathsAtom), 'c:/Work/docs/note.md')).toBe(true);
+    expect(jotaiStore.get(visibleNodesAtom)[0]).toMatchObject({
+      isActive: true,
+      isMultiSelected: true,
+    });
   });
 
   it('should mark selected folder correctly', () => {

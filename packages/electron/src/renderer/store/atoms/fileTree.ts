@@ -12,6 +12,7 @@
 import { atom } from 'jotai';
 import { atomFamily } from '../debug/atomFamilyRegistry';
 import { activeTabIdAtom, getFilePathFromKey } from '@nimbalyst/runtime/store';
+import { normalizeFileTreePath } from '../../utils/fileTreePath';
 
 /**
  * Git status codes matching what `simple-git` provides.
@@ -546,12 +547,15 @@ export function flattenTree(options: FlattenTreeOptions): FlatTreeNode[] {
   const rootPaths = options.workspaceRootPaths;
   // One root is a plain workspace: nothing is a "root header row".
   const marksRoots = (rootPaths?.size ?? 0) > 1;
+  const activePath = activeFile ? normalizeFileTreePath(activeFile) : null;
+  const selectedPathKeys = new Set([...selectedPaths].map(normalizeFileTreePath));
   const result: FlatTreeNode[] = [];
 
   function walk(treeItems: RendererFileTreeItem[], depth: number, parentPath: string | null) {
     for (const item of treeItems) {
       const isDir = item.type === 'directory';
       const isExpanded = isDir && expanded.has(item.path);
+      const pathKey = normalizeFileTreePath(item.path);
 
       result.push({
         path: item.path,
@@ -562,9 +566,9 @@ export function flattenTree(options: FlattenTreeOptions): FlatTreeNode[] {
         parentPath,
         hasChildren: isDir && (item.children?.length ?? 0) > 0,
         isExpanded,
-        isActive: item.path === activeFile,
+        isActive: pathKey === activePath,
         isSelected: item.path === selectedFolder,
-        isMultiSelected: selectedPaths.has(item.path),
+        isMultiSelected: selectedPathKeys.has(pathKey),
         isDragOver: dragState?.dropTargetPath === item.path,
         isSpecialDirectory: isDir && SPECIAL_DIRECTORIES.includes(item.name),
         isWorkspaceRoot: marksRoots && depth === 0 && rootPaths!.has(item.path),
