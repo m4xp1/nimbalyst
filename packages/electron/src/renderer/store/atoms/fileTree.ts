@@ -235,11 +235,12 @@ export const toggleDirExpandedAtom = atom(null, (get, set, dirPath: string) => {
  * e.g., "/a/b/c/file.txt" -> ["/a", "/a/b", "/a/b/c"]
  */
 function getParentDirPaths(targetPath: string): string[] {
-  const parts = targetPath.split('/');
+  const separator = targetPath.includes('\\') ? '\\' : '/';
+  const parts = targetPath.split(/[\\/]/);
   const dirs: string[] = [];
   // Build all parent directories (skip last part which is the file/folder itself)
   for (let i = 1; i < parts.length - 1; i++) {
-    dirs.push(parts.slice(0, i + 1).join('/'));
+    dirs.push(parts.slice(0, i + 1).join(separator));
   }
   return dirs;
 }
@@ -274,11 +275,9 @@ function expandAndReveal(
   targetPath: string,
   type: 'file' | 'folder'
 ) {
-  // Get dirs that actually exist in the tree
-  const treeDirs = collectTreeDirPaths(get(fileTreeItemsAtom) as RendererFileTreeItem[]);
-
-  // Only expand parent directories that exist in the tree
-  const dirs = getParentDirPaths(targetPath).filter(d => treeDirs.has(d));
+  // The rendered tree may be filtered, so use the unfiltered tree for reveal.
+  const treeDirs = collectTreeDirPaths(get(rawFileTreeAtom) as RendererFileTreeItem[]);
+  const dirs = getParentDirPaths(targetPath).filter(dir => treeDirs.has(dir));
   const current = get(expandedDirsAtom) as Set<string>;
   const dirsToExpand = dirs.filter(d => !current.has(d));
 

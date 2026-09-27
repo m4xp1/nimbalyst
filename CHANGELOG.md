@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 <!-- New features go here -->
+- Reveal the open file from the Files sidebar, including filtered and nested folders on Windows.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
