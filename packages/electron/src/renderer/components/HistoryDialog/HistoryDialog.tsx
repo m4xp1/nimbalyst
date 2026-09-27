@@ -6,7 +6,7 @@ import { DiffPreviewEditor, type DiffNavigationState } from './DiffPreviewEditor
 import { TextDiffViewer, type TextDiffNavigationState } from './TextDiffViewer';
 import { MonacoDiffViewer } from './MonacoDiffViewer';
 import { ImageDiffViewer } from './ImageDiffViewer';
-import { createReadOnlyEditorHost } from './createReadOnlyEditorHost';
+import { createReadOnlyEditorHost } from '../editors/createReadOnlyEditorHost';
 import { getFileType, type EditorType } from '../../utils/fileTypeDetector';
 import { getFileName } from '../../utils/pathUtils';
 import { getRelativeTimeString } from '../../utils/dateFormatting';

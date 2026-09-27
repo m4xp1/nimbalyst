@@ -12,6 +12,11 @@ import { store } from '@nimbalyst/runtime/store';
 // The file-backed body editor is only reachable in content focus, and it drags
 // in the whole editor stack.
 vi.mock('../../TabEditor/TabEditor', () => ({ TabEditor: () => null }));
+vi.mock('../TrackerFileBackedPreview', () => ({
+  TrackerFileBackedPreview: ({ content }: { content: string }) => (
+    <div data-testid="tracker-file-backed-document-preview">{content}</div>
+  ),
+}));
 
 // The collab body stack blocks on import outside Electron, and this pane's
 // metadata region doesn't depend on it: a dormant collab result is enough.
@@ -67,6 +72,7 @@ beforeEach(() => {
   createTrackerItem.mockClear();
   (window as any).electronAPI = {
     invoke: vi.fn().mockResolvedValue(undefined),
+    readFileContent: vi.fn().mockResolvedValue({ success: true, content: '# Preview body' }),
     documentService: {
       updateTrackerItem,
       createTrackerItem,
@@ -88,6 +94,20 @@ function renderDetail(props: Record<string, unknown> = {}) {
 }
 
 describe('TrackerItemDetail metadata region', () => {
+  it('shows a read-only Markdown preview for a file-backed item in the detail card', async () => {
+    store.set(replaceAllTrackerItemsAtom, [{
+      ...ITEM,
+      source: 'frontmatter',
+      system: { ...ITEM.system, documentPath: 'plans/imported.md' },
+    } as TrackerRecord]);
+
+    renderDetail({ workspacePath: '/ws' });
+
+    await waitFor(() => expect(window.electronAPI.readFileContent).toHaveBeenCalledWith('/ws/plans/imported.md'));
+    expect((await screen.findByTestId('tracker-file-backed-document-preview')).textContent).toBe('# Preview body');
+    screen.getByText('Open in Editor');
+  });
+
   it('renders the schema fields as chips, with tags kept as an open row', () => {
     renderDetail();
 
