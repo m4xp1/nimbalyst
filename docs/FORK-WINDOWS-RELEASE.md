@@ -10,14 +10,14 @@ Push тега `v<версия packages/electron/package.json>` на коммит
 запускает те же проверки и публикует GitHub Release в `m4xp1/nimbalyst`.
 GitHub не умеет одновременно ограничивать tag push именем ветки: принадлежность коммита проверяется через `git merge-base --is-ancestor`.
 
-Проверки: typecheck всех workspace, три существующих набора тестов дополнений,
+Проверки: typecheck всех workspace, существующие тесты дополнений и регрессионный тест feed updater,
 загрузка SQLite/node-pty в закреплённом Electron, штатные build:win и валидаторы упаковки.
 Это не полный прогон всех unit-тестов и не интерактивная проверка установленного приложения.
 
 Артефакты: `Nimbalyst-Windows-x64.exe` и `SHA256SUMS.txt`.
 Сборка неподписанная: штатный явный флаг `ALLOW_UNSIGNED_WINDOWS_BUILD=true`;
 секреты DigiCert и сертификат официального Nimbalyst не используются.
-Установщик использует provider форка; `latest.yml` не публикуется,
+Упаковка и runtime updater используют provider форка (`NIMBALYST_UPDATE_OWNER=m4xp1`, `NIMBALYST_UPDATE_REPO=nimbalyst`); `latest.yml` не публикуется,
 обновления этого неподписанного форка устанавливаются вручную.
 
 Перед тегом:

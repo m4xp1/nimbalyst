@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const settings = vi.hoisted(() => ({ channel: 'stable' }));
 vi.mock('../../utils/store', () => ({ getReleaseChannel: () => settings.channel, store: {} }));
@@ -49,4 +49,31 @@ it('refuses older releases through launch, repeated checks, and channel changes'
     }
     autoUpdater.removeAllListeners();
   }
+});
+
+// Fork releases must retain their own feed across channel changes, so an
+// official upstream update cannot replace the fork's local additions.
+afterEach(() => vi.unstubAllEnvs());
+
+it('uses the fork feed for both stable and alpha channels', () => {
+  vi.stubEnv('NIMBALYST_UPDATE_OWNER', 'm4xp1');
+  vi.stubEnv('NIMBALYST_UPDATE_REPO', 'nimbalyst');
+  const service = new AutoUpdaterService();
+  for (const channel of ['stable', 'alpha', 'stable']) {
+    settings.channel = channel;
+    service.reconfigureFeedURL();
+    expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
+      provider: 'github', owner: 'm4xp1', repo: 'nimbalyst',
+    });
+    expect(autoUpdater.allowDowngrade).toBe(false);
+  }
+});
+
+it('keeps the upstream feed when no build override is supplied', () => {
+  vi.stubEnv('NIMBALYST_UPDATE_OWNER', undefined);
+  vi.stubEnv('NIMBALYST_UPDATE_REPO', undefined);
+  new AutoUpdaterService();
+  expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
+    provider: 'github', owner: 'nimbalyst', repo: 'nimbalyst',
+  });
 });

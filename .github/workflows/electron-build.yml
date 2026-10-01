@@ -37,6 +37,8 @@ jobs:
       ALLOW_UNSIGNED_WINDOWS_BUILD: 'true'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       OFFICIAL_BUILD: 'false'
+      NIMBALYST_UPDATE_OWNER: m4xp1
+      NIMBALYST_UPDATE_REPO: nimbalyst
     steps:
       - name: Checkout exact branch or tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -87,6 +89,7 @@ jobs:
       - name: Test fork features
         run: >-
           npx vitest run
+          packages/electron/src/main/services/__tests__/autoUpdater.channelPolicy.test.ts
           packages/electron/src/renderer/store/atoms/__tests__/fileTree.visibleNodes.test.ts
           packages/electron/src/renderer/components/TrackerMode/__tests__/TrackerFileBackedPreview.test.tsx
           packages/electron/src/renderer/components/TrackerMode/__tests__/TrackerItemDetail.fields.test.tsx

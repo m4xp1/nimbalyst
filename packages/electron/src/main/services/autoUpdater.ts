@@ -89,7 +89,11 @@ export class AutoUpdaterService {
     // electron-updater's channel setter enables downgrades. Reset AFTER the
     // assignment on every launch and channel change (the policy from PR #811).
     autoUpdater.allowDowngrade = false;
-    autoUpdater.setFeedURL(GITHUB_UPDATE_PROVIDER);
+    autoUpdater.setFeedURL({
+      ...GITHUB_UPDATE_PROVIDER,
+      owner: process.env.NIMBALYST_UPDATE_OWNER || GITHUB_UPDATE_PROVIDER.owner,
+      repo: process.env.NIMBALYST_UPDATE_REPO || GITHUB_UPDATE_PROVIDER.repo,
+    });
   }
 
   private setupEventHandlers() {
