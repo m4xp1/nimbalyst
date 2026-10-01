@@ -3,13 +3,19 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createStore } from 'jotai';
 import {
   fileTreeItemsAtom,
+  rawFileTreeAtom,
   expandedDirsAtom,
+  revealFileAtom,
+  revealRequestAtom,
+  workspaceRootPathsAtom,
   selectedFolderPathAtom,
   selectedPathsAtom,
+  flatTreeActiveFileAtom,
   dragStateAtom,
   visibleNodesAtom,
   type RendererFileTreeItem,
 } from '../fileTree';
+import { selectedPathsContainFile } from '../../../utils/fileTreePath';
 
 /**
  * Unit tests for the visibleNodesAtom derivation.
@@ -35,6 +41,45 @@ describe('visibleNodesAtom', () => {
 
   beforeEach(() => {
     jotaiStore = makeStore();
+  });
+
+  it('reveals a file hidden by the current filter after the full tree returns', () => {
+    const tree: RendererFileTreeItem[] = [{
+      name: 'src', path: '/ws/src', type: 'directory', children: [{
+        name: 'nested', path: '/ws/src/nested', type: 'directory', children: [{
+          name: 'note.md', path: '/ws/src/nested/note.md', type: 'file',
+        }],
+      }],
+    }];
+    jotaiStore.set(workspaceRootPathsAtom, ['/ws']);
+    jotaiStore.set(rawFileTreeAtom, tree);
+    jotaiStore.set(fileTreeItemsAtom, []); // An active filter hides the file.
+
+    jotaiStore.set(revealFileAtom, '/ws/src/nested/note.md');
+    expect(jotaiStore.get(expandedDirsAtom)).toEqual(new Set(['/ws/src', '/ws/src/nested']));
+    expect(jotaiStore.get(revealRequestAtom)?.path).toBe('/ws/src/nested/note.md');
+
+    jotaiStore.set(fileTreeItemsAtom, tree); // WorkspaceSidebar clears the filter.
+    expect(jotaiStore.get(visibleNodesAtom).map(node => node.path)).toContain('/ws/src/nested/note.md');
+  });
+
+  it('expands native Windows paths used by the file tree', () => {
+    const file = 'C:\\work\\src\\nested\\note.md';
+    jotaiStore.set(workspaceRootPathsAtom, ['C:\\work']);
+    jotaiStore.set(rawFileTreeAtom, [{
+      name: 'src', path: 'C:\\work\\src', type: 'directory', children: [{
+        name: 'nested', path: 'C:\\work\\src\\nested', type: 'directory', children: [{
+          name: 'note.md', path: file, type: 'file',
+        }],
+      }],
+    }]);
+
+    jotaiStore.set(revealFileAtom, file);
+
+    expect(jotaiStore.get(expandedDirsAtom)).toEqual(new Set([
+      'C:\\work\\src', 'C:\\work\\src\\nested',
+    ]));
+    expect(jotaiStore.get(revealRequestAtom)?.path).toBe(file);
   });
 
   it('should return empty array for empty tree', () => {
@@ -182,6 +227,19 @@ describe('visibleNodesAtom', () => {
     expect(nodes[0].isMultiSelected).toBe(true);
     expect(nodes[1].isMultiSelected).toBe(false);
     expect(nodes[2].isMultiSelected).toBe(true);
+  });
+
+  it('keeps a revealed Windows file selected when the editor uses forward slashes', () => {
+    const treePath = 'C:\\Work\\docs\\note.md';
+    jotaiStore.set(fileTreeItemsAtom, [{ name: 'note.md', path: treePath, type: 'file' }]);
+    jotaiStore.set(flatTreeActiveFileAtom, 'c:/Work/docs/note.md');
+    jotaiStore.set(selectedPathsAtom, new Set([treePath]));
+
+    expect(selectedPathsContainFile(jotaiStore.get(selectedPathsAtom), 'c:/Work/docs/note.md')).toBe(true);
+    expect(jotaiStore.get(visibleNodesAtom)[0]).toMatchObject({
+      isActive: true,
+      isMultiSelected: true,
+    });
   });
 
   it('should mark selected folder correctly', () => {

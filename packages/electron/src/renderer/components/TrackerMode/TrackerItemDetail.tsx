@@ -61,6 +61,7 @@ import { TrackerCollabAvatars, TrackerCollabSyncDot } from './trackerCollabChrom
 import { formatTrackerActivity } from './trackerActivityPresentation';
 import { createCollectionItem } from './createCollectionItem';
 import { TabEditor } from '../TabEditor/TabEditor';
+import { TrackerFileBackedPreview } from './TrackerFileBackedPreview';
 import { FeedbackBacklinkSection } from '../FeedbackRequest/FeedbackBacklinks';
 import { TypeTagsEditor } from './TrackerTypeTagsEditor';
 import { TrackerItemLabelProperties } from './TrackerItemLabelProperties';
@@ -632,11 +633,10 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   } | null>(null);
   const [fileBackedDocumentError, setFileBackedDocumentError] = useState<string | null>(null);
 
-  // Expanded file-backed items are real editor instances, not a path-only
-  // placeholder. Loading stays lazy so the ordinary tracker detail view keeps
-  // its current lightweight behavior.
+  // File-backed items use the same loaded content for the read-only card
+  // and the full editor shown in content focus.
   useEffect(() => {
-    if (contentMode !== 'file-backed' || !contentFocus || !fileBackedDocumentPath) return;
+    if (contentMode !== 'file-backed' || !fileBackedDocumentPath) return;
     let cancelled = false;
     setFileBackedDocument(null);
     setFileBackedDocumentError(null);
@@ -660,7 +660,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [contentFocus, contentMode, fileBackedDocumentPath]);
+  }, [contentMode, fileBackedDocumentPath]);
 
   // A host that renders its own header (document view) still wants the collab
   // chrome, and only this component knows how the body is actually edited.
@@ -1759,6 +1759,41 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               <div className="flex flex-1 items-center justify-center text-sm text-nim-faint">
                 Loading document...
               </div>
+            )
+          ) : contentMode === 'file-backed' && fileBackedDocumentPath ? (
+            fileBackedDocument?.path === fileBackedDocumentPath ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 py-2">
+                  <span className="text-sm text-nim-muted flex-1 truncate font-mono">
+                    {item.system.documentPath}
+                  </span>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-nim text-nim-muted hover:text-nim hover:bg-nim-tertiary transition-colors"
+                    onClick={handleOpenDocument}
+                  >
+                    <MaterialSymbol icon="open_in_new" size={14} />
+                    Open in Editor
+                  </button>
+                </div>
+                <TrackerFileBackedPreview
+                  filePath={fileBackedDocumentPath}
+                  content={fileBackedDocument.content}
+                />
+              </div>
+            ) : fileBackedDocumentError ? (
+              <div className="flex flex-col gap-2 py-2">
+                <p className="m-0 text-sm text-nim-muted">{fileBackedDocumentError}</p>
+                <button
+                  type="button"
+                  className="self-start rounded border border-nim px-2 py-1 text-xs text-nim-muted hover:bg-nim-tertiary hover:text-nim"
+                  onClick={handleOpenDocument}
+                >
+                  Open in Editor
+                </button>
+              </div>
+            ) : (
+              <div className="text-sm text-nim-faint py-4 text-center">Loading document...</div>
             )
           ) : item.system.documentPath ? (
             <div className="flex items-center gap-2 py-2">

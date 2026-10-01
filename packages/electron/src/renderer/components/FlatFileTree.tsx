@@ -6,6 +6,7 @@ import { FileTreeRow } from './FileTreeRow';
 import { FileContextMenu } from './FileContextMenu';
 import type { NewFileType, ExtensionFileType } from './NewFileMenu';
 import { handleTreeKeyDown, type TreeActions } from '../utils/treeKeyboardHandler';
+import { fileTreePathsEqual, selectedPathsContainFile } from '../utils/fileTreePath';
 import {
   expandedDirsAtom,
   revealRequestAtom,
@@ -286,8 +287,9 @@ export function FlatFileTree({
 
   // Perform the deferred scroll once visibleNodes updates
   useEffect(() => {
-    if (!pendingScrollPathRef.current) return;
-    const index = visibleNodes.findIndex(n => n.path === pendingScrollPathRef.current);
+    const pendingPath = pendingScrollPathRef.current;
+    if (!pendingPath) return;
+    const index = visibleNodes.findIndex(n => fileTreePathsEqual(n.path, pendingPath));
     if (index >= 0) {
       virtuosoRef.current?.scrollToIndex({
         index,
@@ -304,7 +306,7 @@ export function FlatFileTree({
 
   // == Clear multi-selection when a file is opened from outside the tree ==
   useEffect(() => {
-    if (currentFilePath && selectedPaths.size > 0 && !selectedPaths.has(currentFilePath)) {
+    if (currentFilePath && selectedPaths.size > 0 && !selectedPathsContainFile(selectedPaths, currentFilePath)) {
       setSelectedPaths(new Set<string>([currentFilePath]));
       setLastSelectedPath(currentFilePath);
     }

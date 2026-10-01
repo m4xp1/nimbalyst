@@ -357,7 +357,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Releases as tracker items — create the next release early, associate work with it as it lands, and let the release scripts fill in version, git tag, and date at build time (`nim release finalize`); `nim release notes` renders the release's members as changelog markdown
 - Review lane — `in-review` -> `changes-requested` / `approved` on bugs, tasks, and plans. An AI agent can move work into review but cannot approve it; only a person can
 - Configurable tracker item types (bugs, tasks, architecture docs, decisions, etc.)
-- Item detail panel
+- Item detail panel with an inline read-only Markdown preview for file-backed items and an action to open the source in the editor
 - Quick Track (Cmd+Shift+I) creates an item of any type from anywhere, with similar-item suggestions before creating a duplicate
 - Ready view surfaces unblocked work, ordered by how much other work it unblocks; items record what they are waiting on
 - Open / All / Closed filter, hiding closed work by default; Owner and Due Date available across the All view

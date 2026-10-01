@@ -14,7 +14,7 @@ import { getFileName } from '../utils/pathUtils';
 import { getExtensionLoader } from '@nimbalyst/runtime';
 import { KeyboardShortcuts, getShortcutDisplay } from '../../shared/KeyboardShortcuts';
 import { HelpTooltip } from '../help';
-import { store, gitStatusMapAtom, revealRequestAtom, rawFileTreeAtom, fileTreeLoadedAtom, type FileGitStatus as AtomFileGitStatus } from '../store';
+import { store, gitStatusMapAtom, revealFileAtom, revealRequestAtom, rawFileTreeAtom, fileTreeLoadedAtom, workspaceRootPathsAtom, selectedPathsAtom, lastSelectedPathAtom, type FileGitStatus as AtomFileGitStatus } from '../store';
 import { sessionFileEditsAtom } from '../store/atoms/sessionFiles';
 import { loadSessionFilesResult } from '../services/sessionFilesLoader';
 import { applyLoadedFolderContents, refreshFileTree } from '../store/listeners/fileTreeListeners';
@@ -76,6 +76,18 @@ function normalizeFilePath(path: string): string {
   return normalized;
 }
 
+function findFileInTree(items: FileTreeItem[], filePath: string): string | null {
+  const target = normalizeFilePath(filePath);
+  for (const item of items) {
+    if (item.type === 'file' && normalizeFilePath(item.path) === target) return item.path;
+    if (item.children) {
+      const found = findFileInTree(item.children, filePath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function resolveSessionFilePath(filePath: string, workspacePath?: string): string | null {
   if (!filePath) return null;
   const sanitized = normalizeSlashes(filePath);
@@ -117,7 +129,53 @@ export function WorkspaceSidebar({
   );
   // Get active file path from tabs store (reactive) or fall back to prop (legacy)
   const activeTab = tabsStore.activeTabId ? tabsStore.tabs.get(tabsStore.activeTabId) : null;
-  const currentFilePath = activeTab?.filePath ?? currentFilePathProp;
+  const currentFilePath = activeTab ? activeTab.filePath : currentFilePathProp;
+  const revealFile = useSetAtom(revealFileAtom);
+  const setSelectedPaths = useSetAtom(selectedPathsAtom);
+  const setLastSelectedPath = useSetAtom(lastSelectedPathAtom);
+
+  const handleRevealCurrentFile = useCallback(async () => {
+    // Read the tab at click time so the target matches the open document even
+    // when EditorMode has not re-rendered after a tab switch.
+    const snapshot = tabsActions.getSnapshot();
+    const tab = snapshot.activeTabId ? snapshot.tabs.get(snapshot.activeTabId) : null;
+    const filePath = tab ? tab.filePath : currentFilePathProp;
+    if (!filePath) return;
+    const normalizedPath = normalizeFilePath(filePath);
+    const root = [...store.get(workspaceRootPathsAtom)]
+      .sort((a, b) => b.length - a.length)
+      .find(candidate => {
+        const normalizedRoot = normalizeFilePath(candidate);
+        return normalizedPath.startsWith(normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`);
+      });
+    if (!root) return;
+
+    // The initial scan has a depth limit. Load each parent in order when the
+    // active file is deeper than the current tree, then reveal its actual path.
+    let treePath = findFileInTree(store.get(rawFileTreeAtom), filePath);
+    if (!treePath && window.electronAPI?.refreshFolderContents) {
+      const normalizedRoot = normalizeFilePath(root);
+      const rootPrefix = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`;
+      const relativeDirs = normalizedPath.slice(rootPrefix.length).split('/').slice(0, -1);
+      const separator = root.includes('\\') ? '\\' : '/';
+      let directory = root;
+      for (const segment of ['', ...relativeDirs]) {
+        if (segment) directory += `${directory.endsWith(separator) ? '' : separator}${segment}`;
+        try {
+          const contents = await window.electronAPI.refreshFolderContents(directory);
+          applyLoadedFolderContents(directory, Array.isArray(contents) ? contents : []);
+        } catch (error) {
+          console.error('Failed to load folder for file reveal:', error);
+          return;
+        }
+      }
+      treePath = findFileInTree(store.get(rawFileTreeAtom), filePath);
+    }
+    if (!treePath) return;
+    revealFile(treePath);
+    setSelectedPaths(new Set([treePath]));
+    setLastSelectedPath(treePath);
+  }, [tabsActions, currentFilePathProp, revealFile, setSelectedPaths, setLastSelectedPath]);
 
   // File tree state - read from centralized atom (populated by fileTreeListeners.ts)
   const fileTree = useAtomValue(rawFileTreeAtom);
@@ -1195,7 +1253,22 @@ export function WorkspaceSidebar({
 
       {currentView === 'files' ? (
         <>
-          <div className="workspace-section-label nim-section-label py-1.5 px-3 border-b border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] shrink-0">Files</div>
+          <div className="workspace-section-label nim-section-label py-1.5 px-3 border-b border-[var(--nim-border)] bg-[var(--nim-bg-secondary)] shrink-0 flex items-center justify-between">
+            <span>Files</span>
+            <HelpTooltip testId="file-tree-reveal-current-button">
+              <button
+                type="button"
+                data-testid="file-tree-reveal-current-button"
+                className="workspace-action-button bg-transparent border-none p-1.5 cursor-pointer rounded text-[var(--nim-text-faint)] flex items-center justify-center transition-all duration-200 relative hover:bg-[var(--nim-bg-hover)] hover:text-[var(--nim-text)] disabled:opacity-40 disabled:cursor-default"
+                onClick={handleRevealCurrentFile}
+                disabled={!currentFilePath || !fileTreeLoaded}
+                title="Reveal current file in tree"
+                aria-label="Reveal current file in tree"
+              >
+                <span className="material-symbols-outlined normal-case" style={{ fontSize: '20px' }}>my_location</span>
+              </button>
+            </HelpTooltip>
+          </div>
           <div className={`workspace-file-tree nim-scrollbar flex-1 overflow-y-auto overflow-x-hidden py-2 relative transition-colors duration-200 ${isDragOverRoot ? 'drag-over-root bg-[var(--nim-accent-subtle)] border-2 border-dashed border-[var(--nim-primary)] !py-1.5' : ''}`}>
             {shouldShowFilterHint && (
               <div className="file-tree-filter-hint py-2 px-3 text-xs text-[var(--nim-text-faint)] leading-relaxed border-b border-[var(--nim-border)] mb-1">
