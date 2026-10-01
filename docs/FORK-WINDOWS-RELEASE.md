@@ -1,0 +1,38 @@
+# Выпуск Windows x64 в форке
+
+`main` содержит обновления upstream. `features` содержит дополнения форка.
+`release` объединяет выбранную версию upstream, дополнения и workflow Windows x64.
+Исходный checkout `Nimbalyst` остаётся на `features`; подготовка выпуска идёт в worktree `Nimbalyst-release`.
+
+Workflow `.github/workflows/electron-build.yml` собирает только Windows x64.
+Ручной запуск на `release` проверяет и собирает артефакт без публикации.
+Push тега `v<версия packages/electron/package.json>` на коммите, принадлежащем `release`,
+запускает те же проверки и публикует GitHub Release в `m4xp1/nimbalyst`.
+GitHub не умеет одновременно ограничивать tag push именем ветки: принадлежность коммита проверяется через `git merge-base --is-ancestor`.
+
+Проверки: typecheck всех workspace, три существующих набора тестов дополнений,
+загрузка SQLite/node-pty в закреплённом Electron, штатные build:win и валидаторы упаковки.
+Это не полный прогон всех unit-тестов и не интерактивная проверка установленного приложения.
+
+Артефакты: `Nimbalyst-Windows-x64.exe` и `SHA256SUMS.txt`.
+Сборка неподписанная: штатный явный флаг `ALLOW_UNSIGNED_WINDOWS_BUILD=true`;
+секреты DigiCert и сертификат официального Nimbalyst не используются.
+Установщик использует provider форка; `latest.yml` не публикуется,
+обновления этого неподписанного форка устанавливаются вручную.
+
+Перед тегом:
+
+```powershell
+git switch main
+git merge --ff-only <upstream-release-commit>
+git switch release
+git merge main
+git merge features
+git push origin main release
+# Проверить ручную сборку release, затем:
+git tag -a v0.79.1 -m "Nimbalyst v0.79.1 fork: Windows x64"
+git push origin refs/tags/v0.79.1
+```
+
+При ошибке workflow сохранить лог, исправить причину и повторить проверку.
+Уже опубликованный тег не перемещать без отдельного решения владельца.
