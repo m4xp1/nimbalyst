@@ -1,7 +1,7 @@
 /**
  * CodexUsageIndicator - Circular progress indicator for Codex usage
  *
- * Displays the 5-hour Codex limit, when available, as a circular progress
+ * Displays the most constrained active Codex limit as a circular progress
  * ring in the navigation gutter. Clicking opens a popover with full details.
  * Error states render as a blank ("--") indicator with hover details.
  */
@@ -12,7 +12,7 @@ import {
   codexUsageAtom,
   codexUsageAvailableAtom,
   codexUsageIndicatorColorAtom,
-  codexUsageIndicatorWindowAtom,
+  codexUsageMostConstrainedWindowAtom,
   formatCodexWindowLabel,
   formatResetTime,
 } from '../../store/atoms/codexUsageAtoms';
@@ -30,7 +30,7 @@ export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ classN
   const usage = useAtomValue(codexUsageAtom);
   const isAvailable = useAtomValue(codexUsageAvailableAtom);
   const indicatorColor = useAtomValue(codexUsageIndicatorColorAtom);
-  const indicatorWindow = useAtomValue(codexUsageIndicatorWindowAtom);
+  const mostConstrained = useAtomValue(codexUsageMostConstrainedWindowAtom);
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -48,9 +48,9 @@ export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ classN
   }
 
   const hasLoadError = Boolean(usage?.error);
-  const utilization = hasLoadError ? 0 : indicatorWindow?.window.usedPercent ?? 0;
+  const utilization = hasLoadError ? 0 : mostConstrained?.window.usedPercent ?? 0;
   const strokeDashoffset = RING_CIRCUMFERENCE * (1 - utilization / 100);
-  const limitsAvailable = !hasLoadError && Boolean(indicatorWindow);
+  const limitsAvailable = !hasLoadError && Boolean(mostConstrained);
 
   const colorClasses: Record<string, string> = {
     green: 'stroke-green-500',
@@ -62,8 +62,8 @@ export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ classN
   const effectiveIndicatorColor = limitsAvailable ? indicatorColor : 'muted';
   const strokeColor = colorClasses[effectiveIndicatorColor] || colorClasses.muted;
 
-  const windowLabel = indicatorWindow
-    ? [indicatorWindow.limit.name, formatCodexWindowLabel(indicatorWindow.window)]
+  const constrainedLabel = mostConstrained
+    ? [mostConstrained.limit.name, formatCodexWindowLabel(mostConstrained.window)]
         .filter(Boolean)
         .join(' · ')
     : null;
@@ -72,7 +72,7 @@ export const CodexUsageIndicator: React.FC<CodexUsageIndicatorProps> = ({ classN
     ? `Codex usage unavailable: ${usage.error}`
     : usage
       ? limitsAvailable
-        ? `Codex ${windowLabel}: ${Math.round(utilization)}% (resets ${formatResetTime(indicatorWindow?.window.resetsAt ?? null)})`
+        ? `Codex ${constrainedLabel}: ${Math.round(utilization)}% (resets ${formatResetTime(mostConstrained?.window.resetsAt ?? null)})`
         : 'Codex usage (limits unavailable)'
       : 'Codex usage unavailable';
 
