@@ -17,8 +17,12 @@ GitHub не умеет одновременно ограничивать tag pus
 Артефакты: `Nimbalyst-Windows-x64.exe` и `SHA256SUMS.txt`.
 Сборка неподписанная: штатный явный флаг `ALLOW_UNSIGNED_WINDOWS_BUILD=true`;
 секреты DigiCert и сертификат официального Nimbalyst не используются.
-Упаковка и runtime updater используют provider форка (`NIMBALYST_UPDATE_OWNER=m4xp1`, `NIMBALYST_UPDATE_REPO=nimbalyst`); `latest.yml` не публикуется,
-обновления этого неподписанного форка устанавливаются вручную.
+Упаковка публикует assets в `m4xp1/nimbalyst`, а runtime updater проверяет оригинальный
+`nimbalyst/nimbalyst` и сообщает о новых официальных версиях. Скачивание автоматически
+не начинается (`autoDownload=false`), установка при выходе отключена (`autoInstallOnAppQuit=false`).
+Уведомление позволяет посмотреть release notes или отложить напоминание; ручные кнопки
+скачивания/установки оригинального билда остаются. Для сохранения дополнений новую версию
+форка нужно собрать и установить вручную. `latest.yml` форка не публикуется.
 
 Перед тегом:
 

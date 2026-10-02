@@ -37,8 +37,6 @@ jobs:
       ALLOW_UNSIGNED_WINDOWS_BUILD: 'true'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       OFFICIAL_BUILD: 'false'
-      NIMBALYST_UPDATE_OWNER: m4xp1
-      NIMBALYST_UPDATE_REPO: nimbalyst
     steps:
       - name: Checkout exact branch or tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

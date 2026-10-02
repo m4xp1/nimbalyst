@@ -274,8 +274,6 @@ const externalRenderer = process.env.NIMBALYST_EXTERNAL_RENDERER === '1';
 const config = {
   main: {
     define: {
-      'process.env.NIMBALYST_UPDATE_OWNER': JSON.stringify(process.env.NIMBALYST_UPDATE_OWNER || 'nimbalyst'),
-      'process.env.NIMBALYST_UPDATE_REPO': JSON.stringify(process.env.NIMBALYST_UPDATE_REPO || 'nimbalyst'),
       'process.env.OFFICIAL_BUILD': JSON.stringify(isOfficialBuild ? 'true' : 'false'),
       'process.env.IS_DEV_MODE': JSON.stringify(isDevMode ? 'true' : 'false'),
       // Note: RUN_ONE_DEV_MODE is intentionally NOT defined here.

@@ -64,11 +64,10 @@ export class AutoUpdaterService {
     log.transports.file.level = 'info';
     autoUpdater.logger = log;
 
-    // Configure auto-updater. autoDownload=true: both background polls and the
-    // manual "Check for Updates" trigger download immediately, then surface a
-    // single "Ready to install" toast. Per maintainer direction on #327.
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Use upstream releases as notifications. Download and install require
+    // explicit user actions so an official build cannot silently replace the fork.
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
 
     // Configure feed URL based on release channel
     this.configureFeedURL();
@@ -89,11 +88,7 @@ export class AutoUpdaterService {
     // electron-updater's channel setter enables downgrades. Reset AFTER the
     // assignment on every launch and channel change (the policy from PR #811).
     autoUpdater.allowDowngrade = false;
-    autoUpdater.setFeedURL({
-      ...GITHUB_UPDATE_PROVIDER,
-      owner: process.env.NIMBALYST_UPDATE_OWNER || GITHUB_UPDATE_PROVIDER.owner,
-      repo: process.env.NIMBALYST_UPDATE_REPO || GITHUB_UPDATE_PROVIDER.repo,
-    });
+    autoUpdater.setFeedURL(GITHUB_UPDATE_PROVIDER);
   }
 
   private setupEventHandlers() {
@@ -109,6 +104,7 @@ export class AutoUpdaterService {
       // Deliberately does NOT clear the error dedup key. Clearing it here is
       // what let a flapping network re-emit `update_error` on every hourly
       // poll (error -> success -> error -> ...), for 182,624 events in 30 days.
+      const wasManualCheck = this.isManualCheck;
       this.isManualCheck = false;
 
       let releaseNotes = info.releaseNotes as string | undefined;
@@ -124,11 +120,14 @@ export class AutoUpdaterService {
         releaseDate: info.releaseDate
       };
 
-      // With autoDownload=true the download starts immediately. Per maintainer
-      // direction on #327 we no longer surface an "Update Available" toast - the
-      // download runs in the background and only the "Ready to install" toast
-      // (update-downloaded) is shown. The update-available event is still
-      // broadcast so renderer state stays in sync.
+      this.sendToFrontmostWindow('update-toast:show-available', {
+        currentVersion: app.getVersion(),
+        newVersion: info.version,
+        releaseNotes: releaseNotes || '',
+        releaseDate: info.releaseDate,
+        releaseChannel: channel,
+        isManualCheck: wasManualCheck
+      });
       this.sendToAllWindows('update-available', info);
     });
 
