@@ -83,10 +83,16 @@ export function getCodexUsageWindows(usage: CodexUsageData | null): CodexUsageWi
   );
 }
 
-export function getMostConstrainedCodexWindow(
+export function getCodexIndicatorWindow(
   usage: CodexUsageData | null
 ): CodexUsageWindowEntry | null {
-  return getCodexUsageWindows(usage).reduce<CodexUsageWindowEntry | null>(
+  const entries = getCodexUsageWindows(usage);
+  // Slots can swap durations. Prefer the actual 5-hour window, then use the
+  // most constrained window as a fallback for accounts without that limit.
+  const sessionEntries = entries.filter(({ window }) =>
+    window.windowDurationMins !== null && isApproximateDuration(window.windowDurationMins, 5 * 60)
+  );
+  return (sessionEntries.length > 0 ? sessionEntries : entries).reduce<CodexUsageWindowEntry | null>(
     (mostConstrained, entry) =>
       !mostConstrained || entry.window.usedPercent > mostConstrained.window.usedPercent
         ? entry
@@ -141,11 +147,11 @@ export const codexUsageAvailableAtom = atom((get) => {
     || (usage.tokenUsage?.totalTokens ?? 0) > 0;
 });
 
-export const codexUsageMostConstrainedWindowAtom = atom((get) =>
-  getMostConstrainedCodexWindow(get(codexUsageAtom))
+export const codexUsageIndicatorWindowAtom = atom((get) =>
+  getCodexIndicatorWindow(get(codexUsageAtom))
 );
 
 export const codexUsageIndicatorColorAtom = atom((get) => {
-  const entry = get(codexUsageMostConstrainedWindowAtom);
+  const entry = get(codexUsageIndicatorWindowAtom);
   return entry ? codexUsageColor(entry.window.usedPercent) : 'muted';
 });
