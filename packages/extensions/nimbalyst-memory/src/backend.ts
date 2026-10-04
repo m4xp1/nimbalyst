@@ -25,6 +25,8 @@ import {
   buildPublicEngineStatus,
   createEmbedder,
   defaultSources,
+  safeIndexError,
+  normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, previewSourceRules,
 } from '../engine/dist/index.js';
 import type { EngineConfig, SearchHit, VirtualRecord } from '../engine/dist/index.js';
 // The write gate. It runs on the LIVE `remember` path below rather than at
@@ -84,6 +86,7 @@ interface ActivateCtx {
         inputSchema?: unknown;
         voiceAgent?: boolean;
         scope?: 'global' | 'editor';
+        panelOnly?: boolean;
       }>
     ) => Promise<{ registered: string[] }>;
   };
@@ -411,11 +414,14 @@ export async function activate(ctx: ActivateCtx) {
   mkdirSync(dataDir, { recursive: true });
   const dbPath = path.join(dataDir, 'index.db');
 
+  let sourceRules = readSourceRules(dataDir);
+  let sourceChangeInProgress=false;
   const config: EngineConfig = {
     root: workspacePath,
     dbPath,
     factsDir: FACTS_DIR,
-    sources: defaultSources(FACTS_DIR, workspacePath),
+    sources: sourcesWithRules(defaultSources(FACTS_DIR, workspacePath),sourceRules),
+    workspaceExclude: sourceRules.exclude,
     // Keep stale/archived markdown out of the index so retrieval surfaces
     // current truth, not abandoned plans (e.g. nimbalyst-local/plans/archive/**
     // duplicating live design docs).
@@ -480,7 +486,7 @@ export async function activate(ctx: ActivateCtx) {
       // Any construction failure — missing optional dependency, corrupt model
       // cache, revoked key — degrades to BM25. Retrieval never goes dark.
       want = fallbackFor(want);
-      log('warn', `[memory] ${want.reason}: ${(err as Error).message}`);
+      log('warn', `[memory] ${want.reason}: ${safeIndexError(err).category}`);
       embedder = await createEmbedder(want.config);
     }
     selection = want;
@@ -520,17 +526,43 @@ export async function activate(ctx: ActivateCtx) {
   }
 
   await registerMcpTools(
-    TOOL_DESCRIPTORS.map((t) => ({
+    [...TOOL_DESCRIPTORS.map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    }))
+    })), ...['get_sources','preview_sources','set_sources'].map(name => ({
+      name, description: 'Project Markdown source settings (owning settings panel only).',
+      inputSchema: {type:'object',properties:{include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      panelOnly:true, voiceAgent:false, scope:'global' as const,
+    }))]
   );
 
   return {
     methods: {
+      get_sources: async () => sourceRules,
+      preview_sources: async (params: unknown) =>
+        previewSourceRules(config, normalizeSourceRules(params)),
+      set_sources: async (params: unknown) => {
+        if (sourceChangeInProgress || requireEngine().status().indexing)
+          throw new Error(
+            "Wait for indexing to finish before applying sources."
+          );
+        const next = normalizeSourceRules(params);
+        await previewSourceRules(config, next);
+        sourceChangeInProgress = true;
+        try {
+          writeSourceRules(dataDir, next);
+          sourceRules = next;
+          return await requireEngine().updateSources(
+            sourcesWithRules(defaultSources(FACTS_DIR, workspacePath), next),
+            next.exclude
+          );
+        } finally {
+          sourceChangeInProgress = false;
+        }
+      },
       search_project_knowledge: async (params: { query?: string; k?: number }) => {
         const query = String(params?.query ?? '');
         if (!query) throw new Error('query is required');

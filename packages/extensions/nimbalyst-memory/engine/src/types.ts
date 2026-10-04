@@ -155,6 +155,8 @@ export interface EngineConfig {
    * current truth, not abandoned plans.
    */
   exclude?: string[];
+  /** Additional exclusions for the primary workspace only (personal roots are unchanged). */
+  workspaceExclude?: string[];
   /** Directory (relative to root) holding markdown facts. */
   factsDir: string;
   /** Optional explicit better-sqlite3 native binding path (ABI portability). */

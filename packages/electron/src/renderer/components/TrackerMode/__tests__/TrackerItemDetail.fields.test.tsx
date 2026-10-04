@@ -11,7 +11,7 @@ import { store } from '@nimbalyst/runtime/store';
 
 // The file-backed body editor is only reachable in content focus, and it drags
 // in the whole editor stack.
-vi.mock('../../TabEditor/TabEditor', () => ({ TabEditor: () => null }));
+vi.mock('../../TabEditor/TabEditor', () => ({ TabEditor: ({ filePath, initialContent }: { filePath: string; initialContent: string }) => <div data-testid="file-backed-tab-editor" data-path={filePath}>{initialContent}</div> }));
 vi.mock('../TrackerFileBackedPreview', () => ({
   TrackerFileBackedPreview: ({ content }: { content: string }) => (
     <div data-testid="tracker-file-backed-document-preview">{content}</div>
@@ -94,7 +94,7 @@ function renderDetail(props: Record<string, unknown> = {}) {
 }
 
 describe('TrackerItemDetail metadata region', () => {
-  it('shows a read-only Markdown preview for a file-backed item in the detail card', async () => {
+  it('shows the shared file editor for a file-backed item in the detail card', async () => {
     store.set(replaceAllTrackerItemsAtom, [{
       ...ITEM,
       source: 'frontmatter',
@@ -104,7 +104,7 @@ describe('TrackerItemDetail metadata region', () => {
     renderDetail({ workspacePath: '/ws' });
 
     await waitFor(() => expect(window.electronAPI.readFileContent).toHaveBeenCalledWith('/ws/plans/imported.md'));
-    expect((await screen.findByTestId('tracker-file-backed-document-preview')).textContent).toBe('# Preview body');
+    expect((await screen.findByTestId('file-backed-tab-editor')).textContent).toBe('# Preview body');
     screen.getByText('Open in Editor');
   });
 
