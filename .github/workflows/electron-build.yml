@@ -92,8 +92,16 @@ jobs:
           npx vitest run
           packages/electron/src/main/services/__tests__/autoUpdater.channelPolicy.test.ts
           packages/electron/src/renderer/store/atoms/__tests__/fileTree.visibleNodes.test.ts
-          packages/electron/src/renderer/components/TrackerMode/__tests__/TrackerFileBackedPreview.test.tsx
+          packages/electron/src/renderer/components/common/__tests__/FilePathBreadcrumb.test.tsx
           packages/electron/src/renderer/components/TrackerMode/__tests__/TrackerItemDetail.fields.test.tsx
+          packages/electron/src/renderer/services/document-model/__tests__/DocumentModel.test.ts
+          packages/electron/src/renderer/services/document-model/__tests__/DocumentModelRegistry.test.ts
+          packages/electron/src/renderer/components/TabEditor/__tests__/resolveSaveAttempt.test.ts
+          packages/extensions/nimbalyst-memory/engine/src/__tests__
+          packages/extensions/nimbalyst-memory/src/__tests__
+
+      - name: Verify fork SemVer and Windows revision
+        run: node --test packages/electron/build/__tests__/forkVersion.test.cjs
 
       - name: Verify native modules in the pinned Electron runtime
         run: npm run verify:native-runtime --workspace=@nimbalyst/electron
@@ -106,7 +114,15 @@ jobs:
 
       - name: Verify installer and record SHA-256
         run: |
+          $package = Get-Content packages/electron/package.json -Raw | ConvertFrom-Json
+          $application = Get-Item 'packages/electron/release/win-unpacked/Nimbalyst.exe'
+          if ($application.VersionInfo.FileVersion -ne $package.build.buildVersion) {
+            throw "Windows application FileVersion mismatch: $($application.VersionInfo.FileVersion)"
+          }
+          node -e "const fs=require('fs'); const asar=require('@electron/asar'); const expected=JSON.parse(fs.readFileSync('packages/electron/package.json','utf8')).version; const actual=JSON.parse(asar.extractFile('packages/electron/release/win-unpacked/resources/app.asar','package.json').toString()).version; if(actual!==expected) throw new Error('Packaged app version mismatch: '+actual); console.log('Packaged version: '+actual)"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged version validation failed' }
           $installer = Get-Item 'packages/electron/release/Nimbalyst-Windows-x64.exe'
+          "Application FileVersion: $($application.VersionInfo.FileVersion); installer FileVersion: $($installer.VersionInfo.FileVersion); ProductVersion: $($installer.VersionInfo.ProductVersion)"
           if ($installer.Length -lt 1MB) { throw 'Installer is unexpectedly small' }
           $stream = $installer.OpenRead()
           try {
@@ -165,9 +181,19 @@ jobs:
           @"
           Nimbalyst $tag for Windows x64, built from the release branch of m4xp1/nimbalyst.
 
-          Includes upstream $tag plus the fork features:
-          - Reveal the current editor file in the project tree, including Windows path handling.
-          - Read-only preview of the linked Markdown file in tracker details.
+          Based on upstream v0.79.1. Fork version: 0.79.1+m4xp1.1; Windows revision: 0.79.1.1.
+          - Removed the FILES target button; filename breadcrumbs still reveal/select the file.
+          - Folder breadcrumb menus support browsing, parent navigation and keyboard controls.
+          - Linked Markdown in tracker CONTENT uses the shared editable document, including file saving.
+          - Unicode/Russian BM25 and recall; existing lexical terms migrate without re-embedding.
+          - Per-project additional Markdown sources with preview, exclusions and live discovery.
+          - Memory distinguishes partial indexes, persisted chunks, embeddings, errors and file watching.
+          - Refresh reads status only; Rebuild reuses unchanged embeddings.
+          - Official upstream update notifications remain enabled; automatic download/install are disabled.
+          - No retry/backoff, query cache, model change or promise to persist new text after embedding failure.
+
+          Post-install acceptance: docs/FORK-SEARCH-ACCEPTANCE-v0.79.1-m4xp1.1.md in this tag.
+          Installed GUI and live OpenAI search require post-install acceptance; CI uses fake providers.
 
           Source commit: $env:GITHUB_SHA
           Installer: Nimbalyst-Windows-x64.exe

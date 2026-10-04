@@ -34,9 +34,18 @@ git merge main
 git merge features
 git push origin main release
 # Проверить ручную сборку release, затем:
-git tag -a v0.79.1 -m "Nimbalyst v0.79.1 fork: Windows x64"
-git push origin refs/tags/v0.79.1
+git tag -a v0.79.1+m4xp1.1 -m "Nimbalyst 0.79.1+m4xp1.1 fork: Windows x64"
+git push origin refs/tags/v0.79.1+m4xp1.1
 ```
 
 При ошибке workflow сохранить лог, исправить причину и повторить проверку.
 Уже опубликованный тег не перемещать без отдельного решения владельца.
+
+## Форк 0.79.1+m4xp1.1
+
+Предыдущий опубликованный v0.79.1 сохраняется. Версия приложения и About: 0.79.1+m4xp1.1; числовая FileVersion Windows: 0.79.1.1. Метаданные SemVer не повышают базовую версию upstream. CI проверяет FileVersion упакованного приложения, версию package.json внутри app.asar и записывает метаданные установщика.
+
+Описание изменений: [FORK-v0.79.1-m4xp1.1](FORK-v0.79.1-m4xp1.1.md).
+Инструкция для агента после ручной установки: [FORK-SEARCH-ACCEPTANCE-v0.79.1-m4xp1.1](FORK-SEARCH-ACCEPTANCE-v0.79.1-m4xp1.1.md).
+
+В workflow добавлены тесты меню пути, общего состояния редактора, сохранения, Unicode-миграции, источников и статусов Memory. Платные API в автоматических тестах не вызываются. Успешная сборка не заменяет приёмку установленного интерфейса и поиска через настроенный OpenAI.
