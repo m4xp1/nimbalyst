@@ -9,6 +9,7 @@
  * mirroring packages/cli/src/db/openDatabase.ts.
  */
 import Database from 'better-sqlite3';
+import { termFrequencies, LEXICAL_INDEX_VERSION } from '../retrieval/bm25.js';
 import type { EmbedderInfo, StoredChunk } from '../types.js';
 
 type DB = Database.Database;
@@ -51,6 +52,23 @@ export class SqliteStore {
     this.db = new Database(dbPath, binding ? { nativeBinding: binding } : {});
     this.db.pragma('journal_mode = WAL');
     this.init();
+    this.migrateLexicalIndex();
+  }
+
+  /** Re-tokenize persisted text only: vector bytes, model identity and content hashes stay untouched. */
+  private migrateLexicalIndex(): void {
+    const version = this.db.prepare("SELECT value FROM meta WHERE key = 'lexical_version'").get() as { value: string } | undefined;
+    if (version && Number(version.value) >= LEXICAL_INDEX_VERSION) return;
+    this.db.transaction(() => {
+      const update = this.db.prepare('UPDATE chunks SET sparse_terms = ? WHERE id = ?');
+      const rows = this.db.prepare('SELECT id, content, heading_path, granularity FROM chunks').all() as Pick<ChunkRow, 'id' | 'content' | 'heading_path' | 'granularity'>[];
+      for (const row of rows) {
+        const heading = (JSON.parse(row.heading_path) as string[]).join(' > ');
+        const input = heading ? heading + '\n' + row.content : row.content;
+        update.run(JSON.stringify(row.granularity === 'page' ? {} : termFrequencies(input)), row.id);
+      }
+      this.db.prepare("INSERT INTO meta(key,value) VALUES('lexical_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(LEXICAL_INDEX_VERSION));
+    })();
   }
 
   private init(): void {

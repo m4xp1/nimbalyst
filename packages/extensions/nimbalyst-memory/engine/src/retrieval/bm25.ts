@@ -4,12 +4,13 @@
  * which is exactly where pure dense retrieval is weak.
  */
 
-const TOKEN_RE = /[a-z0-9][a-z0-9_./-]*/gi;
+export const LEXICAL_INDEX_VERSION = 2;
+const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_./-]*/gu;
 const K1 = 1.5;
 const B = 0.75;
 
 export function tokenize(text: string): string[] {
-  const matches = text.toLowerCase().match(TOKEN_RE);
+  const matches = text.normalize('NFC').toLowerCase().normalize('NFC').replace(/ё/g, 'е').match(TOKEN_RE);
   if (!matches) return [];
   return matches.filter((t) => t.length >= 2 || /[0-9]/.test(t));
 }
