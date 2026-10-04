@@ -140,7 +140,7 @@ it.each(['settings', 'project config', 'both'])('runs both refreshes and identif
   const configError = new Error('config unavailable');
   if (failure !== 'project config') h.settings.mockImplementation(() => { throw settingsError; });
   if (failure !== 'settings') h.refresh.mockRejectedValue(configError);
-  h.joined!([{ type: 'mobile', deviceId: 'phone', name: 'Phone' }]);
+  h.joined!([{ type: 'mobile', deviceId: 'phone', name: 'Phone', connectedAt: 1 }]);
   await vi.advanceTimersByTimeAsync(1000);
   expect(h.settings).toHaveBeenCalledTimes(1);
   expect(h.refresh).toHaveBeenCalledTimes(1);

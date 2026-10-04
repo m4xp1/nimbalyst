@@ -1,4 +1,7 @@
 import { warnIfUnpublished } from './pushOutcome';
+import { isSessionConnectionRefused } from './sessionConnectionAdmission';
+export { isSessionConnectionRefused };
+import { createSessionWriteOutbox, type SessionWriteOutboxOptions } from './sessionWriteOutbox';
 /**
  * SyncedSessionStore - Decorator that adds sync capabilities to any SessionStore.
  *
@@ -276,13 +279,30 @@ export function createSyncedSessionStore(
   };
 }
 
+export interface MessageSyncHandlerOptions {
+  /**
+   * Hold rows a session could not publish live (no room socket, e.g. every
+   * slot busy) and send them over a short-lived socket. The desktop enables
+   * this; the headless node already retains and retries its own rows.
+   */
+  outbox?: SessionWriteOutboxOptions;
+}
+
+function isRetryableUnpublished(outcome: PushChangeOutcome | void): boolean {
+  return !!outcome && !outcome.published && outcome.retryable !== false;
+}
+
 /**
  * Creates a message sync handler that can be attached to AgentMessagesRepository.
  *
  * This is separate from the session store because messages have their own
  * repository pattern.
  */
-export function createMessageSyncHandler(syncProvider: SyncProvider) {
+export function createMessageSyncHandler(syncProvider: SyncProvider, options: MessageSyncHandlerOptions = {}) {
+  const outbox = options.outbox && syncProvider.sendSessionMessages
+    ? createSessionWriteOutbox(syncProvider, options.outbox)
+    : null;
+
   // Rate-limit the "Failed to connect session" log line. Without this, a
   // single hung CollabV3 connection (e.g. JWT/personal-member mismatch) produces one
   // error per agent message -- 1686 of 4986 main.log lines during a mobile
@@ -336,6 +356,11 @@ export function createMessageSyncHandler(syncProvider: SyncProvider) {
         };
       }
 
+      // Later rows queue behind earlier unsent ones so the room keeps transcript order.
+      if (outbox?.hasPending(message.sessionId)) {
+        return outbox.enqueue(message, sessionUpdatedAt, 'queued behind earlier unsent messages');
+      }
+
       // Auto-connect session if not already connected
       if (!syncProvider.isConnected(message.sessionId)) {
         // console.log(`[MessageSyncHandler] Session ${message.sessionId} not connected, auto-connecting...`);
@@ -343,6 +368,9 @@ export function createMessageSyncHandler(syncProvider: SyncProvider) {
           await syncProvider.connect(message.sessionId);
           // console.log(`[MessageSyncHandler] Successfully connected session ${message.sessionId}`);
         } catch (error) {
+          if (outbox && isSessionConnectionRefused(error)) {
+            return outbox.enqueue(message, sessionUpdatedAt, (error as Error).message);
+          }
           logConnectFailure(message.sessionId, error);
           return {
             published: false,
@@ -364,11 +392,16 @@ export function createMessageSyncHandler(syncProvider: SyncProvider) {
         type: 'message_added',
         message,
       });
+      if (outbox && isRetryableUnpublished(outcome)) {
+        return outbox.enqueue(message, sessionUpdatedAt, outcome!.reason ?? 'not published');
+      }
       warnIfUnpublished(message => console.warn(message), message.sessionId, '[MessageSyncHandler] Failed to publish message', outcome);
 
       // Also update the session index with the same timestamp used in local DB
-      // This ensures updated_at matches exactly for sync comparisons
-      if (sessionUpdatedAt !== undefined) {
+      // This ensures updated_at matches exactly for sync comparisons. Skipped
+      // while the row is unsent: a timestamp ahead of it hides the gap from the
+      // startup reconcile, so the row would never reach the phone (#1391).
+      if (sessionUpdatedAt !== undefined && !isRetryableUnpublished(outcome)) {
         const metadataOutcome = await syncProvider.pushChange(message.sessionId, {
           type: 'metadata_updated',
           metadata: { updatedAt: sessionUpdatedAt },
@@ -379,6 +412,11 @@ export function createMessageSyncHandler(syncProvider: SyncProvider) {
       // A provider that reports nothing is assumed to have published: that is
       // what every caller assumed before outcomes existed.
       return outcome ?? { published: true };
+    },
+
+    /** Stop the outbox's timers and drop anything still queued. */
+    dispose(): void {
+      outbox?.dispose();
     },
 
     /**

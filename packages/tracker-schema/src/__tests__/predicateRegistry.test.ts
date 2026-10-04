@@ -71,7 +71,7 @@ describe('predicate declarations', () => {
     expect(parsed.predicates).toEqual([INTEGRATES_WITH]);
   });
 
-  it('is strict in both directions and collects every issue in one pass', () => {
+  it('collects every issue in one pass and reports unknown keys as warnings', () => {
     const result = validatePredicateDefinition({
       id: 'Integrates With',
       label: 'integrates with',
@@ -91,9 +91,20 @@ describe('predicate declarations', () => {
       'PREDICATE_INVALID_FIELD', // empty subjectKinds
       'PREDICATE_INVALID_FIELD', // unknown valueShape
       'PREDICATE_MISSING_FIELD', // select with no options
-      'PREDICATE_UNKNOWN_FIELD', // inversLabel
-      'PREDICATE_UNKNOWN_FIELD', // targetTrackerType
     ].sort());
+    expect(result.warnings?.map(w => w.path).sort()).toEqual([
+      'inversLabel',
+      'qualifiers.via.targetTrackerType',
+    ]);
+  });
+
+  it('keeps a predicate that carries a key from a newer release', () => {
+    const result = validatePredicateRegistry([{ ...INTEGRATES_WITH, range: ['product'] }]);
+    expect(result.valid).toBe(true);
+    expect(result.predicates?.[0]).toMatchObject({ id: 'integrates-with', range: ['product'] });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({ code: 'PREDICATE_UNKNOWN_FIELD', path: '[0].range' }),
+    ]);
   });
 
   it('rejects a property on the wrong qualifier type', () => {

@@ -39,7 +39,8 @@ import {
     dispatchAppActionLink,
     type AppAction,
 } from './utils/appActionLinks';
-import { createWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
+import { createWorkspaceManagerWindow, getWorkspaceManagerWindow, setupWorkspaceManagerHandlers, wasWorkspaceManagerManuallyClosed } from './window/WorkspaceManagerWindow.ts';
+import { initializeApplicationWindowRecovery } from './window/ApplicationWindowRecovery';
 import { createTeamManagementWindow, setupTeamManagementHandlers } from './window/TeamManagementWindow';
 import { setupTrayPanelHandlers } from './window/TrayPanelWindow';
 import { setupMenuBarIslandHandlers } from './window/MenuBarIslandWindow';
@@ -165,10 +166,10 @@ import { initEnhancedPath, getEnhancedPath, getShellEnvironment } from './servic
 import { registerWorkspaceWindow, registerExtensionTools, shutdownHttpServer, startMcpHttpServer, updateDocumentState, getActiveExtensionShortNames } from './mcp/httpServer';
 import { writeMcpEndpointDescriptor, removeMcpEndpointDescriptor, type EndpointWorkspace } from './mcp/mcpEndpointDescriptor';
 import {
-  startWorkspaceBackendModules,
-  syncEnabledBackendModulesOnStartup,
+  WorkspaceBackendLifecycle,
   getDefaultBackendModuleLifecycleDeps,
 } from './extensions/backendModuleLifecycle';
+import { onWorkspaceUsageChanged } from './file/GitWatcherLifecycle';
 // MCP consolidation Phase 7: sessionContextServer / settingsServer no longer run
 // as standalone HTTP servers; their tool dispatch + schemas are imported by the
 // unified httpServer instead. Nothing to start/shutdown from here.
@@ -1163,7 +1164,12 @@ async function handleDeepLink(url: string): Promise<void> {
  * Workspaces we've already kicked backend-module startup for, so the per-document
  * `mcp:updateDocumentState` events don't re-scan extension dirs on every update.
  */
-const backendModulesStartedForWorkspace = new Set<string>();
+const workspaceBackendLifecycle = new WorkspaceBackendLifecycle(getDefaultBackendModuleLifecycleDeps());
+onWorkspaceUsageChanged(() => {
+    // Startup can wait for consent. Closing a window must not wait for it.
+    void workspaceBackendLifecycle.prune().catch(error => logger.main.error('Failed to release workspace extensions:', error));
+    void sweepOpenWindowsForBackendModules().catch(error => logger.main.error('Failed to start workspace extensions:', error));
+});
 
 /**
  * Start the backend modules of every enabled extension across the workspaces of
@@ -1192,12 +1198,11 @@ async function sweepOpenWindowsForBackendModules(): Promise<boolean> {
             }
         }
     }
-    const fresh = workspaces.filter((p) => !backendModulesStartedForWorkspace.has(p));
-    if (fresh.length === 0) return false;
-    for (const p of fresh) backendModulesStartedForWorkspace.add(p);
-    const deps = { ...getDefaultBackendModuleLifecycleDeps(), collectWorkspaces: () => fresh };
-    await syncEnabledBackendModulesOnStartup(deps);
-    return true;
+    let started = false;
+    for (const workspacePath of workspaces) {
+        started = (await workspaceBackendLifecycle.open(workspacePath)) || started;
+    }
+    return started;
 }
 
 function collectOpenWorkspaces(): EndpointWorkspace[] {
@@ -1724,6 +1729,7 @@ BrowserWindow.prototype.focus = function(this: BrowserWindow) {
 
 // App ready handler
 app.whenReady().then(async () => {
+    workspaceBackendLifecycle.observeModuleStarts();
     checkpoint('app-ready');
 
     // Windows opened from here on are revealed without activating; the app is
@@ -3106,13 +3112,10 @@ app.whenReady().then(async () => {
             // so it doubles as the startup path for already-enabled extensions
             // and the open-path for newly-opened workspaces. startModule is
             // idempotent, so the guard is only an efficiency measure.
-            if (!backendModulesStartedForWorkspace.has(state.workspacePath)) {
-                backendModulesStartedForWorkspace.add(state.workspacePath);
-                const ws = state.workspacePath;
-                void startWorkspaceBackendModules(ws, getDefaultBackendModuleLifecycleDeps()).catch(
-                    (err) => logger.mcp.error(`Backend-module start failed for workspace ${ws}:`, err)
-                );
-            }
+            const ws = state.workspacePath;
+            void workspaceBackendLifecycle.open(ws).catch(
+                (err) => logger.mcp.error(`Backend-module start failed for workspace ${ws}:`, err)
+            );
             // Issue #146: also allow `nim-asset://` to serve images from the
             // workspace. addNimAssetRoot is idempotent.
             addNimAssetRoot(state.workspacePath);
@@ -3466,16 +3469,13 @@ app.whenReady().then(async () => {
     });
 });
 
-// Activate handler (macOS)
-app.on('activate', () => {
-    // Avoid resurrecting windows while quitting
-    if (isAppQuitting) return;
-    // Only create window if app is ready (screen module requires app to be ready)
-    if (!app.isReady()) return;
-    // On macOS, show WorkspaceManager when dock icon is clicked and no windows are open
-    if (BrowserWindow.getAllWindows().length === 0) {
-        createWorkspaceManagerWindow();
-    }
+initializeApplicationWindowRecovery({
+    // quit-and-install strips before-quit, so isAppQuitting never flips on that path.
+    isQuitting: () => isAppQuitting || isAppRestarting || AutoUpdaterService.isUpdatingApp(),
+    getPreferredProjectWindow: getMostRecentlyFocusedWorkspaceWindow,
+    getWorkspaceManagerWindow,
+    createWorkspaceManagerWindow,
+    wasWorkspaceManagerManuallyClosed,
 });
 
 let migrationQuitDraining = false;
@@ -4123,35 +4123,6 @@ app.on('before-quit', async (event) => {
         console.log(`[QUIT] [${t16}] Calling app.exit(0) (${t16-t15}ms after timeout set)`);
         try { app.exit(0); } catch {}
     }, 50);
-});
-
-// Window all closed handler
-app.on('window-all-closed', () => {
-  logger.main.info('All windows closed');
-  if (isAppQuitting) {
-    // App is quitting, allow normal quit to proceed
-    app.quit();
-    return;
-  }
-
-  // Check if the WorkspaceManager itself was manually closed by the user
-  // In that case, don't reopen it (quit on Windows/Linux, stay running on macOS)
-  if (wasWorkspaceManagerManuallyClosed()) {
-    if (process.platform !== 'darwin') {
-      logger.main.info('WorkspaceManager manually closed on non-macOS platform, quitting app');
-      app.quit();
-    } else {
-      logger.main.info('WorkspaceManager manually closed on macOS, app stays running (dock icon can reopen)');
-    }
-    return;
-  }
-
-  // A project window was closed (not the WorkspaceManager)
-  // Show the WorkspaceManager so user can open another project
-  if (app.isReady()) {
-    logger.main.info('Project window closed, showing WorkspaceManager');
-    createWorkspaceManagerWindow();
-  }
 });
 
 // Windows-specific shutdown signal handlers

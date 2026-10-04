@@ -23,6 +23,7 @@ import {
   decodeTrackerSchemaPayload,
   encodeTrackerSchemaPatchPayload,
   encodeTrackerSchemaModelPayload,
+  TRACKER_LABEL_REGISTRY_SCHEMA_TYPE,
   TRACKER_PREDICATE_REGISTRY_SCHEMA_TYPE,
   resolveTrackerTypeInheritance,
   type TrackerDataModel,
@@ -51,7 +52,7 @@ import {
   TrackerSchemaChangeBlockedError,
   type TrackerSchemaChangeDecision,
 } from './tracker/trackerSchemaChangeGuard';
-import type { PredicateDefinition, TrackerSchemaActorRole } from '@nimbalyst/tracker-schema';
+import type { LabelRegistry, PredicateDefinition, TrackerSchemaActorRole } from '@nimbalyst/tracker-schema';
 import {
   installTrackerSchemaScopeProvider,
   runWithTrackerSchemaWorkspace,
@@ -79,10 +80,12 @@ import {
   serializeSchemaForFile,
   writeBackSharedSchema,
 } from './tracker/trackerSchemaProjection';
-import {
-  readWorkspacePredicateRegistry,
-  writeWorkspacePredicateRegistry,
-} from './tracker/trackerPredicateRegistryFile';
+import { readWorkspacePredicateRegistry } from './tracker/trackerPredicateRegistryFile';
+import { applyRemotePredicateRegistry } from './tracker/trackerPredicateRegistrySync';
+import { readWorkspaceLabelRegistry } from './tracker/trackerLabelRegistryFile';
+import { readTrackerWorkspaceVocabulary } from './tracker/trackerWorkspaceVocabulary';
+import { applyRemoteLabelRegistry } from './tracker/trackerLabelRegistrySync';
+import { requestTrackerSchemaFlush } from './tracker/trackerSchemaFlush';
 import {
   reloadWorkspaceSchemaFile,
   stopSchemaWatcher,
@@ -266,6 +269,8 @@ function loadWorkspaceSchemas(workspacePath: string): void {
   // which keeps the last valid in-memory registry while a file is malformed.
   const localPredicates = readWorkspacePredicateRegistry(workspacePath);
   if (localPredicates) globalRegistry.setPredicates(localPredicates);
+  const localLabels = readWorkspaceLabelRegistry(workspacePath);
+  if (localLabels) globalRegistry.setLabels(localLabels);
 
   const trackersDir = path.join(workspacePath, '.nimbalyst', 'trackers');
 
@@ -481,6 +486,7 @@ function watchSchemaDirectory(workspacePath: string): void {
     reloadWorkspaceSchema,
     handleSchemaFileDeleted,
     reloadWorkspacePredicateRegistry,
+    reloadWorkspaceLabelRegistry,
   );
 }
 
@@ -488,12 +494,22 @@ function watchSchemaDirectory(workspacePath: string): void {
 export async function reloadWorkspacePredicateRegistry(workspacePath: string): Promise<void> {
   const predicates = readWorkspacePredicateRegistry(workspacePath);
   if (predicates === null) return;
+  // A hand edit is a save like any other: publish it to the room (NIM-6653).
+  requestTrackerSchemaFlush(workspacePath);
   if (currentWorkspacePath === null || currentWorkspacePath === workspacePath) {
     globalRegistry.setPredicates(predicates);
     notifySchemaChanged();
   } else {
     globalRegistry.setWorkspacePredicateLayer(workspacePath, predicates);
   }
+}
+
+/** Reload a hand-edited labels.yaml; a parse failure keeps the registry in force. */
+export async function reloadWorkspaceLabelRegistry(workspacePath: string): Promise<void> {
+  const registry = readWorkspaceLabelRegistry(workspacePath);
+  if (registry === null) return;
+  requestTrackerSchemaFlush(workspacePath);
+  applyWorkspaceLabelRegistryInProcess(workspacePath, registry);
 }
 
 function stopWatcher(): void {
@@ -592,6 +608,19 @@ function registerIpcHandlers(): void {
     return readSchemasForWorkspace(workspacePathForEvent(event), () => {
       const model = globalRegistry.get(type);
       return model ? serializeModel(model) : null;
+    });
+  });
+
+  // The label and predicate registries of one workspace, so renderer surfaces
+  // can resolve an item's effective properties. Re-read after every
+  // `tracker-schema:changed`.
+  safeHandle('tracker-schema:get-vocabulary', async (_event, workspacePath: string) => {
+    return readTrackerWorkspaceVocabulary(workspacePath, {
+      registry: globalRegistry,
+      activeWorkspacePath: currentWorkspacePath,
+      runScoped: runWithTrackerSchemaWorkspace,
+      readLabels: readWorkspaceLabelRegistry,
+      readPredicates: readWorkspacePredicateRegistry,
     });
   });
 
@@ -789,7 +818,11 @@ function normalizeSchemaFileName(type: string, fileName?: string): string {
 export function refreshWorkspaceSchemasIfCurrent(workspacePath: string): void {
   // Also load when currentWorkspacePath is null -- no workspace has been set yet
   // (happens when upsertWorkspaceTrackerSchema is called before any workspace window opens).
-  if (currentWorkspacePath !== null && workspacePath !== currentWorkspacePath) return;
+  if (currentWorkspacePath !== null && workspacePath !== currentWorkspacePath) {
+    // Its window only learns of new types from this push (per-window scoped).
+    notifySchemaChanged();
+    return;
+  }
   setCurrentWorkspacePath(workspacePath);
   loadWorkspaceSchemas(workspacePath);
   watchSchemaDirectory(workspacePath);
@@ -1188,12 +1221,12 @@ function resolveInboundSchemaPayload(
     };
   }
 
-  if (decoded.kind === 'predicates') {
+  if (decoded.kind === 'predicates' || decoded.kind === 'labels') {
     // Routed before this function is reached (see
-    // `applyRemoteWorkspacePredicateRegistry`). Arriving here means a registry
+    // `applyRemoteWorkspaceTrackerSchemaDef`). Arriving here means a registry
     // was published under a tracker type's schema row, which is a sender bug;
     // dropping it leaves that type's definition alone.
-    console.warn(`[TrackerSchemaService] predicate registry published as tracker type '${type}'; dropped`);
+    console.warn(`[TrackerSchemaService] ${decoded.kind} registry published as tracker type '${type}'; dropped`);
     return null;
   }
 
@@ -1261,6 +1294,9 @@ export async function applyRemoteWorkspaceTrackerSchemaDef(
   if (def.type === TRACKER_PREDICATE_REGISTRY_SCHEMA_TYPE) {
     return applyRemoteWorkspacePredicateRegistry(workspacePath, def);
   }
+  if (def.type === TRACKER_LABEL_REGISTRY_SCHEMA_TYPE) {
+    return applyRemoteLabelRegistry(workspacePath, def, { onApplied: applyWorkspaceLabelRegistryInProcess });
+  }
 
   // A personal schema on disk is the single-axis authority for this workspace.
   // This especially matters after migrating a legacy local item policy that
@@ -1321,59 +1357,40 @@ export async function applyRemoteWorkspaceTrackerSchemaDef(
 
 /**
  * Apply a published PREDICATE REGISTRY (knowledge-scopes 4.1), which arrives on
- * the schema lane under the reserved schema type.
- *
- * Replace, never merge: the room publishes the registry as one artifact, so a
- * merge would keep a predicate the team deleted and each client's view of what
- * verbs exist would depend on what it happened to have seen before.
- *
- * Two differences from the type-definition path above, both deliberate:
- *
- *  - **No `tracker_type_defs` mirror row.** That table is keyed by tracker type
- *    and read as the set of this project's types; a `__predicates__` row would
- *    show up as one. The schema lane bootstraps from zero on every connect
- *    (`runSchemaBootstrap`), so the registry is re-delivered each time and the
- *    local YAML copy below covers the offline case. Push bookkeeping is C4's,
- *    where a real room can verify it.
- *  - **A tombstone empties the registry rather than retiring a file.** There is
- *    exactly one registry per project, so "deleted" means "no predicates", not
- *    "this artifact no longer exists".
+ * the schema lane under the reserved schema type. The lane itself (version gate,
+ * merge with the local copy, bookkeeping, push) is `trackerPredicateRegistrySync`;
+ * this only installs the result in-process.
  */
-async function applyRemoteWorkspacePredicateRegistry(
+function applyRemoteWorkspacePredicateRegistry(
   workspacePath: string,
   def: RemoteTrackerSchemaDef,
 ): Promise<ApplyRemoteSchemaResult> {
-  let predicates: PredicateDefinition[];
-  if (def.model === null) {
-    predicates = [];
-  } else {
-    const decoded = decodeTrackerSchemaPayload(def.type, def.model);
-    if (decoded?.kind !== 'predicates') {
-      logger.main.warn('[TrackerSchemaService] dropped an unreadable predicate registry payload', {
-        workspacePath,
-        syncId: def.syncId,
-      });
-      return { applied: false, reason: 'invalid' };
-    }
-    predicates = decoded.predicates;
-  }
+  return applyRemotePredicateRegistry(workspacePath, def, {
+    onApplied: applyWorkspacePredicateRegistryInProcess,
+  });
+}
 
-  try {
-    await writeWorkspacePredicateRegistry(workspacePath, predicates);
-  } catch (err) {
-    // The in-memory registry is still worth applying: the project can validate
-    // statements this session even if the checkout copy could not be written.
-    logger.main.warn('[TrackerSchemaService] could not write the predicate registry copy', err);
-  }
-
+/** Install a registry for one workspace without leaking it into another open project. */
+export function applyWorkspacePredicateRegistryInProcess(
+  workspacePath: string,
+  predicates: PredicateDefinition[],
+): void {
   if (currentWorkspacePath === workspacePath) {
     globalRegistry.setPredicates(predicates);
     notifySchemaChanged();
   } else {
     globalRegistry.setWorkspacePredicateLayer(workspacePath, predicates);
   }
+}
 
-  return { applied: true, deleted: def.model === null };
+/** Install a label registry for one workspace without leaking it into another open project. */
+export function applyWorkspaceLabelRegistryInProcess(workspacePath: string, registry: LabelRegistry): void {
+  if (currentWorkspacePath === null || currentWorkspacePath === workspacePath) {
+    globalRegistry.setLabels(registry);
+    notifySchemaChanged();
+  } else {
+    globalRegistry.setWorkspaceLabelLayer(workspacePath, registry);
+  }
 }
 
 export async function deleteWorkspaceTrackerSchema(

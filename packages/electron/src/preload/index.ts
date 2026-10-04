@@ -1103,6 +1103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (type: string) => ipcRenderer.invoke('tracker-schema:get', type) as Promise<any | null>,
     getRoleField: (type: string, role: string) => ipcRenderer.invoke('tracker-schema:get-role-field', type, role) as Promise<string | null>,
     getFieldByRole: (type: string, role: string) => ipcRenderer.invoke('tracker-schema:get-field-by-role', type, role) as Promise<any | null>,
+    getVocabulary: (workspacePath: string) => ipcRenderer.invoke('tracker-schema:get-vocabulary', workspacePath) as Promise<{ labels: any; predicates: any[] } | null>,
     onChanged: (callback: (schemas: any[]) => void) => {
       const handler = (_event: any, schemas: any[]) => callback(schemas);
       ipcRenderer.on('tracker-schema:changed', handler);

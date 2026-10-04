@@ -1,7 +1,6 @@
 package com.nimbalyst.app.screenshots
 
 import androidx.compose.runtime.Composable
-import androidx.navigation.compose.rememberNavController
 import com.nimbalyst.app.ui.NimbalystAndroidApp
 import com.nimbalyst.app.ui.PairingScreen
 import com.nimbalyst.app.ui.ProjectListScreen
@@ -15,15 +14,15 @@ import com.nimbalyst.app.ui.SettingsScreen
  */
 @Composable
 fun ScreenshotHost(screen: ScreenshotScreen) {
-    val navController = rememberNavController()
-
     when (screen) {
-        ScreenshotScreen.PROJECTS -> ProjectListScreen(navController = navController)
+        ScreenshotScreen.PROJECTS -> ProjectListScreen(onOpenProject = {}, onOpenSettings = {})
 
         ScreenshotScreen.SESSIONS -> SessionListScreen(
             projectId = ScreenshotDemoData.SHOWCASE_PROJECT_ID,
             projectName = ScreenshotDemoData.SHOWCASE_PROJECT_NAME,
-            navController = navController
+            selectedSessionId = null,
+            onSelectSession = {},
+            onBack = {}
         )
 
         ScreenshotScreen.DETAIL, ScreenshotScreen.COMPOSER -> SessionDetailScreen(

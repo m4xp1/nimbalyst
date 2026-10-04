@@ -8,7 +8,7 @@
  * service layer, MCP tools, and UI all agree and it is unit-testable without a
  * DB. No I/O here.
  */
-import type { FieldDefinition, TrackerRelationshipValue } from '@nimbalyst/tracker-schema';
+import type { FieldDefinition, TrackerRelationshipValue } from '../../../../../tracker-schema/src/browser';
 /** A relationship vocabulary entry (label + behavior hints for a field). */
 export interface TrackerRelationshipType {
     key: string;

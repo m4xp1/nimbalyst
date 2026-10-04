@@ -109,6 +109,21 @@ runs:
         du -sh packages/android/dist-transcript
         du -sh packages/android/dist-transcript/assets
 
+    # The sync<Variant>EditorAssets Gradle task throws if packages/android/dist-editor
+    # is missing, so the document editor bundle must exist before any Gradle build.
+    - name: Build editor bundle
+      shell: bash
+      run: npm run build:editor --prefix packages/android
+
+    - name: Verify editor bundle exists
+      shell: bash
+      run: |
+        if [ ! -f "packages/android/dist-editor/editor.html" ]; then
+          echo "Error: editor.html not found in packages/android/dist-editor/"
+          exit 1
+        fi
+        du -sh packages/android/dist-editor
+
     # Fail loudly if this is a signed release build without a Firebase config:
     # shipping a signed AAB with push silently disabled is a launch-blocking
     # regression.

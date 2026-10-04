@@ -13,6 +13,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { FloatingPortal, flip, offset, shift, useFloating, type VirtualElement } from '@floating-ui/react';
+import { windowControlsClearance } from '@nimbalyst/runtime/ui/floating/windowControlsClearance';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { TrackerRecord } from '@nimbalyst/runtime/core/TrackerRecord';
 import {
@@ -104,7 +105,7 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
 
   const { refs, floatingStyles } = useFloating({
     placement: 'top-start',
-    middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+    middleware: [offset(8), flip({ padding: 8 }), shift({ padding: 8 }), windowControlsClearance()],
   });
 
   // The anchor is the hovered bar's rect, handed over as a virtual element --

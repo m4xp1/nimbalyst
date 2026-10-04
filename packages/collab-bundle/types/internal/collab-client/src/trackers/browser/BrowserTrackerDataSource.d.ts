@@ -1,9 +1,11 @@
 import type { TeamJwt, TeamMemberId } from '../../../../runtime/src/auth/jwtScopes';
 import type { TrackerIdentity } from '../../../../runtime/src/core/DocumentService';
 import { IndexedDbTrackerPersistence } from '@nimbalyst/tracker-engine';
+import { type TrackerItemPayload } from '@nimbalyst/tracker-engine';
 import { type TrackerNavigationSyncHooks, type TrackerPresenceIdentity, type TrackerSchemaSyncHooks } from '@nimbalyst/tracker-engine';
 import type { TrackerAccessTermination } from '@nimbalyst/tracker-engine';
 import type { TrackerDataChange, TrackerDataCommand, TrackerDataCommandResult, TrackerDataSnapshot, TrackerDataSource, TrackerSyncState, TrackerItemRevisionRecord, TrackerRevisionRef } from '../dataSource';
+import { type TrackerBodyRoom, type TrackerBodySeeder } from './trackerBodyRoom';
 export interface BrowserTrackerDataSourceOptions {
     workspacePath: string;
     serverUrl: string;
@@ -24,6 +26,15 @@ export interface BrowserTrackerDataSourceOptions {
     createWebSocket?: (url: string) => WebSocket;
     /** Test seam for a harness that has no HTTP worker in front of its fake room. */
     authorizeRoom?: (jwt: TeamJwt) => Promise<TrackerAccessTermination | null>;
+    /** Test seam for the item body's document room; defaults to a `DocumentSyncProvider`. */
+    openTrackerBodyRoom?: (documentId: string) => TrackerBodyRoom;
+    /**
+     * Writes a new item's description into its body room. Injected by the host
+     * from the `./editor` entry (`seedTrackerBody`) because it carries the
+     * Markdown/Lexical codec, which `trackers-ui` must not reach. Without it,
+     * creating an item with a body fails rather than dropping the body.
+     */
+    seedTrackerBody?: TrackerBodySeeder;
     /**
      * Decide whether a failure to mint a team JWT is terminal, and say which
      * terminal thing it is. Return null for anything retryable.
@@ -44,6 +55,12 @@ export declare function purgeBrowserTrackerRoom(orgId: string, teamProjectId: st
 export declare function purgeBrowserTrackerOrganization(orgId: string, indexedDbFactory?: IDBFactory): Promise<void>;
 /** Purge all tracker data when the browser team session itself is gone. */
 export declare function purgeAllBrowserTrackerData(indexedDbFactory?: IDBFactory): Promise<void>;
+/**
+ * `labels` is the item's add-wins label set, not a field: reads project it
+ * from `payload.labels` over whatever `fields.labels` says, so an update must
+ * diff into the set or it is lost on the next read.
+ */
+export declare function updatePayload(payload: TrackerItemPayload, updates: Record<string, unknown>, currentUser: TrackerIdentity): TrackerItemPayload;
 export declare class BrowserTrackerDataSource implements TrackerDataSource {
     private readonly options;
     private readonly persistence;
@@ -74,6 +91,7 @@ export declare class BrowserTrackerDataSource implements TrackerDataSource {
     private updateOne;
     private updateMany;
     private updateExisting;
+    private openTrackerBodyRoom;
     private upsert;
     private readItems;
     private readSavedViews;

@@ -34,14 +34,36 @@
                     android:pathPrefix="/callback"
                     android:scheme="nimbalyst" />
             </intent-filter>
-            <!-- Pairing payloads are accepted only by the in-app QR scanner.
-                 MainActivity must not expose them as external deep links because
-                 they select the sync server and encryption context. -->
+            <!-- nimbalyst://pair (e.g. the Camera app scanning the pairing QR) only
+                 opens the in-app scanner. MainActivity discards the link's payload:
+                 pairing data selects the sync server and encryption context, so it
+                 is accepted only from the app's own camera. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="pair"
+                    android:scheme="nimbalyst" />
+            </intent-filter>
             <!-- Note: nimbalyst://session/[id] is delivered only via the push
                  notification's explicit Intent(MainActivity) (see
                  NimbalystFirebaseMessagingService). No BROWSABLE intent-filter is
                  declared for it, which would needlessly let any web page invoke it. -->
         </activity>
+
+        <!-- Full-resolution camera capture writes to app cache via this provider. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".notifications.NimbalystFirebaseMessagingService"

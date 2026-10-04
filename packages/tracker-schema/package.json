@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./labelRegistryAuthoring": {
+      "types": "./dist/labelRegistryAuthoring.d.ts",
+      "import": "./dist/labelRegistryAuthoring.js"
     }
   },
   "files": [

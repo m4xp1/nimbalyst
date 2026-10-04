@@ -4,6 +4,7 @@
 import type { StatusCategory } from './trackerStatusCategory.js';
 import { type DerivedTrackerTypeDeclaration } from './trackerTypeInheritance.js';
 import { type PredicateDefinition } from './predicateRegistry.js';
+import { type EffectiveProperty, type LabeledItem, type LabelRegistry } from './labelRegistry.js';
 export type FieldType = 'string' | 'text' | 'number' | 'select' | 'multiselect' | 'date' | 'datetime' | 'boolean' | 'user'
 /** First-class link to other tracker item(s). See {@link RelationshipFieldDefinition}. */
  | 'relationship'
@@ -26,7 +27,14 @@ export type FieldType = 'string' | 'text' | 'number' | 'select' | 'multiselect' 
  * without this type it was an unchecked string in which a typo produced a
  * statement that validated and meant nothing.
  */
- | 'predicate-ref' | 'array' | 'object';
+ | 'predicate-ref'
+/**
+ * Label ids from the project's label registry (`labelRegistry.ts`), carried
+ * as data like `predicate-ref`. Multi-valued; an unknown label is a warning,
+ * never a rejection, because an agent may apply a label that is still a
+ * pending proposal.
+ */
+ | 'label-ref' | 'array' | 'object';
 /**
  * Declared shape of an `object` field's value (or of each entry, on an
  * `array` of objects). Without this a validator cannot tell a locator from any
@@ -351,6 +359,12 @@ export declare class TrackerDataModelRegistry {
      */
     private predicates;
     private workspacePredicateLayers;
+    /**
+     * The project's label registry (`.nimbalyst/labels.yaml`), layered exactly
+     * like predicates and for the same reason. Replaced whole on publish.
+     */
+    private labelRegistry;
+    private workspaceLabelLayers;
     register(model: TrackerDataModel | DerivedTrackerTypeDeclaration, builtin?: boolean): void;
     /**
      * Store a derived declaration and resolve it. A declaration whose base is not
@@ -379,8 +393,14 @@ export declare class TrackerDataModelRegistry {
      * Remove all workspace-specific (non-builtin) schemas.
      * Call this on workspace switch to prevent schemas from workspace A
      * leaking into workspace B.
+     *
+     * `keepVocabulary` is for reloading the SAME workspace's schemas: the label
+     * and predicate registries stay in force, so no listener ever observes them
+     * empty, and the caller replaces them whole once the fresh copy arrives.
      */
-    clearWorkspaceSchemas(): void;
+    clearWorkspaceSchemas(options?: {
+        keepVocabulary?: boolean;
+    }): void;
     /** Subscribe to registry changes. Returns an unsubscribe function. */
     onChange(fn: () => void): () => void;
     /**
@@ -430,6 +450,29 @@ export declare class TrackerDataModelRegistry {
     getAllPredicates(): PredicateDefinition[];
     /** Resolve for an EXPLICIT workspace, with no dependence on async context. */
     getPredicateForWorkspace(workspacePath: string | null | undefined, id: string): PredicateDefinition | undefined;
+    /** Replace the active view's label registry. */
+    setLabels(registry: LabelRegistry): void;
+    /** Replace the cached label registry for a NON-active workspace. No notification. */
+    setWorkspaceLabelLayer(workspacePath: string, registry: LabelRegistry): void;
+    /** The label registry a read should resolve against (scoped like predicates). */
+    getLabelRegistry(): LabelRegistry;
+    getLabelRegistryForWorkspace(workspacePath: string | null | undefined): LabelRegistry;
+    /**
+     * Whether items of this type carry labels: the type declares a `label-ref`
+     * field. Everything else (a bug whose free-form tags live in a `labels`
+     * array, a type with its own `kind`) gets no label fields, no label value
+     * checks, and no unknown-label warnings. Rendering and validation gate
+     * {@link resolveLabels} and {@link effectiveProperties} on this.
+     */
+    acceptsLabels(trackerType: string): boolean;
+    /** Item labels plus legacy `kind`, closed under `broader`. */
+    resolveLabels(item: LabeledItem): string[];
+    /** Union of properties over the item's effective labels, own labels first. */
+    effectiveProperties(item: LabeledItem): EffectiveProperty[];
+    labelDescendants(labelId: string): string[];
+    /** Instance-table columns: the label's properties, then its ancestors'. */
+    tableColumns(labelId: string): EffectiveProperty[];
+    private isPredicate;
     /** The `extends` base of a type, for predicate subject-kind resolution. */
     private baseOf;
     /**

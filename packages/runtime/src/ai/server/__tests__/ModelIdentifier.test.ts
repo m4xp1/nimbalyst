@@ -126,6 +126,13 @@ describe('ModelIdentifier', () => {
       expect(id.combined).toBe('claude-code:opus');
     });
 
+    it.each(['claude-code', 'claude-code-cli'] as const)('normalizes sonnet-5-5 to canonical sonnet and keeps sonnet-5 pinned for %s', (provider) => {
+      expect(ModelIdentifier.create(provider, 'Sonnet-5-5').combined).toBe(`${provider}:sonnet`);
+      const pinned = ModelIdentifier.parse(`${provider}:sonnet-5-1m`);
+      expect(pinned.combined).toBe(`${provider}:sonnet-5-1m`);
+      expect(pinned.baseVariant).toBe('sonnet-5');
+    });
+
     it.each(['claude-code', 'claude-code-cli'] as const)('preserves an explicit Opus 5 selection for %s', (provider) => {
       const id = ModelIdentifier.create(provider, 'Opus-5-1M');
       expect(id.combined).toBe(`${provider}:opus-5-1m`);
@@ -287,13 +294,13 @@ describe('ModelIdentifier', () => {
     it('returns default ModelIdentifier for openai', () => {
       const id = ModelIdentifier.getDefaultForProvider('openai');
       expect(id.provider).toBe('openai');
-      expect(id.combined).toBe('openai:gpt-6-sol');
+      expect(id.combined).toBe('openai:gpt-6.1-sol');
     });
 
     it('returns default ModelIdentifier for openai-codex', () => {
       const id = ModelIdentifier.getDefaultForProvider('openai-codex');
       expect(id.provider).toBe('openai-codex');
-      expect(id.combined).toBe('openai-codex:gpt-6-sol');
+      expect(id.combined).toBe('openai-codex:gpt-6.1-sol');
     });
 
     it('returns default ModelIdentifier for openai-codex-acp', () => {
@@ -313,8 +320,8 @@ describe('ModelIdentifier', () => {
     it('returns default model ID string for all providers', () => {
       expect(ModelIdentifier.getDefaultModelId('claude')).toBe('claude:claude-opus-5-5');
       expect(ModelIdentifier.getDefaultModelId('claude-code')).toBe('claude-code:opus');
-      expect(ModelIdentifier.getDefaultModelId('openai')).toBe('openai:gpt-6-sol');
-      expect(ModelIdentifier.getDefaultModelId('openai-codex')).toBe('openai-codex:gpt-6-sol');
+      expect(ModelIdentifier.getDefaultModelId('openai')).toBe('openai:gpt-6.1-sol');
+      expect(ModelIdentifier.getDefaultModelId('openai-codex')).toBe('openai-codex:gpt-6.1-sol');
       expect(ModelIdentifier.getDefaultModelId('openai-codex-acp')).toBe('openai-codex-acp:gpt-5.6-sol');
       expect(ModelIdentifier.getDefaultModelId('lmstudio')).toBe('lmstudio:local-model');
     });

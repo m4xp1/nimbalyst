@@ -38,7 +38,8 @@ import type { CitationInspectorHost } from './CitationInspector';
 import { CollectionPickerPopover } from './CollectionPickerPopover';
 import { isCollectionRelationshipField } from '../models/trackerCollections';
 import { UserAvatar } from './UserAvatar';
-import { formatTrackerFieldLabel, isTrackerFieldEmpty, shouldLabelTrackerField } from './trackerFieldLayout';
+import { isTrackerFieldEmpty, shouldLabelTrackerField, trackerFieldDisplayLabel } from './trackerFieldLayout';
+import { labelRefDisplayNames } from './labelRefValue';
 import './TrackerFieldPills.css';
 
 /** Default prefix for the `data-testid`s this component emits. */
@@ -80,6 +81,11 @@ export interface TrackerFieldPillsProps {
    * exists to prevent.
    */
   carriedFieldNames?: ReadonlySet<string>;
+  /**
+   * Extra hover text per field name, appended to the chip's title. Qualified
+   * label properties use it to show their qualifiers.
+   */
+  fieldHints?: Readonly<Record<string, string>>;
   /** Extra class on the chip row for surface-specific layout. */
   className?: string;
   /**
@@ -102,6 +108,8 @@ export interface TrackerFieldPillProps {
   onSave: (fieldName: string, value: unknown) => void | Promise<void>;
   /** See `TrackerFieldPillsProps.carriedFieldNames`. */
   carried?: boolean;
+  /** See `TrackerFieldPillsProps.fieldHints`. */
+  hint?: string;
   testIdBase?: string;
 }
 
@@ -143,7 +151,11 @@ function fieldDisplayValue(
   teamMembers: TeamMemberOption[],
   relationshipCandidates?: RelationshipCandidate[],
 ): string {
-  if (isTrackerFieldEmpty(value)) return formatTrackerFieldLabel(field.name);
+  if (isTrackerFieldEmpty(value)) return trackerFieldDisplayLabel(field);
+  if (field.type === 'label-ref') {
+    const names = labelRefDisplayNames(value);
+    return names.length <= 2 ? names.join(', ') : `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+  }
   if (field.type === 'select') {
     return field.options?.find((option) => option.value === value)?.label ?? String(value);
   }
@@ -171,7 +183,7 @@ function fieldDisplayValue(
   if (field.type === 'boolean') return value ? 'Yes' : 'No';
   if (field.type === 'url' && typeof value === 'object') {
     const url = value as { label?: unknown; url?: unknown };
-    return String(url.label ?? url.url ?? formatTrackerFieldLabel(field.name));
+    return String(url.label ?? url.url ?? trackerFieldDisplayLabel(field));
   }
   return String(value);
 }
@@ -183,6 +195,7 @@ function fieldIcon(field: FieldDefinition, value: unknown): string {
   }
   if (field.type === 'user') return 'person';
   if (field.type === 'array') return 'label';
+  if (field.type === 'label-ref') return 'sell';
   if (field.type === 'relationship' || field.type === 'reference') return 'link';
   if (field.type === 'citation') return 'format_quote';
   if (field.type === 'date' || field.type === 'datetime') return 'calendar_today';
@@ -214,6 +227,7 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
   onCreateCollection,
   onSave,
   carried = false,
+  hint,
   testIdBase = DEFAULT_TEST_ID_BASE,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -233,7 +247,7 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
   // and starting a new one are the whole job, and the generic relationship
   // typeahead does neither well.
   const isCollectionField = isCollectionRelationshipField(field);
-  const label = formatTrackerFieldLabel(field.name);
+  const label = trackerFieldDisplayLabel(field);
   const displayValue = fieldDisplayValue(field, localValue, members, relationshipCandidates);
   // An empty chip already reads as its label, so only a filled one needs one.
   const showLabel = shouldLabelTrackerField(field, localValue, labelFields);
@@ -335,11 +349,12 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
     return [];
   }, [field.options, field.type, members]);
 
-  const pillTitle = !editable
+  const baseTitle = !editable
     ? `${label} is read-only`
     : empty
       ? `Set ${label}`
       : `${label}: ${displayValue}`;
+  const pillTitle = hint ? `${baseTitle}\n${hint}` : baseTitle;
 
   return (
     <>
@@ -490,6 +505,7 @@ export const TrackerFieldPills: React.FC<TrackerFieldPillsProps> = ({
   onOpenItem,
   onCreateCollection,
   carriedFieldNames,
+  fieldHints,
   className,
   testIdBase = DEFAULT_TEST_ID_BASE,
 }) => {
@@ -514,6 +530,7 @@ export const TrackerFieldPills: React.FC<TrackerFieldPillsProps> = ({
           onCreateCollection={onCreateCollection}
           onSave={onSave}
           carried={carriedFieldNames?.has(field.name) ?? false}
+          hint={fieldHints?.[field.name]}
           testIdBase={testIdBase}
         />
       ))}

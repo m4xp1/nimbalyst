@@ -22,6 +22,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.79.1] - 2026-09-30
+
+
+### Added
+- Android: create worktrees, workstreams, and Meta Agent sessions, pick a model per session, edit synced documents in a Files tab, and cancel or archive sessions.
+- GPT-6.1 Sol in the Codex and OpenAI model pickers, now the default Codex model.
+- `/crew:hire` designs a new Crew member from any agent session, replacing the Hire dialog's "Describe the job" tab.
+
+### Changed
+- Quick Track's Cmd+Enter creates the item and closes the popup without switching to Tracker mode; the title field now spans the popup.
+
+### Fixed
+- Typing in a Crew dialog no longer loses focus every few seconds.
+- Context menus and popovers no longer open under the title bar, where their first item could not be clicked.
+- Concurrent label or predicate additions by two teammates to a shared knowledge graph no longer drop one of them.
+- Compound Bash commands no longer prompt for permission after a user PreToolUse hook has allowed them.
+- Codex auto-review and subagent threads no longer appear as separate "# AGENTS.md instructions" sessions.
+- Tracker types defined in a background project's window now appear in its tracker pane without a reload.
+- Claude Agent sessions in an externally created worktree no longer stay stuck on "running" after a background command finishes.
+- Transcript messages no longer flash and redraw while a session is streaming.
+
+## [0.79.0] - 2026-09-29
+
+
+### Added
+<!-- New features go here -->
+- Opt-in unlimited open projects with a scrollable project rail and cleanup of unused project resources.
+- Sonnet 5.5 for Claude Agent and the Claude API; the Sonnet row now runs Sonnet 5.5 and Sonnet 5 stays selectable.
+- Crew (alpha, off by default): persistent agent teammates that work scheduled shifts within token budgets and flag you when something needs you.
+- Extensions can start and drive their own agent sessions.
+- Knowledge extension sets up a team wiki with an editable "How we write this wiki" guide and optional market and project-spec vocabulary packs.
+- Knowledge graph labels: a page can carry several labels, each bringing its own fields and expected statements.
+- Ontology inspector in web console Tracker setup shows what a team project tracks and drafts fixes for gaps.
+- Navigable wiki Types map with search, minimap, and per-relationship details.
+- Knowledge curator (alpha): sort commits, sessions, and tracker changes into the knowledge graph with TypeSafe's Jev model or Workers AI.
+- Team wiki from the terminal (alpha): a Claude Code plugin and `nim wiki` commands read and write a team project's knowledge wiki.
+- iOS: Live voice conversations are recorded as voice sessions on the connected desktop, including tool calls.
+
+### Changed
+<!-- Changes to existing functionality go here -->
+- iOS: the session detail status bar shows the session's model.
+- Claude Code sessions waiting on a background shell or sub-agent show a distinct indicator and name the task in the transcript.
+
+### Fixed
+<!-- Bug fixes go here -->
+- Agent sessions no longer read and cache large or binary files written into the workspace, which flooded the log and grew memory.
+- File @-mention suggestions pick up newly created and renamed files without a reload.
+- Overlapping file-tree scans no longer exhaust memory while files change in large projects.
+- Improved load performance for very large Codex sessions.
+- Clicking the Dock or tray icon brings back the project window after the app sat in the background.
+- Following external Claude Code sessions keeps importing after the agent changes directory, and skips unchanged logs.
+- Sessions no longer stay marked as running, or lose their waiting-for-you state, around an open question.
+- A question left unanswered by sending a new message now shows as skipped.
+- Workstream sessions in the session list keep their "updated" time current.
+- Inline diffs no longer freeze the window for agent edits across long, list-heavy markdown files (#1606).
+- A sent prompt no longer stays duplicated below the transcript when the turn is slow to start (#1620).
+- Team tracker type changes reach teammates right away instead of after the next reconnect.
+- A team project's knowledge relationship verbs are shared with teammates and the web console.
+- iOS: returning after a long background shows a quiet "Reconnecting…" notice and no longer leaves an open session stuck loading.
+- iOS: creating a session no longer reports failure when the desktop created it.
+- iOS: Live voice reads a session's pending question in its own voice, relays your answer, and works for desktop-started sessions.
+- iOS: the running-sessions Live Activity restarts after an earlier card ends.
+- iOS: scrolling up in a long session reaches the first message.
+
 ## [0.78.5] - 2026-09-24
 
 

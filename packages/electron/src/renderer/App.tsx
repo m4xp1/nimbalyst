@@ -140,6 +140,7 @@ import { initCollabReplicaListeners } from './store/listeners/collabReplicaListe
 import { initCollabConversionListeners } from './store/listeners/collabConversionListeners';
 import { initNotificationListeners } from './store/listeners/notificationListeners';
 import { initExtensionPermissionListeners } from './store/listeners/extensionPermissionListeners';
+import { initPanelGutterBadgeListeners } from './store/listeners/panelGutterBadgeListeners';
 import { initPermissionListeners } from './store/listeners/permissionListeners';
 import { initSoundListeners } from './store/listeners/soundListeners';
 import { initStytchAuthListeners } from './store/listeners/stytchAuthListeners';
@@ -190,6 +191,7 @@ import { organizationDirectoryAtom, personalAccountsAtom } from './store/atoms/s
 import {
   activeWorkspacePathAtom,
   multiProjectModeAtom,
+  openProjectsAtom,
   addOpenProjectAtom as addOpenProjectAction,
 } from './store/atoms/openProjects';
 import { registerDocumentLinkPlugin } from './plugins/registerDocumentLinkPlugin';
@@ -218,6 +220,8 @@ import {
   initializePanelRegistry,
   getPanelById,
   PanelContainer,
+  togglePanelPane,
+  useFullscreenPanelPaneControls,
   electronStorageBackend,
   initializeElectronStorageBackend,
 } from './extensions/panels';
@@ -410,6 +414,7 @@ export default function App() {
     const cleanupMenuCommand = initMenuCommandListeners();
     const cleanupNotification = initNotificationListeners();
     const cleanupExtensionPermission = initExtensionPermissionListeners();
+    const cleanupPanelGutterBadges = initPanelGutterBadgeListeners();
     const cleanupPermission = initPermissionListeners();
     const cleanupSound = initSoundListeners();
     const cleanupStytchAuth = initStytchAuthListeners();
@@ -458,6 +463,7 @@ export default function App() {
       cleanupMenuCommand?.();
       cleanupNotification?.();
       cleanupExtensionPermission?.();
+      cleanupPanelGutterBadges();
       cleanupPermission?.();
       cleanupSound?.();
       cleanupStytchAuth?.();
@@ -654,6 +660,7 @@ export default function App() {
   // Check if a fullscreen extension panel is active (hides other content modes)
   const activeFullscreenPanel = activeExtensionPanel ? getPanelById(activeExtensionPanel) : null;
   const isFullscreenPanelActive = activeFullscreenPanel?.placement === 'fullscreen';
+  const fullscreenPanelPaneControls = useFullscreenPanelPaneControls(isFullscreenPanelActive ? activeExtensionPanel : null);
 
   // Window mode - which view is active (files, agent, settings)
   const activeMode = useAtomValue(windowModeAtom);
@@ -1149,7 +1156,7 @@ export default function App() {
   const pullRequestModeRef = useRef<PullRequestModeRef | null>(null);
 
   const toggleActiveLeftPane = useCallback(() => {
-    if (isFullscreenPanelActive) return;
+    if (isFullscreenPanelActive) return void togglePanelPane(activeExtensionPanel!, 'left');
     if (activeMode === 'files') {
       editorModeRef.current?.toggleSidebarCollapsed();
     } else if (activeMode === 'agent') {
@@ -1161,10 +1168,10 @@ export default function App() {
     } else if (activeMode === 'org') {
       orgModeRef.current?.toggleSidebarCollapsed();
     }
-  }, [activeMode, isFullscreenPanelActive, toggleAgentCollapsed, toggleTrackerCollapsed]);
+  }, [activeMode, activeExtensionPanel, isFullscreenPanelActive, toggleAgentCollapsed, toggleTrackerCollapsed]);
 
   const toggleActiveRightPane = useCallback(() => {
-    if (isFullscreenPanelActive) return;
+    if (isFullscreenPanelActive) return void togglePanelPane(activeExtensionPanel!, 'right');
     if (activeMode === 'files') {
       editorModeRef.current?.toggleAIChatCollapsed();
     } else if (activeMode === 'agent') {
@@ -1174,7 +1181,7 @@ export default function App() {
     } else if (activeMode === 'pr-review') {
       pullRequestModeRef.current?.toggleChatCollapsed();
     }
-  }, [activeMode, isFullscreenPanelActive]);
+  }, [activeMode, activeExtensionPanel, isFullscreenPanelActive]);
 
   // Expand the active tab to fill the window — the menu/shortcut equivalent of
   // double-clicking a tab. Only the modes that own editor tabs implement it.
@@ -1207,7 +1214,7 @@ export default function App() {
   }, [toggleExpandedTabVersion, toggleActiveEditorMaximized]);
 
   const windowTopBarPanelControls = useMemo<WindowTopBarPanelControls | undefined>(() => {
-    if (isFullscreenPanelActive) return undefined;
+    if (isFullscreenPanelActive) return fullscreenPanelPaneControls;
     if (activeMode === 'files') {
       return {
         left: {
@@ -1284,6 +1291,7 @@ export default function App() {
     collabPanelState,
     filesAIChatCollapsed,
     filesSidebarCollapsed,
+    fullscreenPanelPaneControls,
     isFullscreenPanelActive,
     prPanelState,
     toggleActiveLeftPane,
@@ -2393,16 +2401,17 @@ export default function App() {
             if (initialState.workspacePath) {
               await initWindowMode(initialState.workspacePath);
               // Initialize unified navigation history
-              await initNavigationHistory(initialState.workspacePath);
+              await initNavigationHistory(initialState.workspacePath, { setActive: false });
 
-              // Seed the multi-project rail: this window's primary
-              // workspace is always represented in the rail (visible only
-              // when multiProjectMode is on, hidden otherwise).
-              addOpenProject({
-                path: initialState.workspacePath,
-                name: initialState.workspaceName ?? initialState.workspacePath,
-                openedAt: Date.now(),
-              });
+              // Preserve the restored selection if the primary is already
+              // present. Adding it again would activate it after these awaits.
+              if (!store.get(openProjectsAtom).some(project => project.path === initialState.workspacePath)) {
+                addOpenProject({
+                  path: initialState.workspacePath,
+                  name: initialState.workspaceName ?? initialState.workspacePath,
+                  openedAt: Date.now(),
+                });
+              }
             }
           }
         }

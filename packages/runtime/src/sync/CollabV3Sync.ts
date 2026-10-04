@@ -52,6 +52,8 @@ import { hasPublishableConfig } from './projectConfig';
 import { publishWithBoundedRetry } from './indexPublishRetry';
 import { prepareIndexChange } from './prepareIndexChange';
 import { createIndexSendChannel, throwIfUnsent } from './indexSendChannel';
+import { decideSessionAdmission, MAX_SESSION_CONNECTIONS, SessionConnectionRefusedError } from './sessionConnectionAdmission';
+import { writeSessionMessagesOverTransientSocket, type TransientSessionMetadata, type TransientSessionWriteDeps } from './sessionTransientWrite';
 import {
   IndexProtocolUnsupportedError,
   type ClientMessage,
@@ -888,6 +890,12 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * and outbound changes start flowing again without waiting for a user action.
    */
   const wantedSessions = new Set<string>();
+  // Set by disconnectAll (sign-out, account switch). A queued outbox write must not
+  // reach the wire under whatever account the host signs into next.
+  let sessionWritesClosed = false;
+  // Bumped by disconnectAll; writes already in flight stop sending, and reconnecting does not revive them.
+  let sessionWriteGeneration = 0;
+  const transientSockets = new Set<WebSocket>();
   let indexWs: WebSocket | null = null;
   let indexConnected = false;
   /**
@@ -2918,152 +2926,34 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     scheduleIndexReconnect({ preOpenFailure: true });
   });
 
-  // Sync messages to a session room (internal function)
-  async function syncSessionMessages(
+  const transientWriteDeps: TransientSessionWriteDeps = {
+    get encryptionKey() { return config.encryptionKey; },
+    isMessageSyncDisabled,
+    disableMessageSync,
+    isFatalErrorCode: isFatalMessageSyncErrorCode,
+    isRetained: activityAt => isRetainedSession(activityAt, Date.now(), SESSION_TRANSCRIPT_TTL_MS),
+    withholdWrite: withholdPersonalSyncWrite,
+    writeGeneration: () => sessionWriteGeneration,
+    async openSocket(sessionId) {
+      // console.log('[CollabV3] syncSessionMessages() - CREATING TEMP WebSocket for session', sessionId);
+      const { jwt } = await ensureFreshJwt();
+      // Pass JWT via query parameter (WebSocket doesn't support custom headers in browsers)
+      const ws = openWebSocket(appendSyncClientParams(`${getWebSocketUrl(getRoomId(sessionId))}?token=${encodeURIComponent(jwt)}`));
+      transientSockets.add(ws);
+      return { ws, release: () => transientSockets.delete(ws) };
+    },
+    shouldSync: message => shouldSyncMessageForSessionRoom(message.source, message.metadata, message.content),
+    encryptMessage,
+    encryptTitle,
+  };
+
+  // Sync messages to a session room over a socket opened for this write (internal function)
+  function syncSessionMessages(
     sessionId: string,
     messages: AgentMessage[],
-    metadata?: { title?: string; provider?: string; model?: string; mode?: string }
-  ): Promise<void> {
-    if (isMessageSyncDisabled(sessionId)) return;
-    const replayActivityAt = messages.reduce((latest, message) => Math.max(latest, message.createdAt instanceof Date ? message.createdAt.getTime() : typeof message.createdAt === 'number' ? message.createdAt : 0), 0);
-    if (!isRetainedSession(replayActivityAt, Date.now(), SESSION_TRANSCRIPT_TTL_MS)) return;
-    if (!config.encryptionKey) {
-      console.error('[CollabV3] Cannot sync messages - no encryption key');
-      return;
-    }
-    if (withholdPersonalSyncWrite('transcript upload')) return;
-
-    // console.log('[CollabV3] syncSessionMessages() - CREATING TEMP WebSocket for session', sessionId, 'with', messages.length, 'messages');
-
-    // Get fresh JWT before connecting
-    const { jwt } = await ensureFreshJwt();
-
-    // Connect to session room
-    const roomId = getRoomId(sessionId);
-    const url = getWebSocketUrl(roomId);
-    // Pass JWT via query parameter (WebSocket doesn't support custom headers in browsers)
-    const wsUrl = appendSyncClientParams(`${url}?token=${encodeURIComponent(jwt)}`);
-
-    return new Promise((resolve, reject) => {
-      const ws = openWebSocket(wsUrl);
-      let resolved = false;
-
-      const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          ws.close();
-          reject(new Error('Timeout syncing messages'));
-        }
-      }, 30000);
-
-      ws.onopen = async () => {
-        try {
-          if (isMessageSyncDisabled(sessionId)) {
-            clearTimeout(timeout);
-            resolved = true;
-            ws.close();
-            resolve();
-            return;
-          }
-
-          // Retain the original message order. The replay declaration grants
-          // only this connection permission to send older rows for current work.
-          ws.send(JSON.stringify({ type: 'beginSessionReplay', activityAt: replayActivityAt }));
-
-          // First update metadata if provided
-          if (metadata) {
-            const wireMetadata: Partial<SessionMetadata> = {
-              provider: metadata.provider,
-              model: metadata.model,
-              mode: metadata.mode as 'agent' | 'planning' | undefined,
-            };
-            // Title must be encrypted on the wire. The server stores ciphertext
-            // only; sending plaintext here would leak titles into DO SQLite
-            // (see also IndexRoom.encrypted_title for the index-side equivalent).
-            if (metadata.title && config.encryptionKey) {
-              const { encryptedTitle, titleIv } = await encryptTitle(metadata.title, config.encryptionKey);
-              wireMetadata.encryptedTitle = encryptedTitle;
-              wireMetadata.titleIv = titleIv;
-            }
-            const metadataMsg: ClientMessage = {
-              type: 'updateMetadata',
-              metadata: wireMetadata,
-            };
-            ws.send(JSON.stringify(metadataMsg));
-          }
-
-          // Send each message
-          for (const message of messages) {
-            if (resolved || isMessageSyncDisabled(sessionId)) break;
-            if (!shouldSyncMessageForSessionRoom(message.source, message.metadata, message.content)) {
-              continue;
-            }
-            const encrypted = await encryptMessage(message, config.encryptionKey!);
-            const clientMsg: ClientMessage = { type: 'appendMessage', message: encrypted };
-            ws.send(JSON.stringify(clientMsg));
-          }
-
-          // Small delay to ensure messages are processed
-          await new Promise(r => setTimeout(r, 500));
-
-          clearTimeout(timeout);
-          resolved = true;
-          ws.close();
-          resolve();
-        } catch (err) {
-          clearTimeout(timeout);
-          resolved = true;
-          ws.close();
-          reject(err);
-        }
-      };
-
-      ws.onerror = (event) => {
-        if (!resolved) {
-          clearTimeout(timeout);
-          resolved = true;
-          // WebSocket onerror receives a DOM Event, not an Error object.
-          // Extract meaningful info to avoid "Uncaught Error: undefined" dialogs.
-          const errorInfo = typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent
-            ? event.message || 'WebSocket error'
-            : 'WebSocket connection error';
-          reject(new Error(`[CollabV3] ${errorInfo} for session ${sessionId}`));
-        }
-      };
-
-      ws.onmessage = (event) => {
-        if (resolved) return;
-        try {
-          const message: ServerMessage = JSON.parse(
-            typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data)
-          );
-          if (message.type === 'error' && message.code === 'session_expired') {
-            clearTimeout(timeout);
-            resolved = true;
-            ws.close();
-            resolve();
-            return;
-          }
-          if (message.type !== 'error' || !isFatalMessageSyncErrorCode(message.code)) return;
-
-          disableMessageSync(sessionId, message.code, message.message);
-          clearTimeout(timeout);
-          resolved = true;
-          ws.close();
-          resolve();
-        } catch {
-          // Non-JSON and unrelated server messages do not affect batch sync.
-        }
-      };
-
-      ws.onclose = () => {
-        if (!resolved) {
-          clearTimeout(timeout);
-          resolved = true;
-          resolve();
-        }
-      };
-    });
+    metadata?: TransientSessionMetadata,
+  ): Promise<PushChangeOutcome> {
+    return writeSessionMessagesOverTransientSocket(transientWriteDeps, sessionId, messages, metadata);
   }
 
   // Batch sync session messages with delay to prevent server overload (internal function).
@@ -3378,12 +3268,6 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           publishedSessionIds,
         };
   }
-
-  // Hard limit on concurrent session WebSocket connections to prevent performance issues
-  const MAX_SESSION_CONNECTIONS = 10;
-
-  // Idle timeout before a connection can be evicted (5 minutes)
-  const IDLE_EVICTION_TIMEOUT_MS = 5 * 60 * 1000;
 
   /**
    * One-shot sends that answer another device. Waits out the handshake and
@@ -3750,33 +3634,14 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         throw err;
       }
 
-      // Enforce hard limit on concurrent connections - try to evict idle connection first
-      if (sessions.size >= MAX_SESSION_CONNECTIONS) {
-        // Find the oldest idle connection that exceeds the idle timeout
-        const now = Date.now();
-        let oldestIdleSessionId: string | null = null;
-        let oldestIdleTime = Infinity;
-
-        for (const [sid, sess] of sessions) {
-          const idleTime = now - sess.lastActivity;
-          if (idleTime >= IDLE_EVICTION_TIMEOUT_MS && idleTime > (now - oldestIdleTime)) {
-            // This session has been idle longer than the threshold
-            if (sess.lastActivity < oldestIdleTime) {
-              oldestIdleTime = sess.lastActivity;
-              oldestIdleSessionId = sid;
-            }
-          }
-        }
-
-        if (oldestIdleSessionId) {
-          // Evict the oldest idle connection to make room
-          console.log(`[CollabV3] connect() - evicting idle session ${oldestIdleSessionId} (idle for ${Math.round((now - oldestIdleTime) / 1000)}s) to make room for ${sessionId}`);
-          this.disconnect(oldestIdleSessionId);
-        } else {
-          // No idle connections to evict - reject the new connection
-          console.warn(`[CollabV3] connect() - REJECTING connection for ${sessionId}, already at max (${MAX_SESSION_CONNECTIONS} connections) and no idle sessions to evict`);
-          return;
-        }
+      const admission = decideSessionAdmission(sessions, Date.now());
+      if (admission.kind === 'evict-then-admit') {
+        console.log(`[CollabV3] connect() - evicting idle session ${admission.evictSessionId} (idle for ${Math.round(admission.idleMs / 1000)}s) to make room for ${sessionId}`);
+        this.disconnect(admission.evictSessionId);
+      } else if (admission.kind === 'refuse') {
+        // A refused session is not wanted on reconnect; its writes go through the caller's outbox.
+        wantedSessions.delete(sessionId);
+        throw new SessionConnectionRefusedError(sessionId, MAX_SESSION_CONNECTIONS);
       }
 
       // Log stack trace to identify what's creating connections
@@ -3896,6 +3761,10 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     },
 
     disconnectAll(): void {
+      sessionWritesClosed = true;
+      sessionWriteGeneration++;
+      for (const ws of [...transientSockets]) ws.close();
+      transientSockets.clear();
       pendingPublications.clear();
       wantedSessions.clear();
       sessionConnectionsInFlight.clear();
@@ -4000,6 +3869,17 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       return change.type === 'metadata_updated' || change.type === 'session_deleted'
         ? indexPublishQueue.run(sessionId, publish)
         : publish();
+    },
+
+    async sendSessionMessages(sessionId: string, messages: AgentMessage[]): Promise<PushChangeOutcome> {
+      if (sessionWritesClosed) return { published: false, reason: 'sync was shut down', retryable: false };
+      const sendable = messages.filter(m => shouldSyncMessageForSessionRoom(m.source, m.metadata, m.content, m.hidden));
+      if (sendable.length === 0) return { published: false, reason: 'filtered from session-room sync', retryable: false };
+      try {
+        return await syncSessionMessages(sessionId, sendable);
+      } catch (error) {
+        return { published: false, reason: error instanceof Error ? error.message : String(error), retryable: true };
+      }
     },
 
     /**
@@ -4606,19 +4486,19 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     /**
      * Push the ambient fleet snapshot to the user's Live Activity.
      *
-     * Unlike `requestMobilePush` this does not reconnect on demand. The lane is
-     * ambient and coalesced, so a disconnected desktop simply misses an update
-     * and the phone's stale date says so -- forcing a reconnect for a card that
-     * nobody may be looking at would be the more expensive mistake, and the next
-     * transition after reconnect carries the full current state anyway.
+     * Unlike `requestMobilePush` this does not reconnect on demand: the lane is
+     * ambient and coalesced, so a disconnected desktop misses an update (and says
+     * so via the return value); the next transition carries the full state.
      */
-    async sendFleetActivity(activity: FleetActivitySnapshot, shownOnDesktop = false): Promise<void> {
-      if (!indexWs || !indexConnected || indexWs.readyState !== WS_OPEN) return;
+    async sendFleetActivity(activity: FleetActivitySnapshot, shownOnDesktop = false): Promise<boolean> {
+      if (!indexWs || !indexConnected || indexWs.readyState !== WS_OPEN) return false;
       const msg: ClientMessage = { type: 'fleetActivityUpdate', activity, shownOnDesktop };
       try {
         indexWs.send(JSON.stringify(msg));
+        return true;
       } catch (error) {
         console.warn('[CollabV3] Failed to send fleet activity update:', error);
+        return false;
       }
     },
 
@@ -4741,6 +4621,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
     /** Attempt to reconnect the index connection when network becomes available */
     async reconnectIndex(): Promise<void> {
+      sessionWritesClosed = false;
       // A previous reconnectIndex() already started a fresh handshake that
       // hasn't resolved yet. Don't tear it down -- post-wake the broker fires
       // several network-available events in a ~20s burst and we'd otherwise

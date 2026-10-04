@@ -1,13 +1,14 @@
 # Knowledge graph: the base kind.
 #
 # An entity is anything with stable identity that statements can be made ABOUT.
-# It deliberately carries almost no domain meaning: the domain lives in `kind`
-# and in the claims that point at it, not in a per-domain tracker type, so
-# relationship fields can target `entity` and never restate a list of types.
+# It deliberately carries almost no domain meaning: the domain lives in its
+# `labels` and in the claims that point at it, not in a per-domain tracker type,
+# so relationship fields can target `entity` and never restate a list of types.
 #
-# `kind` is how a product, a capability or a protocol tell themselves apart;
-# a new domain adds options here (and optional fields if it needs them).
-# Derived kinds (`extends: entity`) are not supported by tracker_define_type yet.
+# `labels` is how a product, a feature or a protocol tell themselves apart; a
+# new domain adds a label to the label registry, not a field or option here.
+# `kind` is the older single-valued axis, still read as an implicit label.
+# Structure pages (area, home) keep writing it until the wiki reads label roles.
 type: entity
 displayName: Entity
 displayNamePlural: Entities
@@ -29,11 +30,11 @@ fields:
     type: string
     required: true
 
-  # The ontology axis. A reader asking "what enumerated values exist here" is
-  # asking about THIS field more than any other, which is why it is second.
+  # The legacy ontology axis, read as an implicit label. Frozen: new pages set
+  # `labels` instead, except structure pages (area, home). No default, so a page
+  # that sets only `labels` does not pick up a kind it never had.
   - name: kind
     type: select
-    default: concept
     options:
       - value: product
         label: Product
@@ -59,6 +60,15 @@ fields:
       - value: organization
         label: Organization
         icon: apartment
+      # A category node in the market tree. Products join one with an
+      # `in-market` claim; submarkets set `parent` to their market.
+      - value: market
+        label: Market
+        icon: storefront
+      # A synthesis or overview page (a landscape, a strategy, a practice).
+      - value: topic
+        label: Topic
+        icon: topic
       - value: person
         label: Person
         icon: person
@@ -68,6 +78,17 @@ fields:
       - value: area
         label: Area
         icon: folder
+      - value: home
+        label: Home
+        icon: home
+
+  # Labels from the project's label registry (.nimbalyst/labels.yaml). A page
+  # may carry several; each brings its properties. `kind` above is still read
+  # as an implicit label, so existing pages need no migration.
+  - name: labels
+    type: label-ref
+    multiValue: true
+    displayInline: false
 
   - name: status
     type: select
@@ -131,6 +152,12 @@ fields:
 
   - name: summary
     type: text
+    displayInline: false
+
+  # Not time-varying, so a field rather than a claim. Facts that change
+  # (revenue, pricing, users) are dated claims instead.
+  - name: website
+    type: string
     displayInline: false
 
   - name: tags

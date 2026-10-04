@@ -218,7 +218,7 @@ packages/ios/screenshots/
 packages/android/screenshots/
 
 # Auto-generated platform artifacts
-packages/android/app/schemas/
+# (packages/android/app/schemas/ is committed: Room migration tests read it)
 packages/marketplace/.wrangler/
 
 # Scratch/working directories at repo root (not source)

@@ -22,13 +22,14 @@
  * **Stable codes.** Every failure carries a `PREDICATE_*` code and a property
  * path. A message is for a person; a code is what a caller may branch on.
  *
- * **Strict in both directions.** An unknown qualifier, an unknown property on a
- * predicate declaration, and an unknown qualifier type are all rejections. The
- * concrete failure a tolerant reader produces here: `operation` for
- * `operations` is dropped, the required qualifier reads as missing, and the
- * author is told to supply a qualifier they believe they just supplied. Worse,
- * with `required` absent it is accepted and the statement claims a precision
- * nobody wrote.
+ * **Strict on values, tolerant on declarations.** An unknown qualifier VALUE on
+ * a statement and an unknown qualifier type are rejections: `operation` for
+ * `operations` would otherwise be dropped, the required qualifier would read as
+ * missing, and the author would be told to supply a qualifier they believe they
+ * just supplied. An unknown KEY on a predicate or qualifier declaration is a
+ * warning instead: a later release adds keys (`range`, `options`) to this
+ * file, and a client that rejected them would drop the whole registry and
+ * every statement's contract with it. The key is kept, not stripped.
  *
  * **Every issue in one pass.** A form or an MCP caller fixes a value in one
  * round trip rather than one per property.
@@ -191,8 +192,13 @@ const QUALIFIER_KEYS: readonly string[] = [
 // ---------------------------------------------------------------------------
 
 export type PredicateDefinitionValidation =
-  | { valid: true; predicate: PredicateDefinition; issues: [] }
-  | { valid: false; predicate: null; issues: PredicateIssue[] };
+  | { valid: true; predicate: PredicateDefinition; issues: []; warnings?: PredicateIssue[] }
+  | { valid: false; predicate: null; issues: PredicateIssue[]; warnings?: PredicateIssue[] };
+
+/** Only present when non-empty, so a clean result keeps its historical shape. */
+function withWarnings<T extends object>(result: T, warnings: PredicateIssue[]): T & { warnings?: PredicateIssue[] } {
+  return warnings.length > 0 ? { ...result, warnings } : result;
+}
 
 /**
  * Validate one predicate declaration. Returns the narrowed definition on
@@ -210,10 +216,11 @@ export function validatePredicateDefinition(value: unknown): PredicateDefinition
   }
 
   const issues: PredicateIssue[] = [];
+  const warnings: PredicateIssue[] = [];
 
   for (const key of Object.keys(value)) {
     if (!PREDICATE_KEYS.includes(key)) {
-      issues.push(issue('PREDICATE_UNKNOWN_FIELD', key, `'${key}' is not part of a predicate declaration`));
+      warnings.push(issue('PREDICATE_UNKNOWN_FIELD', key, `'${key}' is not part of a predicate declaration`));
     }
   }
 
@@ -252,19 +259,28 @@ export function validatePredicateDefinition(value: unknown): PredicateDefinition
       issues.push(issue('PREDICATE_INVALID_FIELD', 'qualifiers', `'qualifiers' must be an object keyed by qualifier name`));
     } else {
       for (const [name, declaration] of Object.entries(value.qualifiers)) {
-        validateQualifierDeclaration(name, declaration, issues);
+        validatePredicateQualifierDeclaration(name, declaration, issues, warnings);
       }
     }
   }
 
-  if (issues.length > 0) return { valid: false, predicate: null, issues };
-  return { valid: true, predicate: value as unknown as PredicateDefinition, issues: [] };
+  if (issues.length > 0) return withWarnings({ valid: false as const, predicate: null, issues }, warnings);
+  return withWarnings(
+    { valid: true as const, predicate: value as unknown as PredicateDefinition, issues: [] as [] },
+    warnings,
+  );
 }
 
-function validateQualifierDeclaration(
+/**
+ * Validate one qualifier declaration. Exported because label-registry field
+ * properties declare qualifiers in this same shape, and two validators for one
+ * shape is how the two drift.
+ */
+export function validatePredicateQualifierDeclaration(
   name: string,
   declaration: unknown,
   issues: PredicateIssue[],
+  warnings: PredicateIssue[] = issues,
 ): void {
   const base = `qualifiers.${name}`;
   if (!QUALIFIER_NAME_PATTERN.test(name)) {
@@ -279,7 +295,7 @@ function validateQualifierDeclaration(
 
   for (const key of Object.keys(declaration)) {
     if (!QUALIFIER_KEYS.includes(key)) {
-      issues.push(issue('PREDICATE_UNKNOWN_FIELD', `${base}.${key}`, `'${key}' is not part of a qualifier declaration`));
+      warnings.push(issue('PREDICATE_UNKNOWN_FIELD', `${base}.${key}`, `'${key}' is not part of a qualifier declaration`));
     }
   }
 
@@ -369,8 +385,8 @@ function validateQualifierDeclaration(
 }
 
 export type PredicateRegistryValidation =
-  | { valid: true; predicates: PredicateDefinition[]; issues: [] }
-  | { valid: false; predicates: null; issues: PredicateIssue[] };
+  | { valid: true; predicates: PredicateDefinition[]; issues: []; warnings?: PredicateIssue[] }
+  | { valid: false; predicates: null; issues: PredicateIssue[]; warnings?: PredicateIssue[] };
 
 /**
  * Validate a whole registry. Entry issues are prefixed with the index, and a
@@ -387,11 +403,18 @@ export function validatePredicateRegistry(value: unknown): PredicateRegistryVali
   }
 
   const issues: PredicateIssue[] = [];
+  const warnings: PredicateIssue[] = [];
   const predicates: PredicateDefinition[] = [];
   const seen = new Set<string>();
 
   value.forEach((entry, index) => {
     const result = validatePredicateDefinition(entry);
+    for (const entryWarning of result.warnings ?? []) {
+      warnings.push({
+        ...entryWarning,
+        path: entryWarning.path ? `[${index}].${entryWarning.path}` : `[${index}]`,
+      });
+    }
     if (!result.valid) {
       for (const entryIssue of result.issues) {
         issues.push({
@@ -411,8 +434,8 @@ export function validatePredicateRegistry(value: unknown): PredicateRegistryVali
     predicates.push(result.predicate);
   });
 
-  if (issues.length > 0) return { valid: false, predicates: null, issues };
-  return { valid: true, predicates, issues: [] };
+  if (issues.length > 0) return withWarnings({ valid: false as const, predicates: null, issues }, warnings);
+  return withWarnings({ valid: true as const, predicates, issues: [] as [] }, warnings);
 }
 
 // ---------------------------------------------------------------------------

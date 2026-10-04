@@ -8,9 +8,9 @@ import {
 import {
   canonicalizeForest,
   getDiffTransformers,
-  levenshteinDistance,
   type CanonicalTreeNode,
 } from './canonicalTree';
+import {levenshteinDistance} from './textDistance';
 import {diffTrees, type DiffOp} from './ThresholdedOrderPreservingTree';
 import {generateUnifiedDiff, parseUnifiedDiff} from './standardDiffFormat';
 

@@ -9,7 +9,7 @@
  * same call, and so a surface can exclude a field it renders itself (Tracker
  * Mode's detail pane keeps tags as an always-open row).
  */
-import type { FieldDefinition } from '@nimbalyst/tracker-schema';
+import type { FieldDefinition } from '../../../../../tracker-schema/src/browser';
 /**
  * True when one chip can carry this field's value. An array of objects (a
  * plan's `agentSessions`, say) has no readable one-line form -- it stringifies
@@ -31,7 +31,8 @@ export interface TrackerChipFieldSections {
 /**
  * @param trackerType Registered tracker type name.
  * @param exclude Field names the surface renders on its own, in neither section.
+ * @param labelFields Fields the item's labels bring (`useTrackerLabelFields`).
  */
-export declare function getTrackerChipFieldSections(trackerType: string, exclude?: readonly string[]): TrackerChipFieldSections;
+export declare function getTrackerChipFieldSections(trackerType: string, exclude?: readonly string[], labelFields?: readonly FieldDefinition[]): TrackerChipFieldSections;
 /** Memoized `getTrackerChipFieldSections` for component use. */
-export declare function useTrackerChipFieldSections(trackerType: string, exclude?: readonly string[]): TrackerChipFieldSections;
+export declare function useTrackerChipFieldSections(trackerType: string, exclude?: readonly string[], labelFields?: readonly FieldDefinition[]): TrackerChipFieldSections;

@@ -4,6 +4,8 @@
 import type { TrackerDataModel, TrackerSharing } from './TrackerDataModel.js';
 import type { DerivedTrackerTypeDeclaration } from './trackerTypeInheritance.js';
 import { type PredicateDefinition, type PredicateRegistryValidation } from './predicateRegistry.js';
+import type { LabelRegistry } from './labelRegistry.js';
+import { type LabelRegistryValidation } from './labelRegistryAuthoring.js';
 /** Normalize a parsed/JSON model without requiring a full YAML validation pass. */
 export declare function normalizeTrackerSharingModel<T extends TrackerDataModel>(model: T, fallbackSharing?: TrackerSharing): T;
 /**
@@ -50,3 +52,11 @@ export declare function validateTrackerYAML(yamlString: string): {
 export declare function parsePredicateRegistryYAML(yamlString: string): PredicateRegistryValidation;
 /** Serialize a registry to the `.nimbalyst/predicates.yaml` shape. */
 export declare function serializePredicateRegistryYAML(predicates: readonly PredicateDefinition[]): string;
+/**
+ * Parse the local copy of the label registry (`.nimbalyst/labels.yaml`). An
+ * empty file is an empty registry. Cross-registry checks are left to callers
+ * that hold the predicate registry.
+ */
+export declare function parseLabelRegistryYAML(yamlString: string): LabelRegistryValidation;
+/** Serialize a registry to the `.nimbalyst/labels.yaml` shape. */
+export declare function serializeLabelRegistryYAML(registry: LabelRegistry): string;

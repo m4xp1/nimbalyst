@@ -29,6 +29,8 @@ packages/android/
       sync/           # WebSocket sync manager and wire protocol
       transcript/     # WebView host and JS bridge
       ui/             # Compose screens and app shell
+        theme/        # NimbalystColors, typography, shapes (dark only)
+        components/   # Shared badges, buttons, connection indicator
     src/test/         # Unit tests
   src/transcript/     # Shared React transcript bundle entrypoint/assets
   scripts/            # Transcript asset sync helpers
@@ -54,6 +56,16 @@ packages/android/
 - Prefer repository/DAO changes over screen-local state duplication.
 - If you add persisted fields, update schema, migrations, and any seed/demo paths together.
 
+### Styling
+
+- The app is dark only, like iOS. Colors come from `ui/theme/NimbalystColors.kt`, which mirrors iOS `NimbalystColors.swift` and the runtime's `darkThemeColors`; keep them in sync. `MaterialTheme.colorScheme` is mapped onto the same palette, so prefer it over hard-coded hex values.
+- Reuse `ui/components` (`PhaseBadge`, `ProviderBadge`, `ContextUsageBadge`, `ContextUsageBar`, `ConnectionIndicator`, `NimbalystPrimaryButton`) instead of restyling per screen. `ModelLabel` mirrors iOS `ModelLabel.swift`; update both when model tables change.
+- User-facing copy goes in `res/values/strings.xml`. Refer to "the desktop app", never "your Mac".
+
+### Deep links
+
+- `nimbalyst://auth/callback` is the only external deep link. Pairing payloads are accepted only by the in-app QR scanner (or pasted in Settings), because they select the sync server and encryption context. `nimbalyst://session/<id>` arrives only through the push notification's explicit intent.
+
 ### Firebase / Notifications
 
 - `app/google-services.json` is local environment config. Do **not** commit it. The `google-services` Gradle plugin is applied conditionally (only when the file exists), so a build without it stays green and push stays inert.
@@ -65,7 +77,7 @@ packages/android/
 ### Prerequisites
 
 - Android Studio Ladybug / AGP-compatible version for this project
-- JDK 17 for Gradle builds. The project targets `JavaVersion.VERSION_17` and `jvmTarget = "17"`, and Temurin 17 matches CI. A non-17 JDK (e.g. GraalVM) can fail the AGP `jlink` step.
+- A JDK for Gradle builds. The project targets `JavaVersion.VERSION_17` and `jvmTarget = "17"`; CI uses Temurin 17, and OpenJDK 20 also works locally. GraalVM can fail the AGP `jlink` step.
 - Android SDK + emulator tooling
 - Node.js 20+ for transcript bundle builds
 
@@ -81,12 +93,12 @@ npm run android:assemble:release    # ./gradlew :app:assembleRelease
 npm run android:bundle:release      # ./gradlew :app:bundleRelease
 ```
 
-To invoke Gradle directly, point `JAVA_HOME` at a Temurin 17 install (no hard-coded user path):
+To invoke Gradle directly, point `JAVA_HOME` at a JDK 17+ install (no hard-coded user path):
 
 ```bash
 cd packages/android
-JAVA_HOME=/path/to/temurin-17 ./gradlew :app:assembleDebug
-JAVA_HOME=/path/to/temurin-17 ./gradlew :app:testDebugUnitTest
+JAVA_HOME=/path/to/jdk ./gradlew :app:assembleDebug
+JAVA_HOME=/path/to/jdk ./gradlew :app:testDebugUnitTest
 ```
 
 ### Play Store screenshots and video

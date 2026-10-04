@@ -22,13 +22,14 @@
  * **Stable codes.** Every failure carries a `PREDICATE_*` code and a property
  * path. A message is for a person; a code is what a caller may branch on.
  *
- * **Strict in both directions.** An unknown qualifier, an unknown property on a
- * predicate declaration, and an unknown qualifier type are all rejections. The
- * concrete failure a tolerant reader produces here: `operation` for
- * `operations` is dropped, the required qualifier reads as missing, and the
- * author is told to supply a qualifier they believe they just supplied. Worse,
- * with `required` absent it is accepted and the statement claims a precision
- * nobody wrote.
+ * **Strict on values, tolerant on declarations.** An unknown qualifier VALUE on
+ * a statement and an unknown qualifier type are rejections: `operation` for
+ * `operations` would otherwise be dropped, the required qualifier would read as
+ * missing, and the author would be told to supply a qualifier they believe they
+ * just supplied. An unknown KEY on a predicate or qualifier declaration is a
+ * warning instead: a later release adds keys (`range`, `options`) to this
+ * file, and a client that rejected them would drop the whole registry and
+ * every statement's contract with it. The key is kept, not stripped.
  *
  * **Every issue in one pass.** A form or an MCP caller fixes a value in one
  * round trip rather than one per property.
@@ -97,10 +98,12 @@ export type PredicateDefinitionValidation = {
     valid: true;
     predicate: PredicateDefinition;
     issues: [];
+    warnings?: PredicateIssue[];
 } | {
     valid: false;
     predicate: null;
     issues: PredicateIssue[];
+    warnings?: PredicateIssue[];
 };
 /**
  * Validate one predicate declaration. Returns the narrowed definition on
@@ -109,14 +112,22 @@ export type PredicateDefinitionValidation = {
  * contract nobody authored.
  */
 export declare function validatePredicateDefinition(value: unknown): PredicateDefinitionValidation;
+/**
+ * Validate one qualifier declaration. Exported because label-registry field
+ * properties declare qualifiers in this same shape, and two validators for one
+ * shape is how the two drift.
+ */
+export declare function validatePredicateQualifierDeclaration(name: string, declaration: unknown, issues: PredicateIssue[], warnings?: PredicateIssue[]): void;
 export type PredicateRegistryValidation = {
     valid: true;
     predicates: PredicateDefinition[];
     issues: [];
+    warnings?: PredicateIssue[];
 } | {
     valid: false;
     predicates: null;
     issues: PredicateIssue[];
+    warnings?: PredicateIssue[];
 };
 /**
  * Validate a whole registry. Entry issues are prefixed with the index, and a

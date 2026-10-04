@@ -6,6 +6,7 @@ import { WindowState, FileTreeItem } from '../types';
 import { WINDOW_CASCADE_OFFSET } from '../utils/constants';
 import { getTheme, saveWorkspaceWindowState, getWorkspaceNavigationHistory, saveWorkspaceNavigationHistory } from '../utils/store';
 import { stopFileWatcher } from '../file/FileWatcher';
+import { releaseWhenWorkspaceUnused } from '../file/GitWatcherLifecycle';
 import { stopWorkspaceWatcher, startWorkspaceWatcher } from '../file/WorkspaceWatcher.ts';
 import { getFolderContents } from '../utils/FileTree';
 import { getBackgroundColor, getTitleBarColors } from '../theme/ThemeManager';
@@ -14,9 +15,10 @@ import { ElectronFileSystemService } from '../services/ElectronFileSystemService
 import { isWorktreePath, resolveProjectPath, resolveProjectPathCandidates } from '../utils/workspaceDetection';
 import { getPreloadPath } from '../utils/appPaths';
 import { createUnresponsiveHandler } from './unresponsiveHandler';
+import { recoverAfterProjectWindowClosed } from './ApplicationWindowRecovery';
 import {
   setFileSystemService,
-  clearFileSystemService,
+  clearFileSystemServiceFor,
   setFileSystemServiceFor,
 } from '@nimbalyst/runtime';
 import { navigationHistoryService } from '../services/NavigationHistoryService';
@@ -30,7 +32,7 @@ import { getMcpConfigService } from '../mcpConfigServiceRef';
 import { addNimAssetRoot } from '../protocols/nimAssetProtocol';
 import { addNimPreviewWorkspaceRoot } from '../protocols/nimPreviewProtocol';
 import { scheduleAttachmentStagingCleanup } from '../services/attachments/attachmentStagingCleanup';
-import { windows, windowStates, anyWindowReferencesWorkspace, resolveDocumentServicePath, getWindowIdForWindow } from './windowState';
+import { windows, windowStates, resolveDocumentServicePath, getWindowIdForWindow } from './windowState';
 import {
     matchWorkspaceWindow,
     type WorkspaceWindowCandidate,
@@ -290,6 +292,7 @@ export function createWindow(
 
         // Generate a unique window ID
         const windowId = ++windowIdCounter;
+        const electronWindowId = window.id;
         // console.log('[MAIN] Created window with ID:', windowId, 'Electron ID:', window.id);
 
         // Store window and initial state
@@ -405,6 +408,11 @@ export function createWindow(
             // Save workspace-specific window state before closing
             const state = windowStates.get(windowId);
             savedState = state; // Preserve for 'closed' handler
+            console.info('[WindowLifecycle] Project close requested', {
+                windowId: electronWindowId, managedWindowId: windowId, isQuitting,
+                prevented: event.defaultPrevented, focused: window.isFocused(),
+                visible: window.isVisible(), minimized: window.isMinimized(),
+            });
 
             if (state?.mode === 'workspace' && state.workspacePath) {
                 const bounds = window.getBounds();
@@ -453,6 +461,12 @@ export function createWindow(
 
         window.on('closed', () => {
             windows.delete(windowId);
+            console.info('[WindowLifecycle] Project closed', {
+                windowId: electronWindowId, managedWindowId: windowId, isQuitting,
+                remainingProjectWindows: windows.size,
+                remainingBrowserWindows: BrowserWindow.getAllWindows().length,
+            });
+            recoverAfterProjectWindowClosed();
             // Use saved state from 'close' handler
             const state = savedState;
             savingWindows.delete(windowId);
@@ -474,7 +488,7 @@ export function createWindow(
             // Clean up document/file-system services for any workspace this
             // window referenced (its primary path AND any rail-warm
             // additional paths). A path is freed only when no other window
-            // still references it — covers both window-per-project overlap
+            // still references it and no agent turn is unfinished — covers window-per-project overlap
             // and the multi-project rail.
             if (state?.mode === 'workspace') {
                 const referencedPaths = new Set<string>();
@@ -482,30 +496,30 @@ export function createWindow(
                 state.additionalWorkspacePaths?.forEach((p) => referencedPaths.add(p));
 
                 for (const path of referencedPaths) {
-                    if (anyWindowReferencesWorkspace(path)) continue;
-
-                    const docService = documentServices.get(path);
-                    if (docService) {
-                        docService.destroy();
-                        documentServices.delete(path);
-                        console.log('[MAIN] Destroyed DocumentService for workspace:', path);
-                    }
-                    const fileSystemService = fileSystemServices.get(path);
-                    if (fileSystemService) {
-                        fileSystemService.destroy();
-                        fileSystemServices.delete(path);
-                        clearFileSystemService();
-                        console.log('[MAIN] Destroyed FileSystemService for workspace:', path);
-                    }
-                    try {
-                        const mcpService = getMcpConfigService();
-                        if (mcpService) {
-                            mcpService.stopWatchingWorkspaceConfig(path);
-                            console.log('[MAIN] Stopped watching MCP config for workspace:', path);
+                    releaseWhenWorkspaceUnused(path, () => {
+                        const docService = documentServices.get(path);
+                        if (docService) {
+                            docService.destroy();
+                            documentServices.delete(path);
+                            console.log('[MAIN] Destroyed DocumentService for workspace:', path);
                         }
-                    } catch (error) {
-                        console.error('[MAIN] Error stopping MCP config watcher:', error);
-                    }
+                        const fileSystemService = fileSystemServices.get(path);
+                        if (fileSystemService) {
+                            fileSystemService.destroy();
+                            fileSystemServices.delete(path);
+                            clearFileSystemServiceFor(path);
+                            console.log('[MAIN] Destroyed FileSystemService for workspace:', path);
+                        }
+                        try {
+                            const mcpService = getMcpConfigService();
+                            if (mcpService) {
+                                mcpService.stopWatchingWorkspaceConfig(path);
+                                console.log('[MAIN] Stopped watching MCP config for workspace:', path);
+                            }
+                        } catch (error) {
+                            console.error('[MAIN] Error stopping MCP config watcher:', error);
+                        }
+                    });
                 }
             }
 

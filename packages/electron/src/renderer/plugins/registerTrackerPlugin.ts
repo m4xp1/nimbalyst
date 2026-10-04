@@ -21,6 +21,7 @@ import type { ComponentType } from 'react';
 import * as path from 'path';
 import { getDocumentService } from '../services/RendererDocumentService';
 import { applySchemasToRegistry } from './trackerSchemaRegistryUtils';
+import { applySchemasKeepingVocabulary, loadTrackerVocabulary } from '../components/TrackerMode/trackerVocabularyLoader';
 
 const SOURCE = 'tracker';
 
@@ -36,8 +37,9 @@ export async function registerTrackerPlugin(workspacePath?: string | null): Prom
     try {
       const schemas = await api.trackerSchema.getAll();
       applySchemasToRegistry(schemas ?? []);
+      void loadTrackerVocabulary(workspacePath);
       api.trackerSchema.onChanged?.((updatedSchemas) => {
-        applySchemasToRegistry(updatedSchemas ?? []);
+        void applySchemasKeepingVocabulary(updatedSchemas ?? [], applySchemasToRegistry, workspacePath);
       });
     } catch {
       loadBuiltinTrackers();

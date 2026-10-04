@@ -1,0 +1,154 @@
+package com.nimbalyst.app.documents
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.view.ViewGroup
+import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import com.google.gson.Gson
+import com.nimbalyst.app.transcript.TranscriptExternalLinks
+import java.net.URI
+
+/** Messages the editor bundle posts through `window.AndroidEditorBridge.postMessage(json)`. */
+sealed interface EditorBridgeMessage {
+    data object EditorReady : EditorBridgeMessage
+    data class ContentChanged(val content: String) : EditorBridgeMessage
+    data class Dirty(val isDirty: Boolean) : EditorBridgeMessage
+    data class Error(val message: String) : EditorBridgeMessage
+
+    companion object {
+        private const val BENIGN_RESIZE_OBSERVER = "ResizeObserver loop completed with undelivered notifications."
+
+        fun parse(payload: String): EditorBridgeMessage? {
+            val json = runCatching { parseObject(payload) }.getOrNull() ?: return null
+            return when (json.optString("type")) {
+                "editorReady" -> EditorReady
+                "contentChanged" -> json.optString("content")?.let(::ContentChanged)
+                "dirty" -> runCatching { Dirty(json.requireBoolean("isDirty")) }.getOrNull()
+                "error" -> {
+                    val message = json.optString("message") ?: "Unknown editor error"
+                    if (BENIGN_RESIZE_OBSERVER in message) null else Error(message)
+                }
+                else -> null
+            }
+        }
+    }
+}
+
+enum class EditorLinkAction { ALLOW_IN_WEBVIEW, OPEN_EXTERNALLY, BLOCK }
+
+/** Navigation policy: the WebView may only show the bundled editor; web and mail links leave the app. */
+object DocumentEditorLinks {
+    const val EDITOR_ASSET_DIR = "/android_asset/editor-dist/"
+    const val EDITOR_URL = "file:///android_asset/editor-dist/editor.html"
+
+    fun classify(url: String?): EditorLinkAction {
+        val scheme = url?.substringBefore(':', missingDelimiterValue = "")?.lowercase()
+        return when (scheme) {
+            "file" -> if (isBundledEditorUrl(url)) EditorLinkAction.ALLOW_IN_WEBVIEW else EditorLinkAction.BLOCK
+            "http", "https", "mailto" -> EditorLinkAction.OPEN_EXTERNALLY
+            else -> EditorLinkAction.BLOCK
+        }
+    }
+
+    /** Same rules as the transcript: no host, no percent-encoding, no backslashes, no dot segments. */
+    private fun isBundledEditorUrl(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        if (!uri.rawAuthority.isNullOrEmpty()) return false
+        val rawPath = uri.rawPath ?: return false
+        if ('%' in rawPath || '\\' in rawPath) return false
+        if (!rawPath.startsWith(EDITOR_ASSET_DIR)) return false
+        return rawPath.removePrefix(EDITOR_ASSET_DIR).split('/').none { it == "." || it == ".." }
+    }
+}
+
+/** JavaScript for the `window.nimbalystEditor` bridge. Strings are JSON-encoded, never spliced. */
+object EditorCommands {
+    private val gson = Gson()
+
+    fun loadMarkdown(markdown: String) = "window.nimbalystEditor && window.nimbalystEditor.loadMarkdown(${gson.toJson(markdown)})"
+    fun setReadOnly(readOnly: Boolean) = "window.nimbalystEditor && window.nimbalystEditor.setReadOnly($readOnly)"
+    fun formatText(format: EditorFormat) = "window.nimbalystEditor && window.nimbalystEditor.formatText(${gson.toJson(format.command)})"
+    const val GET_CONTENT = "window.nimbalystEditor ? window.nimbalystEditor.getContent() : null"
+
+    /** `evaluateJavascript` hands back the result JSON-encoded; null when the editor is not mounted. */
+    fun decodeContent(result: String?): String? =
+        result?.takeIf { it != "null" }?.let { runCatching { gson.fromJson(it, String::class.java) }.getOrNull() }
+}
+
+enum class EditorFormat(val command: String) {
+    BOLD("bold"),
+    ITALIC("italic"),
+    CODE("code"),
+    STRIKETHROUGH("strikethrough"),
+}
+
+/** The `@JavascriptInterface` object; decodes off the JS thread and delivers on the main thread. */
+class EditorBridgeRelay {
+    @Volatile
+    var handler: ((EditorBridgeMessage) -> Unit)? = null
+    private val main = Handler(Looper.getMainLooper())
+
+    @JavascriptInterface
+    fun postMessage(payload: String) {
+        val message = EditorBridgeMessage.parse(payload) ?: return
+        main.post { handler?.invoke(message) }
+    }
+}
+
+/**
+ * A WebView locked to the bundled editor, with the transcript's restrictions:
+ * no file or content access beyond the APK assets, no navigation off
+ * `editor-dist/`, external links in a Custom Tab. [onFailure] reports a load
+ * error or a renderer death (returning true keeps the app alive).
+ */
+@SuppressLint("SetJavaScriptEnabled")
+internal fun createDocumentEditorWebView(
+    context: Context,
+    relay: EditorBridgeRelay,
+    onFailure: (String) -> Unit,
+): WebView = WebView(context).apply {
+    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    setBackgroundColor(android.graphics.Color.rgb(0x1A, 0x1A, 0x1A))
+    webChromeClient = WebChromeClient()
+    webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val url = request.url?.toString()
+            return when (DocumentEditorLinks.classify(url)) {
+                EditorLinkAction.ALLOW_IN_WEBVIEW -> false
+                EditorLinkAction.BLOCK -> true
+                EditorLinkAction.OPEN_EXTERNALLY -> {
+                    if (url != null) TranscriptExternalLinks.open(view.context, url)
+                    true
+                }
+            }
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+            if (request.isForMainFrame) onFailure("Failed to load editor: ${error.description}")
+        }
+
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            onFailure("The editor stopped unexpectedly. Close and reopen the file.")
+            return true
+        }
+    }
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.allowFileAccess = false
+    settings.allowFileAccessFromFileURLs = false
+    settings.allowUniversalAccessFromFileURLs = false
+    settings.allowContentAccess = false
+    settings.cacheMode = WebSettings.LOAD_DEFAULT
+    // Registered before loadUrl so the bridge exists when the bundle first runs.
+    addJavascriptInterface(relay, "AndroidEditorBridge")
+    loadUrl(DocumentEditorLinks.EDITOR_URL)
+}

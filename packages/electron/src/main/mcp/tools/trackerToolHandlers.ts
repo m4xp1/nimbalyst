@@ -891,7 +891,17 @@ export const trackerToolSchemas = [
           type: "array",
           items: { type: "object" },
           description:
-            "Replace the project's PREDICATE REGISTRY: the declared vocabulary of relationship verbs that a field can bind to with `predicate: <id>`. Each entry is {id, label, inverseLabel?, subjectKinds: [type|'*'], valueShape: entity|text|boolean-assessment|quantity|select, direction: directed|symmetric, transitive?, qualifiers?}. A qualifier is {type: string|number|boolean|date|select|relationship|array, required?, itemType?, options?, targetTrackerTypes?} and its values ride on each relationship value under `qualifiers`. Replaces the whole registry, so omitting a predicate removes it; removals, narrowing `subjectKinds`, and making a qualifier required are destructive and need `confirmDestructive`. May be sent alone or alongside `schema`/`patch`, in which case the predicates are applied first. Persisted to .nimbalyst/predicates.yaml.",
+            "Merge entries into the project's PREDICATE REGISTRY (claim-stored vocabulary: the verbs a claim or a `predicate: <id>` field uses). Each entry is {id, label, inverseLabel?, subjectKinds: [type|'*'], valueShape: entity|text|boolean-assessment|quantity|select, direction: directed|symmetric, transitive?, qualifiers?}. A qualifier is {type: string|number|boolean|date|select|relationship|array, required?, itemType?, options?, targetTrackerTypes?} and its values ride on each relationship value under `qualifiers`. MERGES BY ID: an entry replaces the predicate with the same id or is added; predicates you omit are kept. To delete, list ids in `removePredicates`. Removals, narrowing `subjectKinds`, and making a qualifier required are destructive and need `confirmDestructive`. May be sent alone or alongside `labels`/`schema`/`patch`; predicates are applied first. Persisted to .nimbalyst/predicates.yaml.",
+        },
+        removePredicates: {
+          type: "array",
+          items: { type: "string" },
+          description: "Predicate ids to delete from the registry. Destructive: requires `confirmDestructive`.",
+        },
+        labels: {
+          type: "object",
+          description:
+            "Merge into the project's LABEL REGISTRY (.nimbalyst/labels.yaml). A label is a tag that carries fields; a page may carry several and a label may have several broader labels. Shape: {labels?: [{id, label, pluralLabel?, description?, broader?: [labelId], icon?, color?, role?: page|structure|market-node, properties?: [propertyId|predicateId], expects?: [{property, min?, max?}], factBox?: [propertyId], template?}], properties?: [{id, label, type: string|text|number|date|datetime|select|multiselect|boolean|url|user|relationship|array, options?, qualifiers?, facet?, description?, range?: [labelId], multiValue?}], claimProperties?: {<predicateId>: {range?: [labelId], options?, facet?, description?}}, remove?: {labels?: [id], properties?: [id], claimProperties?: [id]}}. `properties` are FIELD-stored (current value in the item's customFields; stored as {value, qualifiers} when qualifiers are declared); claim-stored vocabulary stays in `predicates`. Properties and predicates share one id namespace. MERGES BY ID: each entry replaces the entry with the same id or is added; entries you omit are kept, so concurrent additions commute. Removing a label or property, removing a property from a label, removing a broader link, retyping a property, or removing an option is destructive and needs `confirmDestructive`. Applied after `predicates`.",
         },
         fileName: {
           type: "string",

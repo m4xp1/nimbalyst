@@ -75,6 +75,7 @@ import {
   decodeTrackerSavedViewEnvelopePlaintext,
 } from './trackerEnvelopeCodec.js';
 import { classifyTrackerClose, type TrackerAccessTermination } from './trackerAccessTermination.js';
+import { TrackerSchemaOutbox } from './trackerSchemaOutbox.js';
 import {
   planTrackerIdentityRecovery,
   type StrandedIdentityFacts,
@@ -421,6 +422,16 @@ export class TrackerSyncEngine {
    */
   private readonly pendingLaneIds = new Map<string, string>();
 
+  private schemaApplyChain: Promise<unknown> = Promise.resolve();
+
+  private readonly schemaOutbox = new TrackerSchemaOutbox({
+    hooks: () => this.config.schemaSync,
+    isOpen: () => this.ws?.readyState === WebSocket.OPEN,
+    send: (message) => this.send(message),
+    newMutationId: generateClientMutationId,
+    pendingLaneIds: this.pendingLaneIds,
+  });
+
   private readonly rollbackSnapshots = new Map<string, {
     itemId: string;
     snapshot: TrackerRowSnapshot;
@@ -590,6 +601,7 @@ export class TrackerSyncEngine {
     }
     this.connecting = false;
     this.synced = false;
+    this.schemaOutbox.reset();
     if (this.presence.size > 0) {
       this.presence.clear();
       this.notifyPresenceChange();
@@ -627,6 +639,11 @@ export class TrackerSyncEngine {
   /** Flush locally-pending tracker navigation entries while connected. */
   async flushNavigation(): Promise<void> {
     await this.pushPendingNavigation();
+  }
+
+  /** Push a schema saved mid-session; before bootstrap finishes, bootstrap pushes it (NIM-6654). */
+  async flushSchemas(): Promise<void> {
+    if (this.synced) await this.schemaOutbox.push();
   }
 
   // --------------------------------------------------------------------------
@@ -802,7 +819,7 @@ export class TrackerSyncEngine {
 
       // After bootstrap, replay any persisted-but-unconfirmed mutations.
       await this.replayPending();
-      await this.pushPendingSchemas();
+      await this.schemaOutbox.push();
       await this.pushPendingNavigation();
       await this.pushPendingSavedViews();
     } catch (err) {
@@ -1305,7 +1322,9 @@ export class TrackerSyncEngine {
         `${msg.schema ? ` type=${msg.schema.schemaType} sync_id=${msg.schema.syncId}` : ''}` +
         `${msg.error ? ` error=${msg.error.code}` : ''}`,
     );
+    this.schemaOutbox.settle(msg.clientMutationId);
     if (msg.accepted && msg.schema) {
+      this.pendingLaneIds.delete(msg.clientMutationId);
       await this.applySchemaEnvelope(msg.schema);
       return;
     }
@@ -1519,7 +1538,18 @@ export class TrackerSyncEngine {
     return true;
   }
 
-  private async applySchemaEnvelope(envelope: TrackerSchemaEnvelope): Promise<boolean> {
+  /**
+   * Socket messages are dispatched without awaiting each other, and a host's
+   * `applyRemote` awaits file writes. Unserialized, an older delivery can finish
+   * after a newer one and leave the older content and syncId in place.
+   */
+  private applySchemaEnvelope(envelope: TrackerSchemaEnvelope): Promise<boolean> {
+    const run = this.schemaApplyChain.then(() => this.applySchemaEnvelopeNow(envelope));
+    this.schemaApplyChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async applySchemaEnvelopeNow(envelope: TrackerSchemaEnvelope): Promise<boolean> {
     const hooks = this.config.schemaSync;
     if (!hooks) return true;
 
@@ -1692,41 +1722,6 @@ export class TrackerSyncEngine {
         ...(row.payload?.issueKey !== undefined ? { issueKey: row.payload.issueKey } : {}),
       })),
     });
-  }
-
-  private async pushPendingSchemas(): Promise<void> {
-    const hooks = this.config.schemaSync;
-    if (!hooks) return;
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-
-    const pending = await hooks.listUnsynced();
-    if (pending.length > 0) {
-      console.info(`[TrackerSchemaSync] pushing ${pending.length} unsynced schema mutation(s)`);
-    }
-    for (const def of pending) {
-      const clientMutationId = generateClientMutationId();
-      this.pendingLaneIds.set(clientMutationId, def.type);
-      if (def.deleted || def.model === null) {
-        console.info(`[TrackerSchemaSync] -> mutation (delete) type=${def.type} cmid=${clientMutationId}`);
-        this.send({
-          type: 'trackerSchemaMutation',
-          clientMutationId,
-          schemaType: def.type,
-          encryptedPayload: null,
-        });
-        continue;
-      }
-
-      // The model JSON travels as plaintext; the server encrypts it at rest
-      // with the team DEK.
-      console.info(`[TrackerSchemaSync] -> mutation (upsert) type=${def.type} cmid=${clientMutationId}`);
-      this.send({
-        type: 'trackerSchemaMutation',
-        clientMutationId,
-        schemaType: def.type,
-        encryptedPayload: def.model,
-      });
-    }
   }
 
   private async pushPendingSavedViews(): Promise<void> {

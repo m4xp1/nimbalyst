@@ -6,6 +6,7 @@ import type { RawMessage } from '@nimbalyst/runtime/ai/server/transcript/Transcr
 import type { ChatAttachment, SessionData } from '@nimbalyst/runtime/ai/server/types';
 import type { SessionMeta } from '@nimbalyst/runtime/ai/adapters/sessionStore';
 import type { DeviceInfo, SyncProvider } from '@nimbalyst/runtime/sync/types';
+import { isSessionConnectionRefused } from '@nimbalyst/runtime/sync/SyncedSessionStore';
 
 type IndexEntry = NonNullable<Awaited<ReturnType<NonNullable<SyncProvider['fetchIndex']>>>>['sessions'][number];
 import type { RemoteSessionSnapshot } from '../../../shared/remoteSessions';
@@ -278,7 +279,8 @@ export class RemoteSessionMirror {
     if (attachments.length && (!this.encryptionKey || !this.deps.encryptAttachments)) throw new Error("Attachment encryption is not ready. Keep the draft and retry.");
     // Empty session rooms can expire while a draft is open. Queue delivery uses
     // the index connection; reattach the existing observer before starting work.
-    if (this.observations.has(id) && !provider.getStatus(id).connected) await provider.connect(id);
+    // With every room socket busy the observer stays detached, but the prompt can still go out.
+    if (this.observations.has(id) && !provider.getStatus(id).connected) await provider.connect(id).catch(error => { if (!isSessionConnectionRefused(error)) throw error; });
     if (provider !== this.provider) throw new Error('Session sync changed. Keep the draft and retry.');
     const preparedPrompt = this.deps.preparePrompt ? await this.deps.preparePrompt(prompt, workspace) : prompt;
     const encrypted = attachments.length ? await this.deps.encryptAttachments!(attachments, workspace, this.encryptionKey!) : [];

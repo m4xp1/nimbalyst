@@ -1,5 +1,5 @@
+import javax.inject.Inject
 import org.gradle.api.GradleException
-import org.gradle.api.tasks.Sync
 
 plugins {
     id("com.android.application")
@@ -87,10 +87,6 @@ android {
         compose = true
     }
 
-    sourceSets {
-        getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/transcript-assets"))
-    }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -132,22 +128,22 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.webkit:webkit:1.12.1")
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.room:room-runtime:2.7.2")
+    implementation("androidx.room:room-ktx:2.7.2")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.posthog:posthog-android:3.8.2")
-    ksp("androidx.room:room-compiler:2.6.1")
+    ksp("androidx.room:room-compiler:2.7.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
-    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("androidx.room:room-testing:2.7.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
@@ -158,23 +154,58 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-val transcriptDistDir = layout.projectDirectory.dir("../dist-transcript")
-val generatedTranscriptAssetsDir = layout.buildDirectory.dir("generated/transcript-assets/transcript-dist")
+// Copies a prebuilt web bundle (dist-transcript/, dist-editor/) into a
+// generated asset root under `<bundleName>/`, so the WebViews load it from
+// file:///android_asset/<bundleName>/. Registered per variant through the
+// Variant API; AGP 9 rejects Provider-backed sourceSets.assets.srcDir entries.
+abstract class SyncWebBundleTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val bundleDir: DirectoryProperty
 
-val syncTranscriptAssets by tasks.registering(Sync::class) {
-    from(transcriptDistDir)
-    into(generatedTranscriptAssetsDir)
+    @get:Input
+    abstract val bundleName: Property<String>
 
-    doFirst {
-        if (!transcriptDistDir.asFile.exists()) {
+    @get:Input
+    abstract val buildCommand: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val fs: FileSystemOperations
+
+    @TaskAction
+    fun sync() {
+        val source = bundleDir.get().asFile
+        if (!source.exists()) {
             throw GradleException(
-                "Transcript bundle not found at ${transcriptDistDir.asFile}. " +
-                    "Run `npm run build:transcript --prefix packages/android` first."
+                "Web bundle not found at $source. Run `${buildCommand.get()}` first."
             )
+        }
+        fs.sync {
+            from(source)
+            into(outputDir.dir(bundleName))
         }
     }
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(syncTranscriptAssets)
+androidComponents {
+    onVariants { variant ->
+        val suffix = variant.name.replaceFirstChar { it.uppercase() }
+        val syncTranscriptAssets = tasks.register<SyncWebBundleTask>("sync${suffix}TranscriptAssets") {
+            bundleDir.set(layout.projectDirectory.dir("../dist-transcript"))
+            bundleName.set("transcript-dist")
+            buildCommand.set("npm run build:transcript --prefix packages/android")
+        }
+        val syncEditorAssets = tasks.register<SyncWebBundleTask>("sync${suffix}EditorAssets") {
+            bundleDir.set(layout.projectDirectory.dir("../dist-editor"))
+            bundleName.set("editor-dist")
+            buildCommand.set("npm run build:editor --prefix packages/android")
+        }
+        variant.sources.assets?.let { assets ->
+            assets.addGeneratedSourceDirectory(syncTranscriptAssets, SyncWebBundleTask::outputDir)
+            assets.addGeneratedSourceDirectory(syncEditorAssets, SyncWebBundleTask::outputDir)
+        }
+    }
 }

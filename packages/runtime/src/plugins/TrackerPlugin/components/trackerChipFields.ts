@@ -49,17 +49,19 @@ export interface TrackerChipFieldSections {
 /**
  * @param trackerType Registered tracker type name.
  * @param exclude Field names the surface renders on its own, in neither section.
+ * @param labelFields Fields the item's labels bring (`useTrackerLabelFields`).
  */
 export function getTrackerChipFieldSections(
   trackerType: string,
   exclude: readonly string[] = [],
+  labelFields: readonly FieldDefinition[] = [],
 ): TrackerChipFieldSections {
   const excluded = new Set(exclude);
-  const chipFields = getTrackerFieldLayout(trackerType).filter(
+  const chipFields = getTrackerFieldLayout(trackerType, labelFields).filter(
     (field) => !excluded.has(field.name) && isChipRenderableField(field),
   );
   const chipNames = new Set(chipFields.map((field) => field.name));
-  const overflowFields = (globalRegistry.get(trackerType)?.fields ?? []).filter(
+  const overflowFields = [...(globalRegistry.get(trackerType)?.fields ?? []), ...labelFields].filter(
     (field) => !CHROME_FIELDS.has(field.name)
       && !excluded.has(field.name)
       && !chipNames.has(field.name),
@@ -71,10 +73,13 @@ export function getTrackerChipFieldSections(
 export function useTrackerChipFieldSections(
   trackerType: string,
   exclude: readonly string[] = [],
+  labelFields: readonly FieldDefinition[] = NO_FIELDS,
 ): TrackerChipFieldSections {
   const excludeKey = exclude.join('\u0000');
   return useMemo(
-    () => getTrackerChipFieldSections(trackerType, excludeKey ? excludeKey.split('\u0000') : []),
-    [trackerType, excludeKey],
+    () => getTrackerChipFieldSections(trackerType, excludeKey ? excludeKey.split('\u0000') : [], labelFields),
+    [trackerType, excludeKey, labelFields],
   );
 }
+
+const NO_FIELDS: readonly FieldDefinition[] = [];

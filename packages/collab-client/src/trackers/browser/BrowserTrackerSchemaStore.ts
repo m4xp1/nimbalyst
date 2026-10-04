@@ -44,9 +44,16 @@ import {
   isTrackerNavigationEntry,
   type TrackerNavigationEntry,
 } from '@nimbalyst/runtime/sync/trackerNavigation';
-import { globalRegistry, type TrackerDataModel } from '@nimbalyst/tracker-schema';
+import {
+  emptyLabelRegistry,
+  globalRegistry,
+  type LabelRegistry,
+  type PredicateDefinition,
+  type TrackerDataModel,
+} from '@nimbalyst/tracker-schema';
 import {
   decodeTrackerSchemaPayload,
+  TRACKER_LABEL_REGISTRY_SCHEMA_TYPE,
   TRACKER_PREDICATE_REGISTRY_SCHEMA_TYPE,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/schemaSyncPayload';
 import { resolveTrackerSchemaPatch } from '@nimbalyst/tracker-schema';
@@ -70,9 +77,22 @@ export interface BrowserTrackerSchemaState {
   trackerTypes: TrackerDataModel[];
   /** The team's synced sidebar tree, sorted the way every host sorts it. */
   navigationEntries: TrackerNavigationEntry[];
+  /**
+   * The room's predicate registry: labels, inverse labels and qualifier
+   * definitions for knowledge-graph statements. Empty until the room publishes
+   * one; an unreadable publish leaves the previous registry in place.
+   */
+  predicates: PredicateDefinition[];
+  /** The room's label registry (labels.yaml), same rules as `predicates`. */
+  labels: LabelRegistry;
 }
 
-const EMPTY_STATE: BrowserTrackerSchemaState = { trackerTypes: [], navigationEntries: [] };
+const EMPTY_STATE: BrowserTrackerSchemaState = {
+  trackerTypes: [],
+  navigationEntries: [],
+  predicates: [],
+  labels: emptyLabelRegistry(),
+};
 
 /** A type this host has no lane for: personal items never reach a team room. */
 export function isPersonalTrackerModel(model: TrackerDataModel): boolean {
@@ -101,7 +121,7 @@ export function resolveBrowserTrackerSchema(
   if (decoded.kind === 'model') return normalizeTrackerSharingModel(decoded.model, 'team');
   // A predicate registry is not a tracker type. It arrives under its own
   // reserved schema type and is handled by `applyRemote` before this is called.
-  if (decoded.kind === 'predicates') return null;
+  if (decoded.kind === 'predicates' || decoded.kind === 'labels') return null;
   const seed = builtinSeed(type);
   if (!seed) return null;
   try {
@@ -115,6 +135,8 @@ export class BrowserTrackerSchemaStore {
   private readonly builtins = new Map<string, TrackerDataModel>();
   private readonly models = new Map<string, TrackerDataModel>();
   private readonly navigation = new Map<string, TrackerNavigationEntry>();
+  private predicates: PredicateDefinition[] = [];
+  private labels: LabelRegistry = emptyLabelRegistry();
   private readonly listeners = new Set<(state: BrowserTrackerSchemaState) => void>();
   private state: BrowserTrackerSchemaState = EMPTY_STATE;
   private disposed = false;
@@ -149,16 +171,25 @@ export class BrowserTrackerSchemaStore {
       // `TrackerDataModelRegistry.validate` is the same validator on both
       // hosts, and it needs the same registry in front of it.
       if (type === TRACKER_PREDICATE_REGISTRY_SCHEMA_TYPE) {
-        if (model === null) {
-          globalRegistry.setPredicates([]);
-          return;
-        }
-        const decoded = decodeTrackerSchemaPayload(type, model);
-        if (decoded?.kind !== 'predicates') {
+        const decoded = model === null ? null : decodeTrackerSchemaPayload(type, model);
+        if (model !== null && decoded?.kind !== 'predicates') {
           this.reportError?.(new Error('Unreadable predicate registry'), 'tracker schema');
           return;
         }
-        globalRegistry.setPredicates(decoded.predicates);
+        this.predicates = decoded?.kind === 'predicates' ? decoded.predicates : [];
+        globalRegistry.setPredicates(this.predicates);
+        this.emit();
+        return;
+      }
+      if (type === TRACKER_LABEL_REGISTRY_SCHEMA_TYPE) {
+        const decoded = model === null ? null : decodeTrackerSchemaPayload(type, model);
+        if (model !== null && decoded?.kind !== 'labels') {
+          this.reportError?.(new Error('Unreadable label registry'), 'tracker schema');
+          return;
+        }
+        this.labels = decoded?.kind === 'labels' ? decoded.registry : emptyLabelRegistry();
+        globalRegistry.setLabels(this.labels);
+        this.emit();
         return;
       }
       if (model === null) {
@@ -240,6 +271,8 @@ export class BrowserTrackerSchemaStore {
     return {
       trackerTypes: [...this.models.values()].sort((left, right) => left.type.localeCompare(right.type)),
       navigationEntries: [...this.navigation.values()].sort(compareTrackerNavigationEntries),
+      predicates: this.predicates,
+      labels: this.labels,
     };
   }
 

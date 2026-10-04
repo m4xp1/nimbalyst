@@ -7,6 +7,8 @@ import type { TrackerDataModel, FieldDefinition, FieldOption, TrackerSharing, Tr
 import { isStatusCategory } from './trackerStatusCategory.js';
 import type { DerivedTrackerTypeDeclaration } from './trackerTypeInheritance.js';
 import { validatePredicateRegistry, type PredicateDefinition, type PredicateRegistryValidation } from './predicateRegistry.js';
+import type { LabelRegistry } from './labelRegistry.js';
+import { validateLabelRegistry, type LabelRegistryValidation } from './labelRegistryAuthoring.js';
 
 type LegacyTrackerSharing = 'local' | 'shared' | 'hybrid';
 
@@ -361,4 +363,43 @@ export function parsePredicateRegistryYAML(yamlString: string): PredicateRegistr
 /** Serialize a registry to the `.nimbalyst/predicates.yaml` shape. */
 export function serializePredicateRegistryYAML(predicates: readonly PredicateDefinition[]): string {
   return yaml.dump({ predicates }, { indent: 2, lineWidth: 120, noRefs: true });
+}
+
+// ---------------------------------------------------------------------------
+// Label registry (labelRegistry.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the local copy of the label registry (`.nimbalyst/labels.yaml`). An
+ * empty file is an empty registry. Cross-registry checks are left to callers
+ * that hold the predicate registry.
+ */
+export function parseLabelRegistryYAML(yamlString: string): LabelRegistryValidation {
+  let data: unknown;
+  try {
+    data = yaml.load(yamlString);
+  } catch (error) {
+    return {
+      valid: false,
+      registry: null,
+      issues: [{
+        code: 'LABEL_REGISTRY_NOT_AN_OBJECT',
+        path: '',
+        message: error instanceof Error ? error.message : 'Unparseable YAML',
+      }],
+      warnings: [],
+    };
+  }
+  if (data === null || data === undefined || data === '') {
+    return { valid: true, registry: { labels: [], properties: [], claimProperties: {} }, issues: [], warnings: [] };
+  }
+  return validateLabelRegistry(data);
+}
+
+/** Serialize a registry to the `.nimbalyst/labels.yaml` shape. */
+export function serializeLabelRegistryYAML(registry: LabelRegistry): string {
+  return yaml.dump(
+    { labels: registry.labels, properties: registry.properties, claimProperties: registry.claimProperties },
+    { indent: 2, lineWidth: 120, noRefs: true },
+  );
 }

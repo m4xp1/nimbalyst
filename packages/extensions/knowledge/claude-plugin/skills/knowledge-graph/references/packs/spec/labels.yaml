@@ -1,0 +1,226 @@
+# Knowledge graph label pack: spec (opt-in).
+#
+# For a graph that is the project's specification: the subsystems, features,
+# surfaces, requirements and invariants that someone would need to rebuild the
+# project, each pointed at the real sources behind it -- the files that
+# implement it, the decisions that govern it, and the sessions where it was
+# worked out. Needs the core pack. Its predicates are in `predicates.yaml` next
+# to this file; it also uses the core pack's `depends-on` and `integrates-with`.
+#
+# These labels are for knowledge-graph pages. A project may also have tracker
+# TYPES with similar names (a `feature` tracker for planned work); those are
+# work items, not spec pages, and nothing here touches them.
+#
+# `capability` is also declared by the market pack. When a label already
+# exists, knowledge-setup unions its `properties`, `factBox` and `expects` with
+# the pack's and keeps every other key as the project has it.
+labels:
+  - id: capability
+    label: Capability
+    pluralLabel: Capabilities
+    description: Something a product or system can do, independent of who ships it.
+    icon: bolt
+    role: page
+    template: |
+      ## What it lets someone do
+
+      ## Who has it, and how well
+
+  - id: subsystem
+    label: Subsystem
+    pluralLabel: Subsystems
+    description: A part of the project with its own responsibility and boundary. A subsystem inside a larger one sets part-of-subsystem to it.
+    icon: account_tree
+    role: page
+    properties: [part-of-subsystem, implemented-in, depends-on, stores-in, governed-by, discussed-in]
+    expects:
+      - { property: implemented-in, min: 1 }
+    template: |
+      ## Responsibility
+
+      ## Boundary
+      What it owns, and what it deliberately leaves to other subsystems.
+
+      ## Invariants
+
+      ## Decisions that shaped it
+
+  - id: feature
+    label: Feature
+    pluralLabel: Features
+    description: A user-facing capability of this project.
+    icon: star
+    role: page
+    broader: [capability]
+    properties: [surface, flag, stage, part-of-subsystem, implemented-in, exposed-on, depends-on, stores-in, governed-by, upholds, violates, discussed-in]
+    expects:
+      - { property: part-of-subsystem, min: 1 }
+      - { property: implemented-in, min: 1 }
+    factBox: [stage, surface, flag, part-of-subsystem]
+    template: |
+      ## What it does
+      Who it is for and the job it does for them.
+
+      ## How it works
+      Only what the code cannot tell a reader: the model, the choices, the limits.
+
+      ## Invariants
+
+      ## Out of scope
+
+  - id: surface
+    label: Surface
+    pluralLabel: Surfaces
+    description: A place a person meets the project -- a screen, panel, command, or endpoint.
+    icon: web_asset
+    role: page
+    properties: [surface, part-of-subsystem, implemented-in, governed-by, discussed-in]
+    expects:
+      - { property: implemented-in, min: 1 }
+    template: |
+      ## What it is for
+
+      ## What appears here
+
+      ## Rules it follows
+
+  - id: requirement
+    label: Requirement
+    pluralLabel: Requirements
+    description: Something the project must, should, or may do, stated so it can be checked.
+    icon: checklist
+    role: page
+    properties: [requirement-level, part-of-subsystem, governed-by, discussed-in]
+    expects:
+      - { property: requirement-level, min: 1 }
+    template: |
+      ## Requirement
+      One sentence a reviewer can check.
+
+      ## Why
+
+      ## How we know it holds
+
+  - id: invariant
+    label: Invariant
+    pluralLabel: Invariants
+    description: A rule that must stay true whatever else changes. A feature or subsystem upholds it; a known breach is a violates claim.
+    icon: lock
+    role: page
+    properties: [enforcement, part-of-subsystem, implemented-in, governed-by, discussed-in]
+    expects:
+      - { property: enforcement, min: 1 }
+    template: |
+      ## The rule
+
+      ## Why it exists
+      The incident or decision that made it a rule.
+
+      ## How it is enforced
+
+  - id: data-store
+    label: Data store
+    pluralLabel: Data stores
+    description: Where the project keeps state -- a database, file, room, or settings store.
+    icon: database
+    role: page
+    properties: [engine, part-of-subsystem, implemented-in, governed-by, discussed-in]
+    expects:
+      - { property: part-of-subsystem, min: 1 }
+    template: |
+      ## What it holds
+
+      ## Who writes it, who reads it
+
+      ## Rules for changing it
+
+  - id: integration
+    label: Integration
+    pluralLabel: Integrations
+    description: A connection between the project and an outside system.
+    icon: hub
+    role: page
+    properties: [part-of-subsystem, integrates-with, depends-on, implemented-in, governed-by, discussed-in]
+    expects:
+      - { property: integrates-with, min: 1 }
+    template: |
+      ## What it connects
+
+      ## What we rely on it for
+
+      ## What breaks when it does
+
+  - id: wire-protocol
+    label: Wire protocol
+    pluralLabel: Wire protocols
+    description: A message format the project's own parts exchange -- between processes, clients and servers, or devices.
+    icon: swap_horiz
+    role: page
+    properties: [part-of-subsystem, implemented-in, governed-by, discussed-in]
+    expects:
+      - { property: implemented-in, min: 1 }
+    template: |
+      ## Who talks to whom
+
+      ## Messages
+
+      ## Compatibility rules
+      What an older peer must still accept.
+
+# FIELD-stored: current value only, kept on the page.
+properties:
+  - id: surface
+    label: Surface
+    type: multiselect
+    options: [desktop, web, mobile, cli, server]
+    facet: true
+    description: Where it is available.
+
+  - id: flag
+    label: Flag
+    type: string
+    description: The feature flag or setting that gates it, if any.
+    qualifiers:
+      defaultState:
+        type: select
+        options: ["on", "off"]
+        label: Default
+        description: Whether the flag is on for a new install.
+
+  - id: stage
+    label: Stage
+    type: select
+    options: [planned, alpha, beta, stable, deprecated, removed]
+    facet: true
+    description: How far along it is. A change of stage worth remembering belongs in a decision, not here.
+
+  - id: requirement-level
+    label: Level
+    type: select
+    options: [must, should, may]
+    facet: true
+
+  - id: enforcement
+    label: Enforcement
+    type: multiselect
+    options: [test, runtime-check, review, convention]
+    description: What keeps the rule true. Convention alone means nothing checks it.
+
+  - id: engine
+    label: Engine
+    type: string
+    description: The storage technology, when the choice matters.
+
+# Keys `predicates.yaml` cannot carry yet, keyed by predicate id.
+claimProperties:
+  part-of-subsystem:
+    range: [subsystem]
+    facet: true
+  stores-in:
+    range: [data-store]
+  exposed-on:
+    range: [surface]
+  upholds:
+    range: [invariant, requirement]
+  violates:
+    range: [invariant, requirement]

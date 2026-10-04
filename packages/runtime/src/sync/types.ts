@@ -140,6 +140,11 @@ export interface PushChangeOutcome {
    * or true means the attempt failed and may be worth another.
    */
   retryable?: boolean;
+  /**
+   * True when the change was not published yet but is held in the message
+   * outbox, which will send it and then publish its index timestamp.
+   */
+  queued?: boolean;
 }
 
 /**
@@ -216,6 +221,13 @@ export interface SyncProvider {
     sessionId: string,
     change: SessionChange,
   ): void | Promise<void | PushChangeOutcome>;
+
+  /**
+   * Append transcript rows over a socket opened for this write alone, for a
+   * session that has no permanent room socket. Refuses (non-retryable) after
+   * `disconnectAll` until the provider is reconnected.
+   */
+  sendSessionMessages?(sessionId: string, messages: AgentMessage[]): Promise<PushChangeOutcome>;
 
   /**
    * Bulk update the sessions index with existing sessions.
@@ -423,8 +435,11 @@ export interface SyncProvider {
    * coalesce -- see `FleetActivityPublisher`. Sending one of these per streaming
    * tick would get the activity silently throttled by ActivityKit, which looks
    * identical to the feature being broken.
+   *
+   * Resolves `true` only when the frame was written to an open index socket.
+   * `false` means it was dropped locally and the server never saw it.
    */
-  sendFleetActivity?(activity: FleetActivitySnapshot, shownOnDesktop?: boolean): Promise<void>;
+  sendFleetActivity?(activity: FleetActivitySnapshot, shownOnDesktop?: boolean): Promise<boolean>;
 
   /** Get list of currently connected devices */
   getConnectedDevices?(): DeviceInfo[];
