@@ -16,6 +16,7 @@ import type {
   RetrievalCapabilities,
   SearchHit,
   VirtualRecord,
+  SourceSet,
 } from './types.js';
 import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, type ResolvedRoot } from './roots.js';
@@ -139,6 +140,7 @@ export class MemoryEngine {
   }
 
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
+    if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
     this.indexing = true;
     try {
       // Publish changed chunks during a long pass, but do not deserialize the
@@ -157,6 +159,28 @@ export class MemoryEngine {
       return result;
     } finally {
       this.indexing = false;
+    }
+  }
+
+  async updateSources(
+    sources: SourceSet[],
+    workspaceExclude: string[]
+  ): Promise<{ indexed: number; files: number }> {
+    if (this.indexing)
+      throw new Error(
+        "Wait for the current index pass before changing sources."
+      );
+    await this.watcher?.stop();
+    this.watcher = null;
+    this.config.sources = sources;
+    this.config.workspaceExclude = workspaceExclude;
+    this.roots = resolveRoots(this.config.root, sources);
+    this.indexer = new Indexer(this.config, this.store, this.embedder);
+    try {
+      return await this.indexAll();
+    } finally {
+      this.refreshSnapshot();
+      this.startWatching();
     }
   }
 

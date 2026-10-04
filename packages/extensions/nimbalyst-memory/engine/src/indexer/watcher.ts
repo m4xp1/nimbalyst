@@ -16,6 +16,8 @@
  * engine can rebuild its in-memory retrieval snapshot.
  */
 import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { SOURCE_SERVICE_EXCLUDES } from '../sourceRules.js';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import fg from 'fast-glob';
@@ -24,8 +26,8 @@ import { rootForSet, type ResolvedRoot } from '../roots.js';
 import type { Indexer } from './indexer.js';
 
 const DEBOUNCE_MS = 400;
-const IGNORED = /(^|[/\\])(node_modules|\.git|dist|\.vite|\.cache)([/\\]|$)/;
-const FG_IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/.vite/**'];
+const IGNORED = /(^|[/\\])(node_modules|\.git|\.obsidian|dist|build|archive|archives|\.vite|\.cache)([/\\]|$)/;
+const FG_IGNORE = SOURCE_SERVICE_EXCLUDES;
 
 /** Static directory prefix of a glob (the part before the first magic char). */
 export function globBaseDir(glob: string): string {
@@ -101,8 +103,13 @@ export function computeWatchScopes(
 
 export class IndexWatcher {
   private watcher: FSWatcher | null = null;
-  private pending = new Map<string, 'upsert' | 'remove'>();
+  private pending = new Map<string, "upsert" | "remove">();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private discoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private discovered = new Map<string, string>();
+  private discovering: Promise<void> | null = null;
+  private flushing: Promise<void> = Promise.resolve();
+  private stopped = false;
 
   constructor(
     private config: EngineConfig,
@@ -113,17 +120,26 @@ export class IndexWatcher {
   start(): void {
     if (this.watcher) return;
     const targets = this.resolveWatchTargets();
-    if (targets.length === 0) return;
+    this.stopped = false;
+    if (
+      targets.length === 0 &&
+      !this.config.sources.some((s) => s.sourceClass === "custom")
+    )
+      return;
     this.watcher = chokidar.watch(targets, {
       ignored: (p: string) => IGNORED.test(p),
       ignoreInitial: true,
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     });
+    if (this.config.sources.some((s) => s.sourceClass === "custom")) {
+      void this.discover();
+      this.discoveryTimer = setInterval(() => void this.discover(), 3000);
+    }
     this.watcher
-      .on('add', (p) => this.queue(p, 'upsert'))
-      .on('change', (p) => this.queue(p, 'upsert'))
-      .on('unlink', (p) => this.queue(p, 'remove'));
+      .on("add", (p) => this.queue(p, "upsert"))
+      .on("change", (p) => this.queue(p, "upsert"))
+      .on("unlink", (p) => this.queue(p, "remove"));
   }
 
   /**
@@ -133,7 +149,10 @@ export class IndexWatcher {
    */
   private resolveWatchTargets(): string[] {
     const targets: string[] = [];
-    for (const scope of computeWatchScopes(this.config.sources, this.indexer.sourceRoots())) {
+    for (const scope of computeWatchScopes(
+      this.config.sources,
+      this.indexer.sourceRoots()
+    )) {
       for (const d of scope.dirs) {
         const abs = path.join(scope.root.dir, d);
         if (existsSync(abs)) targets.push(abs);
@@ -154,8 +173,48 @@ export class IndexWatcher {
     return targets;
   }
 
-  private queue(absPath: string, op: 'upsert' | 'remove'): void {
-    if (!absPath.endsWith('.md')) return;
+  /** Discover new matches without recursively watching every workspace directory. */
+  private async discover(): Promise<void> {
+    if (this.stopped || this.discovering) return;
+    this.discovering = (async () => {
+      const next = new Map<string, string>();
+      for (const hit of await this.indexer.enumerate()) {
+        if (this.stopped || hit.sourcePath.startsWith("@")) continue;
+        const abs = path.resolve(this.config.root, hit.sourcePath);
+        let info;
+        try {
+          info = await stat(abs);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw e;
+        }
+        const stamp = info.mtimeMs + ":" + info.size;
+        next.set(abs, stamp);
+        if (this.discovered.get(abs) !== stamp) {
+          this.watcher?.add(abs);
+          this.queue(abs, "upsert");
+        }
+      }
+      if (!this.stopped) {
+        for (const abs of this.discovered.keys())
+          if (!next.has(abs)) this.queue(abs, "remove");
+        this.discovered = next;
+      }
+    })()
+      .catch(() =>
+        this.config.onLog?.(
+          "warn",
+          "[watcher] source discovery failed; retained existing files"
+        )
+      )
+      .finally(() => {
+        this.discovering = null;
+      });
+    await this.discovering;
+  }
+
+  private queue(absPath: string, op: "upsert" | "remove"): void {
+    if (this.stopped || !/\.md$/i.test(absPath)) return;
     // classify() also yields the canonical sourcePath — with more than one root
     // the watcher can no longer derive it from config.root.
     const hit = this.indexer.classify(absPath);
@@ -165,16 +224,21 @@ export class IndexWatcher {
     this.timer = setTimeout(() => void this.flush(), DEBOUNCE_MS);
   }
 
-  private async flush(): Promise<void> {
+  private flush(): Promise<void> {
+    this.flushing = this.flushing.then(() => this.flushBatch());
+    return this.flushing;
+  }
+  private async flushBatch(): Promise<void> {
     const batch = Array.from(this.pending.entries());
     this.pending.clear();
     this.timer = null;
     for (const [sourcePath, op] of batch) {
       try {
-        if (op === 'remove') {
+        if (op === "remove") {
           this.indexer.removeFile(sourcePath);
         } else {
-          const sourceClass = this.indexer.classify(sourcePath)?.sourceClass ?? 'unknown';
+          const sourceClass =
+            this.indexer.classify(sourcePath)?.sourceClass ?? "unknown";
           await this.indexer.indexFile(sourcePath, sourceClass);
         }
       } catch {
@@ -185,10 +249,15 @@ export class IndexWatcher {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.discoveryTimer) clearInterval(this.discoveryTimer);
+    this.discoveryTimer = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.pending.clear();
     await this.watcher?.close();
     this.watcher = null;
+    await this.discovering;
+    await this.flushing;
   }
 }

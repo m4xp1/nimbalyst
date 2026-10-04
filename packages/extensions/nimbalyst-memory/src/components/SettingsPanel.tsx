@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
+import { SourceSettings } from './SourceSettings';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 
 interface IndexStatus {
@@ -502,6 +503,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
           Live status is unavailable in this version of the host.
         </p>
       )}
+
+      <SourceSettings callBackendTool={callBackendTool} openai={embeddingSettings?.activeMode === 'openai'} onApplied={() => void refreshStatus()} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>

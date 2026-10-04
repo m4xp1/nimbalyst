@@ -7,6 +7,7 @@
  * not the whole file.
  */
 import { readFile } from 'node:fs/promises';
+import { SOURCE_SAFE_EXCLUDES, isInsideRealRoot } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
 import picomatch from 'picomatch';
@@ -109,13 +110,14 @@ function pageRowFor(
   };
 }
 
-const BASE_IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/.vite/**'];
+const BASE_IGNORE = SOURCE_SAFE_EXCLUDES;
 
 export class Indexer {
   private roots: ResolvedRoot[];
   private matchers: { sourceClass: string; root: ResolvedRoot; isMatch: (p: string) => boolean }[];
   private isExcluded: (p: string) => boolean;
   private ignoreGlobs: string[];
+  private isWorkspaceExcluded: (p:string) => boolean;
 
   constructor(
     private config: EngineConfig,
@@ -130,8 +132,9 @@ export class Indexer {
       root: rootForSet(this.roots, set),
       isMatch: picomatch(set.include, { dot: true }),
     }));
-    const exclude = config.exclude ?? [];
-    this.isExcluded = exclude.length ? picomatch(exclude, { dot: true }) : () => false;
+    const exclude = [...BASE_IGNORE, ...(config.exclude ?? [])];
+    this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(config.workspaceExclude,{dot:true,nocase:true}) : () => false;
+    this.isExcluded = exclude.length ? picomatch(exclude, { dot: true, nocase: true }) : () => false;
     this.ignoreGlobs = [...BASE_IGNORE, ...exclude];
   }
 
@@ -180,10 +183,28 @@ export class Indexer {
       dot: true,
       onlyFiles: true,
       followSymbolicLinks: false,
-      suppressErrors: true,
-      ignore: this.ignoreGlobs,
+      suppressErrors: false,
+      ignore: [
+        ...this.ignoreGlobs,
+        ...(root.id === null ? this.config.workspaceExclude ?? [] : []),
+      ],
     });
-    return rels.map((rel) => toSourcePath(root, rel));
+    const safe: string[] = [];
+    for (const rel of rels) {
+      if (
+        !/\.md$/i.test(rel) ||
+        this.isExcluded(rel) ||
+        (root.id === null && this.isWorkspaceExcluded(rel))
+      )
+        continue;
+      if (
+        root.id === null &&
+        !(await isInsideRealRoot(root.dir, path.resolve(root.dir, rel)))
+      )
+        continue;
+      safe.push(toSourcePath(root, rel));
+    }
+    return safe;
   }
 
   /** Full (incremental) index pass. */
@@ -217,6 +238,7 @@ export class Indexer {
     let root: ResolvedRoot;
     try {
       ({ abs, root } = resolveInRoots(this.roots, sourcePath));
+      if (!this.classify(sourcePath)) { this.store.deleteSource(sourcePath); return 0; }
     } catch (err) {
       // Outside every configured root. Never seen for a path we derived, so this
       // is a bug rather than a deletion — log it and touch nothing, so a bad
@@ -226,8 +248,10 @@ export class Indexer {
     }
     let raw: string;
     try {
+      if (root.id === null && !await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
       raw = await readFile(abs, 'utf8');
-    } catch {
+    } catch (err) {
+      if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
       this.store.deleteSource(sourcePath);
       return 0;
@@ -387,7 +411,7 @@ export class Indexer {
     if (!located) return null;
     const { root, rel } = located;
     const posix = rel.split(path.sep).join('/');
-    if (this.isExcluded(posix)) return null;
+    if (this.isExcluded(posix) || (root.id === null && this.isWorkspaceExcluded(posix))) return null;
     for (const m of this.matchers) {
       if (m.root.dir === root.dir && m.isMatch(posix)) {
         return { sourceClass: m.sourceClass, sourcePath: toSourcePath(root, posix) };

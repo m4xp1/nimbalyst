@@ -63,3 +63,5 @@ export type {
 } from './dedup/types.js';
 export * from './memory/index.js';
 export * from './types.js';
+
+export { normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, previewSourceRules, SOURCE_SAFE_EXCLUDES, type SourceRules, type SourcePreview } from './sourceRules.js';
