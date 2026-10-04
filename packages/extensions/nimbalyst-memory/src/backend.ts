@@ -25,6 +25,7 @@ import {
   buildPublicEngineStatus,
   createEmbedder,
   defaultSources,
+  safeIndexError,
   normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, previewSourceRules,
 } from '../engine/dist/index.js';
 import type { EngineConfig, SearchHit, VirtualRecord } from '../engine/dist/index.js';
@@ -485,7 +486,7 @@ export async function activate(ctx: ActivateCtx) {
       // Any construction failure — missing optional dependency, corrupt model
       // cache, revoked key — degrades to BM25. Retrieval never goes dark.
       want = fallbackFor(want);
-      log('warn', `[memory] ${want.reason}: ${(err as Error).message}`);
+      log('warn', `[memory] ${want.reason}: ${safeIndexError(err).category}`);
       embedder = await createEmbedder(want.config);
     }
     selection = want;

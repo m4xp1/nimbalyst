@@ -9,6 +9,7 @@
  * these methods.
  */
 import { readFile, stat } from 'node:fs/promises';
+import { safeIndexError, type FileIndexStatus, type SafeIndexError } from './indexStatus.js';
 import type {
   Embedder,
   EngineConfig,
@@ -38,6 +39,11 @@ export interface EngineStatus {
   embedder: { id: string; model: string; dims: number };
   embedderChanged: boolean;
   indexing: boolean;
+  fileIndex?: FileIndexStatus;
+  indexedFiles?: number;
+  watching?: boolean;
+  chunksWithoutVectors?: number;
+  embeddingError?: SafeIndexError | null;
   /**
    * Last query-embedding failure, if any. When set, search has been running
    * sparse-only (BM25) — a strong signal something is wrong with the embedder
@@ -80,6 +86,7 @@ export class MemoryEngine {
   private retriever: Retriever;
   private watcher: IndexWatcher | null = null;
   private indexing = false;
+  private fileIndex:FileIndexStatus={state:'not-started',phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
   /** True when the stored embedder differed and a re-index is needed. */
   private embedderChanged = false;
   /** Last query-embedding error message, or null if the last embed succeeded. */
@@ -142,22 +149,31 @@ export class MemoryEngine {
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
     if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
     this.indexing = true;
+    this.fileIndex={state:'building',phase:'enumerate',discoveredFiles:null,completedFiles:0,failedFiles:0,error:null};
     try {
       // Publish changed chunks during a long pass, but do not deserialize the
       // entire catalog (including virtual records) for unchanged file batches.
       let snapshotIndexed = 0;
       const result = await this.indexer.indexAll((p) => {
+        this.fileIndex.phase=p.phase;
+        if (p.phase === 'index' || p.phase === 'done') { this.fileIndex.discoveredFiles=p.total;this.fileIndex.completedFiles=p.done; }
         if (p.phase === 'index' && p.done > 0 && p.done % SNAPSHOT_REFRESH_EVERY_FILES === 0 && (p.indexed ?? 0) > snapshotIndexed) {
           this.refreshSnapshot();
           snapshotIndexed = p.indexed!;
         }
         onProgress?.(p);
       });
+      this.fileIndex.state='ready';
       this.embedderChanged = false;
-      // Always publish pruning and metadata-only changes, even with no embeds.
-      this.refreshSnapshot();
+      // Pruning and metadata-only changes are published in finally.
       return result;
+    } catch (error) {
+      this.fileIndex.error=safeIndexError(error);
+      this.fileIndex.failedFiles=this.fileIndex.phase === 'index' ? 1 : null;
+      this.fileIndex.state=this.store.count()>0 ? 'partial' : 'failed';
+      throw error;
     } finally {
+      this.refreshSnapshot();
       this.indexing = false;
     }
   }
@@ -186,7 +202,9 @@ export class MemoryEngine {
 
   startWatching(): void {
     if (this.watcher) return;
-    this.watcher = new IndexWatcher(this.config, this.indexer, () => this.refreshSnapshot());
+    this.watcher = new IndexWatcher(this.config, this.indexer, () => this.refreshSnapshot(), error => {
+      this.fileIndex={...this.fileIndex,state:this.store.count()>0 ? 'partial' : 'failed',error:safeIndexError(error),failedFiles:null};
+    });
     this.watcher.start();
   }
 
@@ -239,7 +257,7 @@ export class MemoryEngine {
       vec = null;
       const msg = (err as Error)?.message ?? String(err);
       if (this.lastEmbedError !== msg) {
-        this.log('warn', `[engine] query embedding failed; falling back to sparse-only: ${msg}`);
+        this.log('warn', `[engine] query embedding failed; falling back to sparse-only (${safeIndexError(err).category})`);
       }
       this.lastEmbedError = msg;
     }
@@ -377,6 +395,11 @@ export class MemoryEngine {
       embedder: this.embedder.info,
       embedderChanged: this.embedderChanged,
       indexing: this.indexing,
+      fileIndex: { ...this.fileIndex, error: this.fileIndex.error ? { ...this.fileIndex.error } : null },
+      indexedFiles: this.store.fileSourcePaths().length,
+      watching: this.watcher?.isWatching() ?? false,
+      chunksWithoutVectors: this.store.count() - this.store.countDense(),
+      embeddingError: this.lastEmbedError ? safeIndexError(new Error(this.lastEmbedError)) : null,
       lastEmbedError: this.lastEmbedError,
       retrieval,
       root: this.config.root,

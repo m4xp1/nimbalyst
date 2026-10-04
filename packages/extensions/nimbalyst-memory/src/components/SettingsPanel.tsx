@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
 import { SourceSettings } from './SourceSettings';
+import type { FileIndexStatus, SafeIndexError } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 
 interface IndexStatus {
@@ -27,6 +28,11 @@ interface IndexStatus {
   lastIndexedAt?: number | null;
   indexSizeBytes?: number;
   indexing?: boolean;
+  fileIndex?: FileIndexStatus;
+  indexedFiles?: number;
+  watching?: boolean;
+  chunksWithoutVectors?: number;
+  embeddingError?: SafeIndexError | null;
   embedder?: { id?: string; model?: string; dims?: number } | null;
   retrieval?: {
     mode?: 'hybrid' | 'keyword-only';
@@ -288,7 +294,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
     try {
       await callBackendTool('memory.rebuild');
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : String(err));
+      setStatusError('Rebuild did not finish. Check the index status below for the next action.');
     } finally {
       setRebuilding(false);
       void refreshStatus();
@@ -429,6 +435,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   const totalChunks = status?.chunks ?? 0;
   const coverage =
     totalChunks > 0 ? Math.round(((status?.denseChunks ?? 0) / totalChunks) * 100) : 0;
+  const indexLabel = status?.indexing ? 'Indexing…' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
+  const countLabel = (n:number|null|undefined) => n == null ? 'Unknown' : n.toLocaleString();
   const keywordOnly = isKeywordOnly(status);
   // The provider's error text stays out of the UI; only the fact of it surfaces.
   const semanticProviderFailing = isSemanticProviderFailing(status);
@@ -653,16 +661,16 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
           <h4 style={H4}>
             Coverage
             {status && status.ready !== false && (
-              <span style={chipTone(status.indexing ? 'idle' : 'ok')}>
+              <span style={chipTone(status.fileIndex?.state === 'ready' ? 'ok' : 'idle')}>
                 <span
                   style={{
                     width: 7,
                     height: 7,
                     borderRadius: '50%',
-                    background: status.indexing ? 'var(--nim-text-muted)' : '#4ade80',
+                    background: status.fileIndex?.state === 'ready' ? '#4ade80' : 'var(--nim-text-muted)',
                   }}
                 />
-                {status.indexing ? 'Indexing…' : 'Ready'}
+                {indexLabel}
               </span>
             )}
           </h4>
@@ -672,6 +680,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               onClick={() => void refreshStatus()}
               disabled={!callBackendTool || loadingStatus}
               className="nimbalyst-memory-refresh"
+              title="Read status only; does not scan files or request embeddings"
               style={btnStyle(isDark)}
             >
               {loadingStatus ? 'Refreshing…' : 'Refresh'}
@@ -681,6 +690,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               onClick={() => void rebuild()}
               disabled={!callBackendTool || rebuilding || status?.indexing}
               className="nimbalyst-memory-rebuild"
+              title="Scan sources and reuse unchanged embeddings; new or changed text may call the provider"
               style={btnStyle(isDark)}
             >
               {rebuilding ? 'Rebuilding…' : 'Rebuild'}
@@ -700,14 +710,26 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         {status && status.ready !== false && (
           <div style={CARD}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-              <Stat value={totalChunks.toLocaleString()} label="chunks indexed" />
+              <Stat value={countLabel(status.chunks)} label="saved chunks" />
               <Stat
-                value={keywordOnly ? 'Unavailable' : `${coverage}`}
-                unit={keywordOnly ? undefined : '%'}
-                label={keywordOnly ? 'semantic matching' : 'embedding coverage'}
+                value={status.chunks == null || status.denseChunks == null ? 'Unknown' : status.chunks === 0 ? '—' : `${coverage}`}
+                unit={status.chunks ? '%' : undefined}
+                label="saved chunks with vectors"
               />
-              <Stat value={`${status.sourceFiles ?? 0}`} label="source files" />
+              <Stat value={countLabel(status.sourceFiles)} label="saved sources (files + records)" />
             </div>
+
+            <p style={{margin:0,color:muted}}>Embedding coverage describes saved chunks, not all workspace files. Unfinished or failed files may be absent from this index.</p>
+            <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
+              <dt>Files discovered in last scan</dt><dd>{countLabel(status.fileIndex?.discoveredFiles)}</dd>
+              <dt>Files processed in last scan</dt><dd>{countLabel(status.fileIndex?.completedFiles)}</dd>
+              <dt>Files currently saved</dt><dd>{countLabel(status.indexedFiles)}</dd>
+              <dt>Files failed in last operation</dt><dd>{countLabel(status.fileIndex?.failedFiles)}</dd>
+              <dt>Saved chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
+              <dt>File observation</dt><dd>{status.watching === undefined ? 'Unknown' : status.watching ? 'Active' : 'Inactive'}</dd>
+            </dl>
+            {status.fileIndex?.error && <p role="alert" style={ERR}>{status.fileIndex.error.category}: {status.fileIndex.error.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.fileIndex.error.action}</p>}
+            {status.embeddingError && <p role="alert" style={ERR}>{status.embeddingError.category}: {status.embeddingError.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.embeddingError.action}</p>}
 
             {breakdown.length > 0 && (
               <div>
@@ -749,7 +771,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               </dd>
               <dt style={{ color: 'var(--nim-text-muted)' }}>Last indexed</dt>
               <dd style={{ margin: 0 }}>
-                {relativeTime(status.lastIndexedAt)} · auto-refreshes on file change
+                {relativeTime(status.lastIndexedAt)}{status.watching ? ' · observing file changes' : ''}
               </dd>
               <dt style={{ color: 'var(--nim-text-muted)' }}>Index size</dt>
               <dd style={{ margin: 0 }}>

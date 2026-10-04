@@ -114,8 +114,11 @@ export class IndexWatcher {
   constructor(
     private config: EngineConfig,
     private indexer: Indexer,
-    private onSettled: () => void
+    private onSettled: () => void,
+    private onError: (error:unknown) => void = () => {}
   ) {}
+
+  isWatching():boolean { return this.watcher !== null && !this.stopped; }
 
   start(): void {
     if (this.watcher) return;
@@ -139,7 +142,8 @@ export class IndexWatcher {
     this.watcher
       .on("add", (p) => this.queue(p, "upsert"))
       .on("change", (p) => this.queue(p, "upsert"))
-      .on("unlink", (p) => this.queue(p, "remove"));
+      .on("unlink", (p) => this.queue(p, "remove"))
+      .on("error", error => this.onError(error));
   }
 
   /**
@@ -201,12 +205,7 @@ export class IndexWatcher {
         this.discovered = next;
       }
     })()
-      .catch(() =>
-        this.config.onLog?.(
-          "warn",
-          "[watcher] source discovery failed; retained existing files"
-        )
-      )
+      .catch(error => { this.onError(error); this.config.onLog?.('warn','[watcher] source discovery failed; retained existing files'); })
       .finally(() => {
         this.discovering = null;
       });
@@ -241,7 +240,8 @@ export class IndexWatcher {
             this.indexer.classify(sourcePath)?.sourceClass ?? "unknown";
           await this.indexer.indexFile(sourcePath, sourceClass);
         }
-      } catch {
+      } catch (error) {
+        this.onError(error);
         // Best-effort; a failed file is retried on its next change event.
       }
     }
