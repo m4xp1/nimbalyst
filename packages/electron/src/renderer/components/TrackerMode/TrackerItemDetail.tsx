@@ -61,7 +61,6 @@ import { TrackerCollabAvatars, TrackerCollabSyncDot } from './trackerCollabChrom
 import { formatTrackerActivity } from './trackerActivityPresentation';
 import { createCollectionItem } from './createCollectionItem';
 import { TabEditor } from '../TabEditor/TabEditor';
-import { TrackerFileBackedPreview } from './TrackerFileBackedPreview';
 import { FeedbackBacklinkSection } from '../FeedbackRequest/FeedbackBacklinks';
 import { TypeTagsEditor } from './TrackerTypeTagsEditor';
 import { TrackerItemLabelProperties } from './TrackerItemLabelProperties';
@@ -624,7 +623,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   const fileBackedDocumentPath = useMemo(() => {
     const documentPath = item?.system.documentPath;
     if (!documentPath) return null;
-    if (documentPath.startsWith('/') || !workspacePath) return documentPath;
+    if (documentPath.startsWith('/') || /^[a-z]:[\\/]/i.test(documentPath) || !workspacePath) return documentPath;
     return `${workspacePath.replace(/\/$/, '')}/${documentPath}`;
   }, [item?.system.documentPath, workspacePath]);
   const [fileBackedDocument, setFileBackedDocument] = useState<{
@@ -1776,10 +1775,21 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                     Open in Editor
                   </button>
                 </div>
-                <TrackerFileBackedPreview
-                  filePath={fileBackedDocumentPath}
-                  content={fileBackedDocument.content}
-                />
+                <div className="tracker-file-backed-document-editor h-[480px] min-h-[200px] overflow-hidden rounded border border-nim" data-testid="tracker-file-backed-document-editor">
+                  <TabEditor
+                    key={fileBackedDocumentPath}
+                    filePath={fileBackedDocumentPath}
+                    fileName={fileBackedDocumentPath.split(/[\\/]/).pop() || getRecordTitle(item)}
+                    initialContent={fileBackedDocument.content}
+                    isActive
+                    workspaceId={workspacePath}
+                    onOpenSessionInChat={onOpenSessionInChat}
+                    onSwitchToAgentMode={(_documentPath, sessionId) => {
+                      if (sessionId) onSwitchToAgentMode?.(sessionId);
+                      else onLaunchSession?.(item.id);
+                    }}
+                  />
+                </div>
               </div>
             ) : fileBackedDocumentError ? (
               <div className="flex flex-col gap-2 py-2">
