@@ -513,7 +513,6 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
       )}
 
       <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} />
-      <div style={DIVIDER} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>
