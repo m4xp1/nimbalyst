@@ -328,6 +328,7 @@ export class Indexer {
     ref?: { refType?: string; refId?: string }
   ): Promise<number> {
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
+    if (p.unchanged) return 0;
     if (p.pending.length) {
       const vectors = await this.embedder.embed(p.pending.map((t) => t.input));
       p.pending.forEach((t, i) => {

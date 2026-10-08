@@ -342,6 +342,12 @@ export class SqliteStore {
     return row.t ?? null;
   }
 
+  /** Allocated SQLite pages, independent of temporary WAL/SHM files. */
+  sizeBytes(): number {
+    return Number(this.db.pragma('page_count', { simple: true })) *
+      Number(this.db.pragma('page_size', { simple: true }));
+  }
+
   close(): void {
     this.db.close();
   }

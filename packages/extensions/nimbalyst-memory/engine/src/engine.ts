@@ -406,22 +406,9 @@ export class MemoryEngine {
     };
   }
 
-  /**
-   * Total on-disk size of the shadow index (the SQLite db plus its WAL/SHM
-   * sidecars), in bytes. Best-effort: missing sidecars count as zero. Async
-   * because it stats the filesystem; kept separate from the sync `status()`.
-   */
+  /** Allocated database size; temporary SQLite journals are not indexed content. */
   async indexSizeBytes(): Promise<number> {
-    const paths = [this.config.dbPath, `${this.config.dbPath}-wal`, `${this.config.dbPath}-shm`];
-    let total = 0;
-    for (const p of paths) {
-      try {
-        total += (await stat(p)).size;
-      } catch {
-        // Sidecar (or db) not present — contributes nothing.
-      }
-    }
-    return total;
+    return this.store.sizeBytes();
   }
 
   async close(): Promise<void> {

@@ -16,6 +16,17 @@ describe('truthful index status',()=>{
   spy.mockClear();for(let i=0;i<3;i++)engine.status();await engine.indexSizeBytes();expect(spy).not.toHaveBeenCalled();
   await engine.indexAll();expect(spy).not.toHaveBeenCalled();engine.startWatching();expect(engine.status().watching).toBe(true);
  });
+ it('unchanged rebuilds do not write chunks, embed or inflate size after reopen',async()=>{
+  const {root,embedder,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\nquartzorchid');await engine.indexAll();
+  const before=(engine as any).store.loadAll(),size=await engine.indexSizeBytes();
+  const embed=vi.spyOn(embedder,'embed'),upsert=vi.spyOn((engine as any).store,'upsertChunks');
+  for(let i=0;i<12;i++)await engine.indexAll();
+  expect(embed).not.toHaveBeenCalled();expect(upsert).not.toHaveBeenCalled();
+  expect((engine as any).store.loadAll()).toEqual(before);expect(await engine.indexSizeBytes()).toBe(size);
+  await engine.close();engines.splice(engines.indexOf(engine),1);
+  const reopened=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[]},embedder);engines.push(reopened);
+  expect(await reopened.indexSizeBytes()).toBe(size);expect((reopened as any).store.loadAll()).toEqual(before);
+ });
  it('reports partial failure even when saved vectors have 100 percent coverage',async()=>{
   const {root,embedder,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\nquartzorchid');await engine.indexAll();
   writeFileSync(path.join(root,'docs/b.md'),'# Second\nmarigold');vi.spyOn(embedder,'embed').mockRejectedValue(new Error('OpenAI failed (429): insufficient_quota SECRET RESPONSE'));
