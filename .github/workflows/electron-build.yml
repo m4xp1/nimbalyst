@@ -91,6 +91,8 @@ jobs:
         run: >-
           npx vitest run
           packages/electron/src/main/services/__tests__/autoUpdater.channelPolicy.test.ts
+          packages/electron/src/main/services/__tests__/SemanticCatalogService.sessions.test.ts
+          packages/electron/src/main/services/__tests__/SemanticCatalogService.readiness.test.ts
           packages/electron/src/renderer/store/atoms/__tests__/fileTree.visibleNodes.test.ts
           packages/electron/src/renderer/components/common/__tests__/FilePathBreadcrumb.test.tsx
           packages/electron/src/renderer/components/TrackerMode/__tests__/TrackerItemDetail.fields.test.tsx
@@ -121,6 +123,11 @@ jobs:
           }
           node -e "const fs=require('fs'); const asar=require('@electron/asar'); const expected=JSON.parse(fs.readFileSync('packages/electron/package.json','utf8')).version; const actual=JSON.parse(asar.extractFile('packages/electron/release/win-unpacked/resources/app.asar','package.json').toString()).version; if(actual!==expected) throw new Error('Packaged app version mismatch: '+actual); console.log('Packaged version: '+actual)"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged version validation failed' }
+          foreach ($name in @('COPYING', 'SOURCE.md', 'base-stemmer.js', 'russian-stemmer.js')) {
+            $original = Get-FileHash -LiteralPath "packages/extensions/nimbalyst-memory/engine/src/retrieval/snowball/$name" -Algorithm SHA256
+            $packaged = Get-FileHash -LiteralPath "packages/electron/release/win-unpacked/resources/legal/snowball-russian-3.1.1/$name" -Algorithm SHA256
+            if ($original.Hash -ne $packaged.Hash) { throw "Snowball shipped source/license mismatch: $name" }
+          }
           $installer = Get-Item 'packages/electron/release/Nimbalyst-Windows-x64.exe'
           "Application FileVersion: $($application.VersionInfo.FileVersion); installer FileVersion: $($installer.VersionInfo.FileVersion); ProductVersion: $($installer.VersionInfo.ProductVersion)"
           if ($installer.VersionInfo.FileVersion -ne $package.build.buildVersion) {
@@ -188,14 +195,13 @@ jobs:
           Nimbalyst $tag for Windows x64, built from the release branch of m4xp1/nimbalyst.
 
           Based on upstream v0.79.1. Fork version: $version; Windows revision: $revision.
-          - Tracker CONTENT hides duplicate editor navigation and metadata while keeping file editing.
-          - Right-click empty file tree space opens the project root directory menu.
-          - Russian keyword matching handles sentence punctuation; lexical migration preserves embeddings.
-          - Source rules autosave on blur or closing settings, including empty Include/Exclude and restore.
-          - Additional sources support arbitrary UTF-8 text, including JSON, YAML, code and extensionless files.
-          - Removed source previews and fixed exclusions; users control Include/Exclude rules.
-          - Unchanged Rebuild avoids chunk writes; Index size reports stable SQLite allocated pages.
-          - Weak semantic candidates are filtered before fusion; keyword results remain eligible.
+          - Additional text sources now has two clear paragraphs for supported formats and built-in sources.
+          - Disabling AI session indexing removes all saved Memory session records, cancels stale backfills, and reconciles persisted data on startup.
+          - Upstream nearest-candidate semantic retrieval is restored; the fork cosine floor is removed.
+          - Russian Snowball 3.1.1 adds morphology-only BM25 matches after exact keyword matches, for both search and recall.
+          - Stored vectors, document text and database schema stay unchanged; technical tokens retain exact matching.
+          - Keyword provenance is available as keywordMatch: exact or stem; hybrid ranking still combines semantic and keyword signals.
+          - Existing CONTENT editing, path menus, source autosave and text-format support are retained.
           - Official upstream notifications remain enabled; automatic download/install are disabled.
 
           Source commit: $env:GITHUB_SHA
