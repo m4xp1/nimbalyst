@@ -1731,6 +1731,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                 data-testid="tracker-file-backed-document-editor"
               >
                 <TabEditor
+                  embedded
                   filePath={fileBackedDocumentPath}
                   fileName={fileBackedDocumentPath.split('/').pop() || getRecordTitle(item)}
                   initialContent={fileBackedDocument.content}
@@ -1777,6 +1778,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
                 </div>
                 <div className="tracker-file-backed-document-editor h-[480px] min-h-[200px] overflow-hidden rounded border border-nim" data-testid="tracker-file-backed-document-editor">
                   <TabEditor
+                  embedded
                     key={fileBackedDocumentPath}
                     filePath={fileBackedDocumentPath}
                     fileName={fileBackedDocumentPath.split(/[\\/]/).pop() || getRecordTitle(item)}
