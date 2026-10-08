@@ -125,6 +125,7 @@ interface GlobalSearchResult {
    * "how similar, absolutely" (duplicate detection) read `similarity.cosine`.
    */
   similarity?: { cosine?: number; bm25?: number };
+  keywordMatch?: 'exact' | 'stem';
 }
 
 /**
@@ -148,6 +149,7 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
       score: h.score,
       signals: h.signals ?? { dense: false, sparse: false },
       ...(h.similarity ? { similarity: h.similarity } : {}),
+      ...(h.keywordMatch ? { keywordMatch: h.keywordMatch } : {}),
     });
   }
   return Array.from(best.values())

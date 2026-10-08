@@ -208,6 +208,7 @@ export class Retriever {
             })
         : [];
 
+    const keywordMatches = new Map<string, 'exact' | 'stem'>();
     const sparseScores = new Map<string, number>();
     const sparseRanked = this.bm25
       .search(queryText)
@@ -218,6 +219,7 @@ export class Retriever {
       .slice(0, this.fusion.sparseCandidates)
       .map((x) => {
         sparseScores.set(x.id, x.score);
+        if (x.keywordMatch) keywordMatches.set(x.id, x.keywordMatch);
         return x.id;
       });
 
@@ -255,6 +257,7 @@ export class Retriever {
         score,
         citation: citation(c),
         signals: { dense: denseSet.has(id), sparse: sparseSet.has(id) },
+        ...(keywordMatches.has(id) ? { keywordMatch: keywordMatches.get(id)! } : {}),
         similarity: {
           ...(denseScores.has(id) ? { cosine: denseScores.get(id)! } : {}),
           ...(sparseScores.has(id) ? { bm25: sparseScores.get(id)! } : {}),

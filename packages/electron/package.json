@@ -253,6 +253,11 @@
     ],
     "extraResources": [
       {
+        "from": "../extensions/nimbalyst-memory/engine/src/retrieval/snowball",
+        "to": "legal/snowball-russian-3.1.1",
+        "filter": ["*.js", "COPYING", "SOURCE.md"]
+      },
+      {
         "from": "../cloudflare-sandbox/dist",
         "to": "cloudflare-sandbox",
         "filter": [

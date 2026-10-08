@@ -4,6 +4,8 @@
  * which is exactly where pure dense retrieval is weak.
  */
 
+import RussianStemmer from './snowball/russian-stemmer.js';
+
 export const LEXICAL_INDEX_VERSION = 3;
 const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
 const K1 = 1.5;
@@ -46,13 +48,14 @@ export interface Bm25Doc {
 export interface Bm25Scored {
   id: string;
   score: number;
+  keywordMatch?: 'exact' | 'stem';
 }
 
 /**
  * Brute-force BM25 over an in-memory doc set. Recomputes IDF/avgdl on
  * construction; cheap at a few thousand chunks.
  */
-export class Bm25Index {
+class Bm25Projection {
   private docs: Bm25Doc[];
   private docLen = new Map<string, number>();
   private df = new Map<string, number>();
@@ -84,8 +87,7 @@ export class Bm25Index {
   }
 
   /** Score every doc against the query; returns matches sorted desc. */
-  search(query: string): Bm25Scored[] {
-    const terms = tokenize(query);
+  search(terms: string[]): Bm25Scored[] {
     if (terms.length === 0 || this.avgdl === 0) return [];
     const queryTerms = Array.from(new Set(terms));
     const results: Bm25Scored[] = [];
@@ -103,5 +105,45 @@ export class Bm25Index {
     }
     results.sort((a, b) => b.score - a.score);
     return results;
+  }
+}
+
+// Exact terms remain the persisted index; the second projection is disposable.
+const RUSSIAN_WORD = /^[а-я]+$/u;
+
+export class Bm25Index {
+  private exact: Bm25Projection;
+  private stems: Bm25Projection;
+  private stemmer = new RussianStemmer();
+
+  constructor(docs: Bm25Doc[]) {
+    this.exact = new Bm25Projection(docs);
+    const cache = new Map<string, string>();
+    this.stems = new Bm25Projection(docs.map(d => {
+      const tf: Record<string, number> = Object.create(null);
+      for (const term of Object.keys(d.tf)) {
+        const count = tfCount(d.tf, term);
+        if (count <= 0) continue;
+        let key = term;
+        if (RUSSIAN_WORD.test(term)) {
+          key = cache.get(term) ?? this.stemmer.stem(term);
+          cache.set(term, key);
+        }
+        tf[key] = (tf[key] ?? 0) + count;
+      }
+      return { id: d.id, tf };
+    }));
+  }
+
+  search(query: string): Bm25Scored[] {
+    const terms = tokenize(query);
+    const exact = this.exact.search(terms).map(h => ({ ...h, keywordMatch: 'exact' as const }));
+    const exactIds = new Set(exact.map(h => h.id));
+    const stems = terms.filter(t => RUSSIAN_WORD.test(t)).map(t => this.stemmer.stem(t));
+    const additional = this.stems.search(stems)
+      .filter(h => !exactIds.has(h.id))
+      .map(h => ({ ...h, keywordMatch: 'stem' as const }));
+    // Preserve exact BM25 scores and ordering before unique morphology-only hits.
+    return [...exact, ...additional];
   }
 }

@@ -198,6 +198,8 @@ export interface SearchHit {
    * warn". Absent for an arm that did not surface this hit.
    */
   similarity?: { cosine?: number; bm25?: number };
+  /** Lexical provenance; absent when only semantic retrieval surfaced a hit. */
+  keywordMatch?: 'exact' | 'stem';
 }
 
 /** Stable retrieval capability data returned by status and search tools. */

@@ -71,6 +71,7 @@ export interface SemanticSearchResult {
    * `similarity.cosine`. Absent when the engine predates the passthrough.
    */
   similarity?: { cosine?: number; bm25?: number };
+  keywordMatch?: 'exact' | 'stem';
 }
 
 /**
