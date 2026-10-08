@@ -149,14 +149,16 @@ export interface EngineConfig {
   /** Source sets to index. */
   sources: SourceSet[];
   /**
-   * Global ignore globs (fast-glob/picomatch syntax) applied on top of the
-   * built-in node_modules/.git/dist ignores. Use to keep stale or archived
+   * Explicit global ignore globs (fast-glob/picomatch syntax). Use to keep stale or archived
    * markdown (e.g. `**​/archive/**`) out of the index so retrieval surfaces
    * current truth, not abandoned plans.
    */
   exclude?: string[];
   /** Additional exclusions for the primary workspace only (personal roots are unchanged). */
   workspaceExclude?: string[];
+  /** Minimum raw cosine for semantic candidates; keyword matches remain eligible.
+   * Default 0.35 only for OpenAI text-embedding-3-small, otherwise disabled. */
+  minDenseCosine?: number;
   /** Directory (relative to root) holding markdown facts. */
   factsDir: string;
   /** Optional explicit better-sqlite3 native binding path (ABI portability). */

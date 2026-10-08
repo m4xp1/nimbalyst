@@ -34,6 +34,14 @@ function rec(id: string, title: string, text: string): VirtualRecord {
 }
 
 describe('MemoryEngine virtual records', () => {
+  it('retains Markdown heading semantics for virtual records without file extensions',async()=>{
+    const engine=makeEngine(tmpRoot());
+    try {
+      await engine.ingestRecords([rec('tracker:heading','Tracker title','## Inner heading\nquartzorchid')]);
+      const hit=(await engine.search('quartzorchid'))[0];
+      expect(hit.headingPath).toEqual(['Tracker title','Inner heading']);
+    } finally { await engine.close(); }
+  });
   it('skips unchanged catalog writes and snapshots but publishes metadata changes and empty records', async () => {
     const engine = makeEngine(tmpRoot());
     const record = rec('record:catalog', 'Catalog', 'quartzorchid');

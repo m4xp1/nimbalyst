@@ -86,6 +86,8 @@ export class MemoryEngine {
   private retriever: Retriever;
   private watcher: IndexWatcher | null = null;
   private indexing = false;
+  private indexFinished: Promise<void> = Promise.resolve();
+  private finishIndex: (() => void) | null = null;
   private fileIndex:FileIndexStatus={state:'not-started',phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
   /** True when the stored embedder differed and a re-index is needed. */
   private embedderChanged = false;
@@ -105,7 +107,7 @@ export class MemoryEngine {
     this.roots = resolveRoots(config.root, config.sources);
     this.indexer = new Indexer(config, store, embedder);
     this.facts = new FactsStore(config.root, config.factsDir);
-    this.retriever = new Retriever(store.loadAll());
+    this.retriever = new Retriever(store.loadAll(), this.retrievalPolicy());
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -141,14 +143,24 @@ export class MemoryEngine {
     return engine;
   }
 
+  private retrievalPolicy(): { minDenseCosine?: number } {
+    return {
+      // Initial fork policy, based on the small post-install fixture; not a probability.
+      // Other embedding models need their own calibration and keep the original policy.
+      minDenseCosine: this.config.minDenseCosine ??
+        (this.embedder.info.id === 'openai' && this.embedder.info.model === 'text-embedding-3-small' ? 0.35 : undefined),
+    };
+  }
+
   /** Rebuild the in-memory retrieval snapshot from the store. */
   private refreshSnapshot(): void {
-    this.retriever = new Retriever(this.store.loadAll());
+    this.retriever = new Retriever(this.store.loadAll(), this.retrievalPolicy());
   }
 
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
     if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
     this.indexing = true;
+    this.indexFinished = new Promise(resolve => { this.finishIndex = resolve; });
     this.fileIndex={state:'building',phase:'enumerate',discoveredFiles:null,completedFiles:0,failedFiles:0,error:null};
     try {
       // Publish changed chunks during a long pass, but do not deserialize the
@@ -175,7 +187,14 @@ export class MemoryEngine {
     } finally {
       this.refreshSnapshot();
       this.indexing = false;
+      this.finishIndex?.();
+      this.finishIndex = null;
     }
+  }
+
+  /** Wait for a current pass without polling or swallowing its published status. */
+  async waitForIndexing(): Promise<void> {
+    await this.indexFinished;
   }
 
   async updateSources(
@@ -406,22 +425,9 @@ export class MemoryEngine {
     };
   }
 
-  /**
-   * Total on-disk size of the shadow index (the SQLite db plus its WAL/SHM
-   * sidecars), in bytes. Best-effort: missing sidecars count as zero. Async
-   * because it stats the filesystem; kept separate from the sync `status()`.
-   */
+  /** Allocated database size; temporary SQLite journals are not indexed content. */
   async indexSizeBytes(): Promise<number> {
-    const paths = [this.config.dbPath, `${this.config.dbPath}-wal`, `${this.config.dbPath}-shm`];
-    let total = 0;
-    for (const p of paths) {
-      try {
-        total += (await stat(p)).size;
-      } catch {
-        // Sidecar (or db) not present — contributes nothing.
-      }
-    }
-    return total;
+    return this.store.sizeBytes();
   }
 
   async close(): Promise<void> {

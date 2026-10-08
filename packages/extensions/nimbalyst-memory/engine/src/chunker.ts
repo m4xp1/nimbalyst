@@ -20,6 +20,8 @@ export function estimateTokens(text: string): number {
 }
 
 export interface ChunkOptions {
+  /** Plain text preserves leading --- blocks and does not interpret headings. */
+  plainText?: boolean;
   minTokens?: number;
   maxTokens?: number;
 }
@@ -139,8 +141,8 @@ export function chunkMarkdown(
   const refId = ref?.refId ?? sourcePath;
   const minTokens = opts.minTokens ?? DEFAULT_MIN_TOKENS;
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const body = stripFrontmatter(raw);
-  const sections = toSections(body);
+  const body = opts.plainText ? raw : stripFrontmatter(raw);
+  const sections = opts.plainText ? [{ headingPath: [], lines: body.split('\n') }] : toSections(body);
 
   const texts: { headingPath: string[]; text: string }[] = [];
   for (const section of sections) {

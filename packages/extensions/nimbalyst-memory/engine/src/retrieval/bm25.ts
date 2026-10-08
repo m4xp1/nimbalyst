@@ -4,8 +4,8 @@
  * which is exactly where pure dense retrieval is weak.
  */
 
-export const LEXICAL_INDEX_VERSION = 2;
-const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_./-]*/gu;
+export const LEXICAL_INDEX_VERSION = 3;
+const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
 const K1 = 1.5;
 const B = 0.75;
 

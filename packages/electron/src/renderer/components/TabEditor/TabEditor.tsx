@@ -129,6 +129,8 @@ interface TabEditorProps {
   isActive: boolean;
 
   // Optional features
+  /** A tracker card already provides navigation and document metadata. */
+  embedded?: boolean;
   textReplacements?: Array<{ oldText?: string; newText: string }>;
   autosaveInterval?: number; // milliseconds, default 2000
   autosaveDebounce?: number; // milliseconds, default 200
@@ -152,6 +154,7 @@ interface TabEditorProps {
 }
 
 export const TabEditor: React.FC<TabEditorProps> = ({
+                                                      embedded = false,
                                                       filePath,
                                                       fileName,
                                                       initialContent,
@@ -3187,7 +3190,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           data-file-path={filePath}
           onKeyDown={handleKeyDown}
       >
-        <UnifiedEditorHeaderBar
+        {!embedded && <UnifiedEditorHeaderBar
           filePath={filePath}
           fileName={fileName}
           workspaceId={workspaceId}
@@ -3208,12 +3211,12 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           extensionMenuItems={extensionMenuItems}
           onToggleDebugTree={() => setShowTreeView(prev => !prev)}
           onContentChanged={() => setReloadVersion(v => v + 1)}
-        />
-        <FixedTabHeaderContainer
+        />}
+        {!embedded && <FixedTabHeaderContainer
           filePath={filePath}
           fileName={fileName}
           editor={isMarkdown && !sourceMode ? editorRef.current : undefined}
-        />
+        />}
         {saveFailure !== null && (
           <div
             className="save-failure-banner flex items-center gap-2 px-3 py-2 text-[13px] bg-nim-warning-subtle border-b border-nim-warning text-nim"
@@ -3340,7 +3343,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               if (registration.extensionId) {
                 return (
                   <div className="custom-editor-container flex flex-col flex-1 min-h-0 overflow-hidden" data-extension-id={registration.extensionId} data-file-path={filePath}>
-                    {customEditorShowsDocumentHeader && (
+                    {!embedded && customEditorShowsDocumentHeader && (
                       <DocumentHeaderContainer
                         filePath={filePath}
                         fileName={fileName}
@@ -3380,7 +3383,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               const CustomEditor = registration.component;
               return (
                 <div className="custom-editor-container flex flex-col flex-1 min-h-0 overflow-hidden">
-                  {customEditorShowsDocumentHeader && (
+                  {!embedded && customEditorShowsDocumentHeader && (
                     <DocumentHeaderContainer
                       filePath={filePath}
                       fileName={fileName}
@@ -3472,7 +3475,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                     onImageDoubleClick: handleImageDoubleClick,
                     onImageDragStart: handleImageDragStart,
                     showTreeView, // Debug tree view (dev mode)
-                    documentHeader: (
+                    documentHeader: embedded ? null : (
                       <DocumentHeaderContainer
                         filePath={filePath}
                         fileName={fileName}
@@ -3551,7 +3554,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             </>
           ) : (
             <>
-              {!isMarkdown && (
+              {!embedded && !isMarkdown && (
                 <DocumentHeaderContainer
                   filePath={filePath}
                   fileName={fileName}

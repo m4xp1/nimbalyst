@@ -64,6 +64,6 @@ export type {
 export * from './memory/index.js';
 export * from './types.js';
 
-export { normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, previewSourceRules, SOURCE_SAFE_EXCLUDES, type SourceRules, type SourcePreview } from './sourceRules.js';
+export { normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, expandSourcePatterns, type SourceRules } from './sourceRules.js';
 
 export { safeIndexError, type SafeIndexError, type FileIndexStatus } from './indexStatus.js';

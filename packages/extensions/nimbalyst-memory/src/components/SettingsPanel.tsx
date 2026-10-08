@@ -512,7 +512,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         </p>
       )}
 
-      <SourceSettings callBackendTool={callBackendTool} openai={embeddingSettings?.activeMode === 'openai'} onApplied={() => void refreshStatus()} />
+      <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} />
+      <div style={DIVIDER} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>
@@ -1040,7 +1041,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         <h4 style={H4}>Try your memory</h4>
         <p style={{ margin: 0, color: 'var(--nim-text-muted)', fontSize: 12 }}>
           Ask what the agent would ask. See exactly what gets recalled, and which
-          signal — semantic (embeddings) or keyword — surfaced it.
+          signal — semantic (embeddings) or keyword — surfaced it. The score is an RRF ranking value, not relevance confidence.
         </p>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -1078,7 +1079,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               return (
                 <div key={`${h.sourcePath}-${i}`} style={{ ...CARD, gap: 6, padding: '10px 12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={SCORE}>{h.score.toFixed(2)}</span>
+                    <span style={SCORE} title="RRF rank score; not a probability of relevance">{h.score.toFixed(2)}</span>
                     <span style={{ fontSize: 11, color: 'var(--nim-text-muted)', display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
                       <span style={{ color: 'var(--nim-link)', whiteSpace: 'nowrap' }}>
                         {h.sourcePath.replace(/^.*\//, '')}

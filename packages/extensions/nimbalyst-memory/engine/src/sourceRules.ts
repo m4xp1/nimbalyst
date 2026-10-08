@@ -1,43 +1,16 @@
 /// <reference path="./picomatch.d.ts" />
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
-import picomatch from "picomatch";
-import type { EngineConfig, SourceSet } from "./types.js";
-export const SOURCE_SERVICE_EXCLUDES = [
-  "**/.git/**",
-  "**/.obsidian/**",
-  "**/node_modules/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/.vite/**",
-  "**/.cache/**",
-];
-export const SOURCE_SAFE_EXCLUDES = [
-  ...SOURCE_SERVICE_EXCLUDES,
-  "**/archive/**",
-  "**/archives/**",
-  "**/.env*",
-  "**/secrets.md",
-  "**/credentials*",
-  "**/keys.md",
-  "**/*.pem",
-  "**/*.key",
-];
+import type { SourceSet } from "./types.js";
 export interface SourceRules {
   version: 1;
   include: string[];
   exclude: string[];
 }
-export interface SourcePreview {
-  rules: SourceRules;
-  files: string[];
-  excluded: { path: string; reason: string }[];
-}
 export function normalizeSourceRules(value: unknown): SourceRules {
   const v = value as Partial<SourceRules> | null;
-  function rules(input: unknown, includes: boolean): string[] {
+  function rules(input: unknown): string[] {
     if (input === undefined) return [];
     if (!Array.isArray(input) || input.length > 200)
       throw new Error("Use at most 200 source rules.");
@@ -64,11 +37,6 @@ export function normalizeSourceRules(value: unknown): SourceRules {
             throw new Error(
               "Use workspace-relative files, folders or globs; external paths are not allowed."
             );
-          if (
-            !/[*?{}[\]()]/.test(rule) &&
-            (includes ? !/\.md$/i.test(rule) : !path.extname(rule))
-          )
-            rule += "/**/*" + (includes ? ".md" : "");
           return rule;
         })
       ),
@@ -76,8 +44,8 @@ export function normalizeSourceRules(value: unknown): SourceRules {
   }
   return {
     version: 1,
-    include: rules(v?.include, true),
-    exclude: rules(v?.exclude, false),
+    include: rules(v?.include),
+    exclude: rules(v?.exclude),
   };
 }
 export function readSourceRules(dataDir: string): SourceRules {
@@ -98,6 +66,17 @@ export function writeSourceRules(dataDir: string, rules: SourceRules): void {
   const target = path.join(dataDir, "sources.json");
   writeFileSync(target + ".tmp", JSON.stringify(rules, null, 2) + "\n", "utf8");
   renameSync(target + ".tmp", target);
+}
+/** A literal may name a file or a directory; preserve the user's spelling. */
+export function expandSourcePatterns(rules: string[], root?: string): string[] {
+  return rules.flatMap(rule => {
+    if (/[*?{}[\\]()]/.test(rule)) return [rule];
+    if (root) {
+      try { return statSync(path.resolve(root, rule)).isDirectory() ? [rule + '/**'] : [rule]; }
+      catch (error) { if (!['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+    }
+    return [rule, rule + '/**'];
+  });
 }
 export function sourcesWithRules(
   builtins: SourceSet[],
@@ -122,45 +101,4 @@ export async function isInsideRealRoot(
     !relative.startsWith(".." + path.sep) &&
     !path.isAbsolute(relative)
   );
-}
-export async function previewSourceRules(
-  config: EngineConfig,
-  rules: SourceRules
-): Promise<SourcePreview> {
-  const files: string[] = [],
-    excluded: { path: string; reason: string }[] = SOURCE_SERVICE_EXCLUDES.map(
-      (p) => ({ path: p, reason: "Service/generated directory is not scanned" })
-    );
-  const candidates = rules.include.length
-    ? await fg(rules.include, {
-        cwd: config.root,
-        dot: true,
-        onlyFiles: true,
-        followSymbolicLinks: false,
-        suppressErrors: false,
-        ignore: SOURCE_SERVICE_EXCLUDES,
-      })
-    : [];
-  const reject = picomatch(
-    [...SOURCE_SAFE_EXCLUDES, ...(config.exclude ?? []), ...rules.exclude],
-    { dot: true, nocase: true }
-  );
-  for (const file of [...new Set(candidates)].sort()) {
-    if (!/\.md$/i.test(file)) {
-      excluded.push({ path: file, reason: "Markdown files only" });
-      continue;
-    }
-    if (reject(file)) {
-      excluded.push({ path: file, reason: "Matches an exclusion rule" });
-      continue;
-    }
-    if (
-      !(await isInsideRealRoot(config.root, path.resolve(config.root, file)))
-    ) {
-      excluded.push({ path: file, reason: "Link points outside workspace" });
-      continue;
-    }
-    files.push(file.replace(/\\/g, "/"));
-  }
-  return { rules, files, excluded };
 }
