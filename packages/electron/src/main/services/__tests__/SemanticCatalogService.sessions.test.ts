@@ -128,8 +128,10 @@ describe('session index reconciliation', () => {
     });
     await expect(service.setSessionsEnabled(false)).rejects.toThrow('Could not update session indexing');
     expect(records('/two').size).toBe(0); expect(h.setting).toBe(false);
+    expect(service.sessionIndexingError()).toContain('could not be reconciled');
     h.request.mockImplementation(rpc);
     await service.setSessionsEnabled(false); expect(records('/one').size).toBe(0);
+    expect(service.sessionIndexingError()).toBeNull();
   });
   it('cleans persisted sessions when a stopped engine starts again with the option off', async () => {
     const service = await startOff();
