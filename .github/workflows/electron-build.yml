@@ -123,6 +123,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packaged version validation failed' }
           $installer = Get-Item 'packages/electron/release/Nimbalyst-Windows-x64.exe'
           "Application FileVersion: $($application.VersionInfo.FileVersion); installer FileVersion: $($installer.VersionInfo.FileVersion); ProductVersion: $($installer.VersionInfo.ProductVersion)"
+          if ($installer.VersionInfo.FileVersion -ne $package.build.buildVersion) {
+            throw "Installer FileVersion mismatch: $($installer.VersionInfo.FileVersion)"
+          }
           if ($installer.Length -lt 1MB) { throw 'Installer is unexpectedly small' }
           $stream = $installer.OpenRead()
           try {
@@ -178,22 +181,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          $package = Get-Content packages/electron/package.json -Raw | ConvertFrom-Json
+          $version = $package.version
+          $revision = $package.build.buildVersion
           @"
           Nimbalyst $tag for Windows x64, built from the release branch of m4xp1/nimbalyst.
 
-          Based on upstream v0.79.1. Fork version: 0.79.1+m4xp1.1; Windows revision: 0.79.1.1.
-          - Removed the FILES target button; filename breadcrumbs still reveal/select the file.
-          - Folder breadcrumb menus support browsing, parent navigation and keyboard controls.
-          - Linked Markdown in tracker CONTENT uses the shared editable document, including file saving.
-          - Unicode/Russian BM25 and recall; existing lexical terms migrate without re-embedding.
-          - Per-project additional Markdown sources with preview, exclusions and live discovery.
-          - Memory distinguishes partial indexes, persisted chunks, embeddings, errors and file watching.
-          - Refresh reads status only; Rebuild reuses unchanged embeddings.
-          - Official upstream update notifications remain enabled; automatic download/install are disabled.
-          - No retry/backoff, query cache, model change or promise to persist new text after embedding failure.
-
-          Post-install acceptance: docs/FORK-SEARCH-ACCEPTANCE-v0.79.1-m4xp1.1.md in this tag.
-          Installed GUI and live OpenAI search require post-install acceptance; CI uses fake providers.
+          Based on upstream v0.79.1. Fork version: $version; Windows revision: $revision.
+          - Tracker CONTENT hides duplicate editor navigation and metadata while keeping file editing.
+          - Right-click empty file tree space opens the project root directory menu.
+          - Russian keyword matching handles sentence punctuation; lexical migration preserves embeddings.
+          - Source rules autosave on blur or closing settings, including empty Include/Exclude and restore.
+          - Additional sources support arbitrary UTF-8 text, including JSON, YAML, code and extensionless files.
+          - Removed source previews and fixed exclusions; users control Include/Exclude rules.
+          - Unchanged Rebuild avoids chunk writes; Index size reports stable SQLite allocated pages.
+          - Weak semantic candidates are filtered before fusion; keyword results remain eligible.
+          - Official upstream notifications remain enabled; automatic download/install are disabled.
 
           Source commit: $env:GITHUB_SHA
           Installer: Nimbalyst-Windows-x64.exe

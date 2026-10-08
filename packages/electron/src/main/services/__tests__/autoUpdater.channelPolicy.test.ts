@@ -49,6 +49,9 @@ it('refuses older releases through launch, repeated checks, and channel changes'
   const dependency = autoUpdater as unknown as { isUpdateAvailable(info: { version: string }): Promise<boolean> };
   for (let launch = 0; launch < 2; launch++) {
     const service = new AutoUpdaterService();
+    expect(autoUpdater.autoDownload).toBe(false);
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith(expect.objectContaining({ owner: 'nimbalyst', repo: 'nimbalyst' }));
     for (const channel of ['stable', 'alpha', 'stable', 'stable']) {
       settings.channel = channel;
       service.reconfigureFeedURL();
