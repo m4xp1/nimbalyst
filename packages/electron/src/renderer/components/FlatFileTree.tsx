@@ -998,6 +998,17 @@ export function FlatFileTree({
         role="tree"
         aria-label="File Explorer"
         tabIndex={0}
+        onContextMenu={(event) => {
+          const root = workspaceRootPaths[0];
+          if (!root) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setSelectedPaths(new Set([root]));
+          setLastSelectedPath(root);
+          setContextMenu({ x: event.clientX, y: event.clientY, filePath: root,
+            fileName: root.split(/[/\\]/).filter(Boolean).pop() || root,
+            fileType: 'directory', isWorkspaceRoot: true });
+        }}
         onKeyDown={handleKeyDown}
         onClick={handleContainerInteraction}
         onScroll={handleContainerInteraction}
