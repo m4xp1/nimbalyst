@@ -22,8 +22,6 @@ const PAGE_CANDIDATES = 20;
 export interface FusionConfig {
   /** RRF rank-saturation constant. See `rrf.ts` for why this is pool-relative. */
   rrfK: number;
-  /** Optional raw cosine floor before fusion. Never compare it to the RRF score. */
-  minDenseCosine?: number;
   /** Weight on the dense (embedding cosine) arm. */
   denseWeight: number;
   /** Weight on the sparse (BM25) arm. */
@@ -109,9 +107,6 @@ export class Retriever {
     }
     this.bm25 = new Bm25Index(this.chunks.map((c) => ({ id: c.id, tf: c.sparseTerms })));
     this.fusion = { ...DEFAULT_FUSION, ...fusion };
-    if (this.fusion.minDenseCosine !== undefined && (!Number.isFinite(this.fusion.minDenseCosine) || this.fusion.minDenseCosine < -1 || this.fusion.minDenseCosine > 1)) {
-      throw new Error('minDenseCosine must be finite and between -1 and 1');
-    }
     // Fail at construction, not silently at rank time: a pool-depth or k change
     // that makes fusion a consensus vote produces no error and no visible
     // symptom, just a permanently worse ranking.
@@ -151,7 +146,6 @@ export class Retriever {
     const ranked = this.pages
       .filter((p) => inScope(p))
       .map((p) => ({ p, s: cosineSimilarity(queryVector, p.denseEmbedding!) }))
-      .filter(x => x.s >= (this.fusion.minDenseCosine ?? -1))
       .sort((a, b) => b.s - a.s)
       .slice(0, this.fusion.pageCandidates);
 
@@ -206,7 +200,6 @@ export class Retriever {
         ? this.chunks
             .filter((c) => inScope(c) && c.denseEmbedding && c.denseEmbedding.length)
             .map((c) => ({ id: c.id, s: cosineSimilarity(queryVector, c.denseEmbedding!) }))
-            .filter(x => x.s >= (this.fusion.minDenseCosine ?? -1))
             .sort((a, b) => b.s - a.s)
             .slice(0, this.fusion.denseCandidates)
             .map((x) => {
@@ -215,6 +208,7 @@ export class Retriever {
             })
         : [];
 
+    const keywordMatches = new Map<string, 'exact' | 'stem'>();
     const sparseScores = new Map<string, number>();
     const sparseRanked = this.bm25
       .search(queryText)
@@ -225,6 +219,7 @@ export class Retriever {
       .slice(0, this.fusion.sparseCandidates)
       .map((x) => {
         sparseScores.set(x.id, x.score);
+        if (x.keywordMatch) keywordMatches.set(x.id, x.keywordMatch);
         return x.id;
       });
 
@@ -262,6 +257,7 @@ export class Retriever {
         score,
         citation: citation(c),
         signals: { dense: denseSet.has(id), sparse: sparseSet.has(id) },
+        ...(keywordMatches.has(id) ? { keywordMatch: keywordMatches.get(id)! } : {}),
         similarity: {
           ...(denseScores.has(id) ? { cosine: denseScores.get(id)! } : {}),
           ...(sparseScores.has(id) ? { bm25: sparseScores.get(id)! } : {}),

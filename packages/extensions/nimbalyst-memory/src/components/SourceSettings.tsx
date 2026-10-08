@@ -52,14 +52,15 @@ export function SourceSettings({ callBackendTool, onApplied }: {
   return <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Additional text sources</h3>
     <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
+      Add workspace-relative files, folders or globs, one per line. Additional sources
+      support UTF-8 text of any extension, including JSON, YAML, code and files without
+      an extension. Binary files are skipped.
+    </p>
+    <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
       Built-in Markdown sources: docs/, design/, nimbalyst-local/plans/,
       nimbalyst-local/voice-memory/, CLAUDE.md, AGENTS.md and .claude/rules/
       (including nested instruction files and rule folders). Personal harness memory,
       trackers and optional sessions are indexed separately.
-      Add workspace-relative files, folders or globs, one per line. Additional sources
-      support UTF-8 text of any extension, including JSON, YAML, code and files without
-      an extension. Binary files are skipped. Only .md files use Markdown parsing.
-      Exclusions apply to workspace files. Settings save when a field loses focus or this page closes.
     </p>
     <label>Include<textarea aria-label="Additional source includes" disabled={!loaded} style={field}
       value={include} onChange={e => { draft.current.include = e.target.value; draft.current.dirty = true; setInclude(e.target.value); }}

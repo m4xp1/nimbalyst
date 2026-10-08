@@ -1,6 +1,6 @@
 {
   "name": "@nimbalyst/electron",
-  "version": "0.79.1+m4xp1.2",
+  "version": "0.79.1+m4xp1.3",
   "private": true,
   "license": "MIT",
   "author": "Nimbalyst Team",
@@ -252,6 +252,11 @@
       "node_modules/esprima/**/*"
     ],
     "extraResources": [
+      {
+        "from": "../extensions/nimbalyst-memory/engine/src/retrieval/snowball",
+        "to": "legal/snowball-russian-3.1.1",
+        "filter": ["*.js", "COPYING", "SOURCE.md"]
+      },
       {
         "from": "../cloudflare-sandbox/dist",
         "to": "cloudflare-sandbox",
@@ -529,7 +534,7 @@
       "category": "Development",
       "maintainer": "Nimbalyst Team <support@nimbalyst.com>"
     },
-    "buildVersion": "0.79.1.2",
-    "buildNumber": "2"
+    "buildVersion": "0.79.1.3",
+    "buildNumber": "3"
   }
 }

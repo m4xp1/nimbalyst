@@ -270,6 +270,13 @@ export class SqliteStore {
     tx();
   }
 
+  /** Purge every virtual session, including records missing from the host DB. */
+  clearSessionRecords(): number {
+    return this.db.transaction(() =>
+      this.db.prepare("DELETE FROM chunks WHERE ref_type = 'session'").run().changes
+    )();
+  }
+
   deleteSource(sourcePath: string): void {
     this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`).run(sourcePath);
   }

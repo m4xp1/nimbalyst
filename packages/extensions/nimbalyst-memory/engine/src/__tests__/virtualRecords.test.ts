@@ -155,3 +155,34 @@ describe('MemoryEngine virtual records', () => {
     await engine.close();
   });
 });
+
+describe('session index purge', () => {
+  it('removes only persisted session chunks/pages and refreshes status/search without embeddings', async () => {
+    const root = tmpRoot();
+    mkdirSync(path.join(root, 'docs'));
+    writeFileSync(path.join(root, 'docs', 'a.md'), '# File\nfilemarker');
+    let engine = makeEngine(root);
+    await engine.indexAll();
+    await engine.ingestRecords([
+      { id: 'session:orphan', sourceClass: 'sessions', refType: 'session', refId: 'orphan', title: 'Old session', text: 'sessionmarker' },
+      rec('tracker:retained', 'Retained', 'trackermarker'),
+    ]);
+    await engine.close(); engine = makeEngine(root);
+    try {
+      const embeds = vi.spyOn(FakeEmbedder.prototype, 'embed');
+      const result = engine.clearSessionRecords();
+      expect(result.removed).toBeGreaterThan(0);
+      expect(embeds).not.toHaveBeenCalled();
+      expect(engine.status().bySourceClass.sessions).toBeUndefined();
+      const hits = await engine.search('sessionmarker', 100);
+      expect(hits.every((hit) => hit.refType !== 'session')).toBe(true);
+      expect(hits.some((hit) => hit.refType === 'tracker')).toBe(true);
+      expect(hits.some((hit) => hit.refType === 'doc-file')).toBe(true);
+      expect(engine.clearSessionRecords()).toEqual({ removed: 0 });
+      embeds.mockRestore();
+    } finally { await engine.close(); }
+    engine = makeEngine(root);
+    try { expect(engine.status().bySourceClass.sessions).toBeUndefined(); }
+    finally { await engine.close(); }
+  });
+});
