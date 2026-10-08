@@ -107,7 +107,7 @@ export class MemoryEngine {
     this.roots = resolveRoots(config.root, config.sources);
     this.indexer = new Indexer(config, store, embedder);
     this.facts = new FactsStore(config.root, config.factsDir);
-    this.retriever = new Retriever(store.loadAll());
+    this.retriever = new Retriever(store.loadAll(), this.retrievalPolicy());
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -143,9 +143,18 @@ export class MemoryEngine {
     return engine;
   }
 
+  private retrievalPolicy(): { minDenseCosine?: number } {
+    return {
+      // Initial fork policy, based on the small post-install fixture; not a probability.
+      // Other embedding models need their own calibration and keep the original policy.
+      minDenseCosine: this.config.minDenseCosine ??
+        (this.embedder.info.id === 'openai' && this.embedder.info.model === 'text-embedding-3-small' ? 0.35 : undefined),
+    };
+  }
+
   /** Rebuild the in-memory retrieval snapshot from the store. */
   private refreshSnapshot(): void {
-    this.retriever = new Retriever(this.store.loadAll());
+    this.retriever = new Retriever(this.store.loadAll(), this.retrievalPolicy());
   }
 
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
