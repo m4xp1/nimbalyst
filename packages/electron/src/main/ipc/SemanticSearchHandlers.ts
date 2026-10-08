@@ -51,6 +51,10 @@ export function registerSemanticSearchHandlers() {
     return SemanticCatalogService.getInstance().sessionsEnabled();
   });
 
+  safeHandle('semantic-search:get-session-indexing-error', async (): Promise<string | null> => {
+    return SemanticCatalogService.getInstance().sessionIndexingError();
+  });
+
   safeHandle(
     'semantic-search:set-index-sessions',
     async (_event, enabled: boolean): Promise<{ ok: true }> => {

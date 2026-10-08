@@ -575,6 +575,9 @@ export async function activate(ctx: ActivateCtx) {
         return requireEngine().ingestRecords(records);
       },
 
+      /** Host-only: remove persisted sessions without consulting the host DB. */
+      clearSessionRecords: async () => requireEngine().clearSessionRecords(),
+
       /** Remove virtual records by id (the same id passed to ingestRecords). */
       removeRecords: async (params: { ids?: string[] }) => {
         const ids = Array.isArray(params?.ids) ? params.ids.map(String) : [];

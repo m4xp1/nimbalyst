@@ -255,6 +255,12 @@ export class MemoryEngine {
     this.refreshSnapshot();
   }
 
+  clearSessionRecords(): { removed: number } {
+    const removed = this.store.clearSessionRecords();
+    this.refreshSnapshot();
+    return { removed };
+  }
+
   // --- Retrieval -----------------------------------------------------------
 
   async search(

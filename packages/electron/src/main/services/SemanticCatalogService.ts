@@ -177,6 +177,9 @@ export class SemanticCatalogService {
   private readinessChecks = new Map<string, ReadinessCheck>();
   private readinessRetryTimers = new Map<string, NodeJS.Timeout>();
   private started = false;
+  private sessionGenerations = new Map<string, number>();
+  private sessionErrors = new Map<string, string>();
+  private sessionOperations = new Map<string, Promise<void>>();
 
   static getInstance(): SemanticCatalogService {
     if (!this.instance) this.instance = new SemanticCatalogService();
@@ -202,7 +205,12 @@ export class SemanticCatalogService {
     if (handle.state.status === 'running') {
       this.wireWorkspace(handle.workspacePath);
       void this.refreshReadiness(handle.workspacePath, generation);
+      void this.reconcileSessions(handle.workspacePath).catch((err: unknown) =>
+        console.error('[SemanticCatalog] session reconciliation failed:', String(err))
+      );
     } else {
+      this.sessionGenerations.set(handle.workspacePath,
+        (this.sessionGenerations.get(handle.workspacePath) ?? 0) + 1);
       this.unwireWorkspace(handle.workspacePath);
     }
   }
@@ -356,7 +364,6 @@ export class SemanticCatalogService {
     this.wired.set(workspacePath, { unwatch, pending });
 
     void this.backfillTrackers(workspacePath);
-    if (this.sessionsEnabled()) void this.backfillSessions(workspacePath);
   }
 
   private unwireWorkspace(workspacePath: string): void {
@@ -465,13 +472,53 @@ export class SemanticCatalogService {
     return getAppSetting<boolean>(SESSIONS_SETTING_KEY) === true;
   }
 
+  sessionIndexingError(): string | null {
+    return this.sessionErrors.size ? [...this.sessionErrors.values()][0] : null;
+  }
+
   /** Toggle session indexing and (un)backfill every wired workspace to match. */
   async setSessionsEnabled(enabled: boolean): Promise<void> {
     setAppSetting(SESSIONS_SETTING_KEY, enabled);
-    for (const workspacePath of this.wired.keys()) {
-      if (enabled) await this.backfillSessions(workspacePath);
-      else await this.clearSessions(workspacePath);
-    }
+    const running = getPrivilegedExtensionHost().list()
+      .filter((h) => h.extensionId === EXT_ID && h.moduleId === MODULE_ID && h.state.status === 'running')
+      .map((h) => h.workspacePath);
+    const workspaces = new Set([...this.wired.keys(), ...running]);
+    const results = await Promise.allSettled([...workspaces].map((ws) => this.reconcileSessions(ws)));
+    const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (errors.length) throw new AggregateError(errors.map((r) => r.reason), 'Could not update session indexing');
+  }
+
+  /** Cancel stale passes immediately, then reconcile after any in-flight ingest. */
+  private reconcileSessions(workspacePath: string): Promise<void> {
+    const generation = (this.sessionGenerations.get(workspacePath) ?? 0) + 1;
+    this.sessionGenerations.set(workspacePath, generation);
+    const enabled = this.sessionsEnabled();
+    const previous = this.sessionOperations.get(workspacePath) ?? Promise.resolve();
+    const operation = previous.catch(() => {}).then(async () => {
+      if (this.sessionGenerations.get(workspacePath) !== generation) return;
+      if (getPrivilegedExtensionHost().getState(EXT_ID, MODULE_ID, workspacePath)?.status !== 'running') return;
+      try {
+        if (enabled) await this.backfillSessions(workspacePath, generation);
+        else await this.clearSessions(workspacePath);
+        if (this.sessionGenerations.get(workspacePath) === generation) this.sessionErrors.delete(workspacePath);
+      } catch (err) {
+        if (this.sessionGenerations.get(workspacePath) === generation) {
+          this.sessionErrors.set(workspacePath, 'Session indexing could not be reconciled. Retry the session option; saved session chunks may still be present.');
+        }
+        throw err;
+      }
+    });
+    this.sessionOperations.set(workspacePath, operation);
+    void operation.then(() => {
+      if (this.sessionOperations.get(workspacePath) === operation) this.sessionOperations.delete(workspacePath);
+    }, () => {
+      if (this.sessionOperations.get(workspacePath) === operation) this.sessionOperations.delete(workspacePath);
+    });
+    return operation;
+  }
+
+  private sessionPassCurrent(workspacePath: string, generation: number): boolean {
+    return this.sessionsEnabled() && this.sessionGenerations.get(workspacePath) === generation;
   }
 
   /** Build the indexable record for a session: title + tags + prompts + replies.
@@ -516,46 +563,39 @@ export class SemanticCatalogService {
     };
   }
 
-  private async backfillSessions(workspacePath: string): Promise<void> {
-    try {
-      const metas = await AISessionsRepository.list(workspacePath);
-      const active = metas.filter((m) => !m.isArchived).slice(0, MAX_SESSIONS);
-      let batch: VirtualRecord[] = [];
-      let count = 0;
-      for (const meta of active) {
-        const rec = await this.buildSessionRecord(meta);
-        if (!rec) continue;
-        batch.push(rec);
-        count++;
-        if (batch.length >= INGEST_BATCH) {
-          await this.ingest(workspacePath, batch);
-          batch = [];
-        }
+  private async backfillSessions(workspacePath: string, generation: number): Promise<void> {
+    const metas = await AISessionsRepository.list(workspacePath);
+    const active = metas.filter((m) => !m.isArchived).slice(0, MAX_SESSIONS);
+    let batch: VirtualRecord[] = [];
+    let count = 0;
+    for (const meta of active) {
+      if (!this.sessionPassCurrent(workspacePath, generation)) return;
+      const rec = await this.buildSessionRecord(meta);
+      if (!this.sessionPassCurrent(workspacePath, generation)) return;
+      if (!rec) continue;
+      batch.push(rec);
+      count++;
+      if (batch.length >= INGEST_BATCH) {
+        await this.ingest(workspacePath, batch);
+        batch = [];
       }
-      if (batch.length) await this.ingest(workspacePath, batch);
-      console.log(`[SemanticCatalog] backfilled ${count} session(s) for ${workspacePath}`);
-    } catch (err) {
-      console.error('[SemanticCatalog] session backfill failed:', (err as Error).message);
     }
+    if (!this.sessionPassCurrent(workspacePath, generation)) return;
+    if (batch.length) await this.ingest(workspacePath, batch);
+    console.log('[SemanticCatalog] backfilled ' + count + ' session(s) for ' + workspacePath);
   }
 
   private async clearSessions(workspacePath: string): Promise<void> {
-    try {
-      const metas = await AISessionsRepository.list(workspacePath);
-      const ids = metas.map((m) => `session:${m.id}`);
-      for (let i = 0; i < ids.length; i += INGEST_BATCH) {
-        const batch = ids.slice(i, i + INGEST_BATCH);
-        await getPrivilegedExtensionHost().request({
-          extensionId: EXT_ID,
-          moduleId: MODULE_ID,
-          workspacePath,
-          method: 'removeRecords',
-          params: { ids: batch },
-          requiredPermission: null,
-        });
-      }
-    } catch (err) {
-      console.error('[SemanticCatalog] clear sessions failed:', (err as Error).message);
+    const result = await getPrivilegedExtensionHost().request({
+      extensionId: EXT_ID,
+      moduleId: MODULE_ID,
+      workspacePath,
+      method: 'clearSessionRecords',
+      requiredPermission: null,
+    });
+    // Purging can make an otherwise searchable index empty.
+    if ((result as { removed: number }).removed > 0) {
+      await this.refreshReadiness(workspacePath, this.invalidateReadiness(workspacePath));
     }
   }
 }

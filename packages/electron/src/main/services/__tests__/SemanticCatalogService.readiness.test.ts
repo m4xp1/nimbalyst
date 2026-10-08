@@ -18,6 +18,7 @@ const { host, moduleStates, stateListeners } = vi.hoisted(() => {
         listeners.push(listener);
         return () => undefined;
       }),
+      statusRequest: vi.fn(),
       request: vi.fn(),
     },
   };
@@ -101,6 +102,8 @@ describe('SemanticCatalogService readiness', () => {
     vi.clearAllMocks();
     moduleStates.clear();
     stateListeners.length = 0;
+    host.request.mockImplementation((args: any) => args.method === 'clearSessionRecords'
+      ? Promise.resolve({ removed: 0 }) : host.statusRequest(args));
   });
 
   afterEach(() => {
@@ -109,12 +112,12 @@ describe('SemanticCatalogService readiness', () => {
   });
 
   it('fails closed when the running module has no engine', async () => {
-    host.request.mockResolvedValue(ENGINE_ABSENT);
+    host.statusRequest.mockResolvedValue(ENGINE_ABSENT);
     const service = new SemanticCatalogService();
     service.start();
 
     emitState('running');
-    await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(host.statusRequest).toHaveBeenCalledTimes(1));
 
     expect(service.isAvailable(WORKSPACE)).toBe(false);
     await expect(service.query(WORKSPACE, 'memory')).resolves.toEqual({
@@ -124,7 +127,7 @@ describe('SemanticCatalogService readiness', () => {
   });
 
   it('is available on a partially built index and stops polling once chunks land', async () => {
-    host.request
+    host.statusRequest
       // Cold start: engine up, nothing indexed yet.
       .mockResolvedValueOnce(statusPayload({ chunks: 0, indexing: true }))
       // Mid-pass: the engine refreshes its snapshot every 25 files, so partial
@@ -134,13 +137,13 @@ describe('SemanticCatalogService readiness', () => {
     service.start();
 
     emitState('running');
-    await vi.waitFor(() => expect(host.request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(host.statusRequest).toHaveBeenCalledTimes(1));
 
     // Hot path is a cached read: repeated calls issue no further RPCs.
     expect(service.isAvailable(WORKSPACE)).toBe(false);
     expect(service.isAvailable(WORKSPACE)).toBe(false);
-    expect(host.request).toHaveBeenCalledTimes(1);
-    expect(host.request).toHaveBeenCalledWith({
+    expect(host.statusRequest).toHaveBeenCalledTimes(1);
+    expect(host.statusRequest).toHaveBeenCalledWith({
       extensionId: 'com.nimbalyst.memory',
       moduleId: 'memory-engine',
       workspacePath: WORKSPACE,
@@ -153,7 +156,7 @@ describe('SemanticCatalogService readiness', () => {
 
     // Terminates: available, so no retry is armed even though indexing continues.
     await vi.advanceTimersByTimeAsync(5000);
-    expect(host.request).toHaveBeenCalledTimes(2);
+    expect(host.statusRequest).toHaveBeenCalledTimes(2);
 
     emitState('stopped');
     expect(service.isAvailable(WORKSPACE)).toBe(false);
@@ -161,7 +164,7 @@ describe('SemanticCatalogService readiness', () => {
 
   it('treats keyword-only retrieval as available', async () => {
     // No embedder: the sparse fallback is a working state, not an outage.
-    host.request.mockResolvedValue(
+    host.statusRequest.mockResolvedValue(
       statusPayload({
         chunks: 120,
         denseChunks: 0,

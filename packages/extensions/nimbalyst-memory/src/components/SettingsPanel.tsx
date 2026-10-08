@@ -167,6 +167,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   // setting and read by the host's SemanticCatalogService.
   const [indexSessions, setIndexSessions] = useState(false);
   const [togglingSessions, setTogglingSessions] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
 
   // Embedding source. The backend owns download consent, persistence, and the
   // re-index; this state is only the user's pending choice in the form.
@@ -187,21 +188,6 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
       .catch(() => {});
   }, []);
 
-  const toggleIndexSessions = useCallback(async (next: boolean) => {
-    const api = (window as { electronAPI?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } })
-      .electronAPI;
-    if (!api?.invoke) return;
-    setTogglingSessions(true);
-    setIndexSessions(next); // optimistic
-    try {
-      await api.invoke('semantic-search:set-index-sessions', next);
-    } catch {
-      setIndexSessions(!next); // revert on failure
-    } finally {
-      setTogglingSessions(false);
-    }
-  }, []);
-
   const refreshStatus = useCallback(async () => {
     if (!callBackendTool) return;
     setLoadingStatus(true);
@@ -209,12 +195,40 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
     try {
       const s = (await callBackendTool('memory.status')) as IndexStatus;
       setStatus(s);
+      const api = (window as { electronAPI?: { invoke?: (c: string) => Promise<unknown> } }).electronAPI;
+      if (api?.invoke) {
+        try {
+          const error = await api.invoke('semantic-search:get-session-indexing-error');
+          setSessionsError(typeof error === 'string' ? error : null);
+        } catch { /* Older hosts do not expose reconciliation errors. */ }
+      }
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingStatus(false);
     }
   }, [callBackendTool]);
+
+  const toggleIndexSessions = useCallback(async (next: boolean) => {
+    const api = (window as { electronAPI?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } })
+      .electronAPI;
+    if (!api?.invoke) return;
+    setSessionsError(null);
+    setTogglingSessions(true);
+    setIndexSessions(next); // optimistic
+    try {
+      await api.invoke('semantic-search:set-index-sessions', next);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Could not update session indexing.');
+      try {
+        setIndexSessions(await api.invoke('semantic-search:get-index-sessions') === true);
+      } catch { /* Keep the requested state visible alongside the error. */ }
+    } finally {
+      await refreshStatus();
+      setTogglingSessions(false);
+    }
+  }, [refreshStatus]);
+
 
   const refreshEmbeddingSettings = useCallback(async () => {
     if (!callBackendTool) return;
@@ -542,6 +556,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
             </span>
           </span>
         </label>
+        {sessionsError && <p role="alert" style={ERR}>{sessionsError}</p>}
       </section>
 
       {/* ---------------- EMBEDDING SOURCE ---------------- */}
