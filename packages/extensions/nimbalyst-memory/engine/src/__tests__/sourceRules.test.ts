@@ -14,7 +14,6 @@ import {
   readSourceRules,
   writeSourceRules,
   sourcesWithRules,
-  previewSourceRules,
 } from "../sourceRules.js";
 import { MemoryEngine } from "../engine.js";
 import { FakeEmbedder } from "./fakeEmbedder.js";
@@ -44,7 +43,29 @@ afterEach(async () => {
   for (const e of engines.splice(0)) await e.close();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-describe("custom Markdown sources", () => {
+describe("custom text sources", () => {
+  it('indexes arbitrary UTF-8 extensions and extensionless files, not binary data',async()=>{
+    const r=root(), cfg=config(r);
+    for(const p of ['config/a.json','config/a.yaml','config/a.py','config/README'])file(r,p,'---\nunique: текст\n---\n# Literal heading\nquartzorchid');
+    file(r,'docs/skipped.txt');file(r,'config/blob.bin','x\0y');writeFileSync(path.join(r,'config/invalid.dat'),Buffer.from([0xff,0xfe,0x81]));
+    const rules=normalizeSourceRules({include:['config'],exclude:['config/a.py']});
+    const store=new SqliteStore(cfg.dbPath),idx=new Indexer({...cfg,sources:sourcesWithRules(cfg.sources,rules),workspaceExclude:rules.exclude},store,new FakeEmbedder());
+    await idx.indexAll();
+    expect(store.fileSourcePaths().sort()).toEqual(['config/README','config/a.json','config/a.yaml']);
+    const text=store.chunksForSource('config/a.json')[0];expect(text.text).toContain('unique: текст');expect(text.headingPath).toEqual([]);store.close();
+  });
+  it('persists empty rules and restores a removed directory and its watcher',async()=>{
+    const r=root(),base=config(r).sources;file(r,'ропо/a.md','# Fixture\nянтарныймаяк.');
+    const embedder=new FakeEmbedder(),engine=MemoryEngine.create(config(r),embedder);engines.push(engine);
+    const set=async(include:string[])=>{const rules=normalizeSourceRules({include,exclude:[]});writeSourceRules(r,rules);await engine.waitForIndexing();await engine.updateSources(sourcesWithRules(base,readSourceRules(r)),[]);};
+    await engine.indexAll();await set(['ропо']);expect(engine.expand('ропо/a.md',[])?.text).toContain('янтарныймаяк');
+    await set([]);expect(readSourceRules(r).include).toEqual([]);expect(engine.expand('ропо/a.md',[])).toBeNull();
+    await set(['ропо2/**']);expect(engine.expand('ропо/a.md',[])).toBeNull();
+    await set(['ропо']);expect(readSourceRules(r).include).toEqual(['ропо']);expect(engine.expand('ропо/a.md',[])?.text).toContain('янтарныймаяк');
+    file(r,'ропо/new.json','{"marker":"лазурныйкомпас"}');
+    await vi.waitFor(()=>expect(engine.expand('ропо/new.json',[])?.text).toContain('лазурныйкомпас'),{timeout:9000,interval:100});
+    await set([]);expect(engine.expand('ропо/new.json',[])).toBeNull();
+  });
   it("normalizes Windows relative folders and persists per-project rules", () => {
     const a = root(),
       b = root(),
@@ -53,7 +74,7 @@ describe("custom Markdown sources", () => {
         exclude: ["research/drafts"],
       });
     expect(rules.include).toEqual([
-      "research/русский каталог/**/*.md",
+      "research/русский каталог",
       "MAP.md",
     ]);
     writeSourceRules(a, rules);
@@ -67,7 +88,7 @@ describe("custom Markdown sources", () => {
     ])
       expect(() => normalizeSourceRules({ include: [unsafe] })).toThrow();
   });
-  it("previews exclusions and indexes overlaps once with built-in classification", async () => {
+  it("uses only user exclusions and indexes overlaps once with built-in classification", async () => {
     const r = root();
     for (const p of [
       "docs/good.md",
@@ -89,11 +110,6 @@ describe("custom Markdown sources", () => {
       sources: sourcesWithRules(config(r).sources, rules),
       workspaceExclude: rules.exclude,
     };
-    const preview = await previewSourceRules(cfg, rules);
-    expect(preview.files).toEqual(["MAP.md", "docs/good.md"]);
-    expect(preview.excluded.some((x) => x.path === "docs/credentials.md")).toBe(
-      true
-    );
     const store = new SqliteStore(cfg.dbPath),
       embedder = new FakeEmbedder(),
       idx = new Indexer(cfg, store, embedder);
@@ -103,10 +119,12 @@ describe("custom Markdown sources", () => {
         { sourcePath: "MAP.md", sourceClass: "custom" },
       ])
     );
-    expect(await idx.enumerate()).toHaveLength(2);
-    expect(idx.classify(path.join(r, "docs/SeCrEtS.MD"))).toBeNull();
+    expect(await idx.enumerate()).toHaveLength(7);
+    expect(idx.classify(path.join(r, "docs/SeCrEtS.MD"))?.sourceClass).toBe("custom");
     await idx.indexAll();
-    expect(store.fileSourcePaths().sort()).toEqual(["MAP.md", "docs/good.md"]);
+    expect(store.fileSourcePaths()).toHaveLength(7);
+    expect(store.fileSourcePaths()).toContain(".obsidian/private.md");
+    expect(store.fileSourcePaths()).not.toContain("research/skip.md");
     store.close();
   });
   it("rejects junctions outside the workspace", async () => {
@@ -116,7 +134,6 @@ describe("custom Markdown sources", () => {
     symlinkSync(outside, path.join(r, "escape"), "junction");
     const rules = normalizeSourceRules({ include: ["escape/**/*.md"] });
     const cfg = { ...config(r), sources: sourcesWithRules([], rules) };
-    expect((await previewSourceRules(cfg, rules)).files).toEqual([]);
     const store = new SqliteStore(cfg.dbPath),
       idx = new Indexer(cfg, store, new FakeEmbedder());
     expect(await idx.enumerate()).toEqual([]);

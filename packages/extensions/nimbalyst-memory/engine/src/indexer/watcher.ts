@@ -17,7 +17,7 @@
  */
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { SOURCE_SERVICE_EXCLUDES } from '../sourceRules.js';
+import { expandSourcePatterns } from '../sourceRules.js';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import fg from 'fast-glob';
@@ -26,8 +26,6 @@ import { rootForSet, type ResolvedRoot } from '../roots.js';
 import type { Indexer } from './indexer.js';
 
 const DEBOUNCE_MS = 400;
-const IGNORED = /(^|[/\\])(node_modules|\.git|\.obsidian|dist|build|archive|archives|\.vite|\.cache)([/\\]|$)/;
-const FG_IGNORE = SOURCE_SERVICE_EXCLUDES;
 
 /** Static directory prefix of a glob (the part before the first magic char). */
 export function globBaseDir(glob: string): string {
@@ -130,7 +128,6 @@ export class IndexWatcher {
     )
       return;
     this.watcher = chokidar.watch(targets, {
-      ignored: (p: string) => IGNORED.test(p),
       ignoreInitial: true,
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
@@ -154,7 +151,7 @@ export class IndexWatcher {
   private resolveWatchTargets(): string[] {
     const targets: string[] = [];
     for (const scope of computeWatchScopes(
-      this.config.sources,
+      this.config.sources.map(set => ({ ...set, include: expandSourcePatterns(set.include, rootForSet(this.indexer.sourceRoots(), set).dir) })),
       this.indexer.sourceRoots()
     )) {
       for (const d of scope.dirs) {
@@ -169,7 +166,7 @@ export class IndexWatcher {
           onlyFiles: true,
           followSymbolicLinks: false,
           suppressErrors: true,
-          ignore: FG_IGNORE,
+          ignore: [...(this.config.exclude ?? []), ...(scope.root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : [])],
         });
         targets.push(...files);
       }
@@ -213,7 +210,7 @@ export class IndexWatcher {
   }
 
   private queue(absPath: string, op: "upsert" | "remove"): void {
-    if (this.stopped || !/\.md$/i.test(absPath)) return;
+    if (this.stopped) return;
     // classify() also yields the canonical sourcePath — with more than one root
     // the watcher can no longer derive it from config.root.
     const hit = this.indexer.classify(absPath);

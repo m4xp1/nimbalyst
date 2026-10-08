@@ -86,6 +86,8 @@ export class MemoryEngine {
   private retriever: Retriever;
   private watcher: IndexWatcher | null = null;
   private indexing = false;
+  private indexFinished: Promise<void> = Promise.resolve();
+  private finishIndex: (() => void) | null = null;
   private fileIndex:FileIndexStatus={state:'not-started',phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
   /** True when the stored embedder differed and a re-index is needed. */
   private embedderChanged = false;
@@ -149,6 +151,7 @@ export class MemoryEngine {
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
     if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
     this.indexing = true;
+    this.indexFinished = new Promise(resolve => { this.finishIndex = resolve; });
     this.fileIndex={state:'building',phase:'enumerate',discoveredFiles:null,completedFiles:0,failedFiles:0,error:null};
     try {
       // Publish changed chunks during a long pass, but do not deserialize the
@@ -175,7 +178,14 @@ export class MemoryEngine {
     } finally {
       this.refreshSnapshot();
       this.indexing = false;
+      this.finishIndex?.();
+      this.finishIndex = null;
     }
+  }
+
+  /** Wait for a current pass without polling or swallowing its published status. */
+  async waitForIndexing(): Promise<void> {
+    await this.indexFinished;
   }
 
   async updateSources(

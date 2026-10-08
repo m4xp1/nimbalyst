@@ -26,7 +26,7 @@ import {
   createEmbedder,
   defaultSources,
   safeIndexError,
-  normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, previewSourceRules,
+  normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
 } from '../engine/dist/index.js';
 import type { EngineConfig, SearchHit, VirtualRecord } from '../engine/dist/index.js';
 // The write gate. It runs on the LIVE `remember` path below rather than at
@@ -415,17 +415,13 @@ export async function activate(ctx: ActivateCtx) {
   const dbPath = path.join(dataDir, 'index.db');
 
   let sourceRules = readSourceRules(dataDir);
-  let sourceChangeInProgress=false;
+  let sourceChanges: Promise<unknown> = Promise.resolve();
   const config: EngineConfig = {
     root: workspacePath,
     dbPath,
     factsDir: FACTS_DIR,
     sources: sourcesWithRules(defaultSources(FACTS_DIR, workspacePath),sourceRules),
     workspaceExclude: sourceRules.exclude,
-    // Keep stale/archived markdown out of the index so retrieval surfaces
-    // current truth, not abandoned plans (e.g. nimbalyst-local/plans/archive/**
-    // duplicating live design docs).
-    exclude: ['**/archive/**'],
     // Surface engine-internal warnings (e.g. a failed query embedding that
     // would otherwise silently degrade search to sparse-only) into the host log.
     onLog: (level, message) => log(level, message),
@@ -532,8 +528,8 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_sources','preview_sources','set_sources'].map(name => ({
-      name, description: 'Project Markdown source settings (owning settings panel only).',
+    })), ...['get_sources','set_sources'].map(name => ({
+      name, description: 'Project text source settings (owning settings panel only).',
       inputSchema: {type:'object',properties:{include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
@@ -541,27 +537,22 @@ export async function activate(ctx: ActivateCtx) {
 
   return {
     methods: {
-      get_sources: async () => sourceRules,
-      preview_sources: async (params: unknown) =>
-        previewSourceRules(config, normalizeSourceRules(params)),
-      set_sources: async (params: unknown) => {
-        if (sourceChangeInProgress || requireEngine().status().indexing)
-          throw new Error(
-            "Wait for indexing to finish before applying sources."
-          );
+      get_sources: async () => { await sourceChanges.catch(() => {}); return sourceRules; },
+      set_sources: (params: unknown) => {
         const next = normalizeSourceRules(params);
-        await previewSourceRules(config, next);
-        sourceChangeInProgress = true;
-        try {
+        const apply = async () => {
+          const eng = requireEngine();
+          await eng.waitForIndexing();
           writeSourceRules(dataDir, next);
           sourceRules = next;
-          return await requireEngine().updateSources(
-            sourcesWithRules(defaultSources(FACTS_DIR, workspacePath), next),
-            next.exclude
+          const result = await eng.updateSources(
+            sourcesWithRules(defaultSources(FACTS_DIR, workspacePath), next), next.exclude
           );
-        } finally {
-          sourceChangeInProgress = false;
-        }
+          return { ...result, rules: next };
+        };
+        const task = sourceChanges.catch(() => {}).then(apply);
+        sourceChanges = task;
+        return task;
       },
       search_project_knowledge: async (params: { query?: string; k?: number }) => {
         const query = String(params?.query ?? '');
@@ -900,6 +891,8 @@ export async function activate(ctx: ActivateCtx) {
     },
 
     deactivate: async () => {
+      await sourceChanges.catch(() => {});
+      await engine?.waitForIndexing();
       await engine?.close();
     },
   };

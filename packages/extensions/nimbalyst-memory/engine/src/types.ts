@@ -149,8 +149,7 @@ export interface EngineConfig {
   /** Source sets to index. */
   sources: SourceSet[];
   /**
-   * Global ignore globs (fast-glob/picomatch syntax) applied on top of the
-   * built-in node_modules/.git/dist ignores. Use to keep stale or archived
+   * Explicit global ignore globs (fast-glob/picomatch syntax). Use to keep stale or archived
    * markdown (e.g. `**​/archive/**`) out of the index so retrieval surfaces
    * current truth, not abandoned plans.
    */

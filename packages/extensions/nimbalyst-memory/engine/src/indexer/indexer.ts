@@ -7,7 +7,7 @@
  * not the whole file.
  */
 import { readFile } from 'node:fs/promises';
-import { SOURCE_SAFE_EXCLUDES, isInsideRealRoot } from '../sourceRules.js';
+import { expandSourcePatterns, isInsideRealRoot } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
 import picomatch from 'picomatch';
@@ -110,8 +110,6 @@ function pageRowFor(
   };
 }
 
-const BASE_IGNORE = SOURCE_SAFE_EXCLUDES;
-
 export class Indexer {
   private roots: ResolvedRoot[];
   private matchers: { sourceClass: string; root: ResolvedRoot; isMatch: (p: string) => boolean }[];
@@ -130,12 +128,12 @@ export class Indexer {
     this.matchers = config.sources.map((set) => ({
       sourceClass: set.sourceClass,
       root: rootForSet(this.roots, set),
-      isMatch: picomatch(set.include, { dot: true }),
+      isMatch: picomatch(expandSourcePatterns(set.include, rootForSet(this.roots,set).dir), { dot: true }),
     }));
-    const exclude = [...BASE_IGNORE, ...(config.exclude ?? [])];
-    this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(config.workspaceExclude,{dot:true,nocase:true}) : () => false;
+    const exclude = config.exclude ?? [];
+    this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(expandSourcePatterns(config.workspaceExclude, config.root),{dot:true,nocase:true}) : () => false;
     this.isExcluded = exclude.length ? picomatch(exclude, { dot: true, nocase: true }) : () => false;
-    this.ignoreGlobs = [...BASE_IGNORE, ...exclude];
+    this.ignoreGlobs = exclude;
   }
 
   /** The configured roots, primary first. */
@@ -177,7 +175,7 @@ export class Indexer {
    */
   private async globSet(set: SourceSet): Promise<string[]> {
     const root = rootForSet(this.roots, set);
-    const rels = await fg(set.include, {
+    const rels = await fg(expandSourcePatterns(set.include, root.dir), {
       cwd: root.dir,
       absolute: false,
       dot: true,
@@ -186,13 +184,12 @@ export class Indexer {
       suppressErrors: false,
       ignore: [
         ...this.ignoreGlobs,
-        ...(root.id === null ? this.config.workspaceExclude ?? [] : []),
+        ...(root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : []),
       ],
     });
     const safe: string[] = [];
     for (const rel of rels) {
       if (
-        !/\.md$/i.test(rel) ||
         this.isExcluded(rel) ||
         (root.id === null && this.isWorkspaceExcluded(rel))
       )
@@ -249,7 +246,10 @@ export class Indexer {
     let raw: string;
     try {
       if (root.id === null && !await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
-      raw = await readFile(abs, 'utf8');
+      const bytes = await readFile(abs);
+      if (bytes.includes(0)) { this.store.deleteSource(sourcePath); return 0; }
+      try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+      catch { this.store.deleteSource(sourcePath); return 0; }
     } catch (err) {
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
@@ -351,7 +351,7 @@ export class Indexer {
     raw: string,
     ref?: { refType?: string; refId?: string }
   ): PreparedSource {
-    const chunks = chunkMarkdown(sourcePath, sourceClass, raw, this.config.chunk, ref);
+    const chunks = chunkMarkdown(sourcePath, sourceClass, raw, { ...this.config.chunk, plainText: !/\.md$/i.test(sourcePath) }, ref);
     // A2: the page-level vector rides the same dirty-check and prune path as
     // the chunks, so it stays consistent with them for free.
     const page = pageRowFor(sourcePath, sourceClass, raw, chunks.length, ref);

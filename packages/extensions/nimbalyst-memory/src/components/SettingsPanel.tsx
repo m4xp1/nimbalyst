@@ -512,7 +512,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         </p>
       )}
 
-      <SourceSettings callBackendTool={callBackendTool} openai={embeddingSettings?.activeMode === 'openai'} onApplied={() => void refreshStatus()} />
+      <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} />
+      <div style={DIVIDER} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>

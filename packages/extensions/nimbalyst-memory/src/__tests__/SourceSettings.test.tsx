@@ -1,107 +1,47 @@
 // @vitest-environment jsdom
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  cleanup,
-} from "@testing-library/react";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { SourceSettings } from "../components/SourceSettings";
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { SourceSettings } from '../components/SourceSettings';
 afterEach(cleanup);
-describe("source settings", () => {
-  it("requires preview, displays provider notice and applies normalized rules", async () => {
-    const rules = {
-      version: 1,
-      include: ["MAP.md", "research/**/*.md"],
-      exclude: [],
-    };
-    const call = vi.fn(async (name: string) =>
-      name === "memory.get_sources"
-        ? { version: 1, include: [], exclude: [] }
-        : name === "memory.preview_sources"
-        ? {
-            rules,
-            files: ["MAP.md"],
-            excluded: [{ path: "secrets.md", reason: "Excluded" }],
-          }
-        : {}
-    );
-    const applied = vi.fn();
-    render(
-      <SourceSettings callBackendTool={call} openai onApplied={applied} />
-    );
-    const field = await screen.findByLabelText("Additional source includes");
-    await waitFor(() =>
-      expect((field as HTMLTextAreaElement).disabled).toBe(false)
-    );
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Apply sources",
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true);
-    fireEvent.change(field, { target: { value: "MAP.md\nresearch/" } });
-    fireEvent.click(screen.getByRole("button", { name: "Preview files" }));
-    await screen.findByText(/1 matching Markdown/);
-    expect(call).toHaveBeenCalledWith("memory.preview_sources", {
-      version: 1,
-      include: ["MAP.md", "research/"],
-      exclude: [],
-    });
-    screen.getByRole("note");
-    fireEvent.click(screen.getByRole("button", { name: "Apply sources" }));
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("memory.set_sources", rules)
-    );
-    expect(applied).toHaveBeenCalled();
-  });
-  it("invalidates the preview after edits and reports errors without raw provider data", async () => {
-    const call = vi.fn(async (name: string) =>
-      name === "memory.get_sources"
-        ? { version: 1, include: [], exclude: [] }
-        : name === "memory.preview_sources"
-        ? {
-            rules: { version: 1, include: [], exclude: [] },
-            files: [],
-            excluded: [],
-          }
-        : Promise.reject(new Error("SECRET RESPONSE"))
-    );
-    render(
-      <SourceSettings
-        callBackendTool={call}
-        openai={false}
-        onApplied={() => {}}
-      />
-    );
-    await waitFor(() =>
-      expect(
-        (
-          screen.getByRole("button", {
-            name: "Preview files",
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(false)
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Preview files" }));
-    await screen.findByText(/0 matching Markdown/);
-    fireEvent.change(screen.getByLabelText("Additional source includes"), {
-      target: { value: "MAP.md" },
-    });
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Apply sources",
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Preview files" }));
-    await screen.findByText(/0 matching Markdown/);
-    fireEvent.click(screen.getByRole("button", { name: "Apply sources" }));
-    expect((await screen.findByRole("alert")).textContent).not.toContain(
-      "SECRET RESPONSE"
-    );
-  });
+const initial = { version: 1, include: ['ропо'], exclude: [] };
+async function field() { const f=screen.getByLabelText('Additional source includes'); await waitFor(()=>expect((f as HTMLTextAreaElement).disabled).toBe(false));return f; }
+describe('automatic source settings',()=>{
+ it('saves empty includes on blur without preview or Apply',async()=>{
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?initial:{});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);
+  const f=await field();fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{version:1,include:[],exclude:[]}));
+  expect(screen.queryByRole('button')).toBeNull();expect(screen.queryByRole('note')).toBeNull();
+ });
+ it('does not replace edits when callbacks change and saves on close',async()=>{
+  const first=vi.fn(async()=>initial),second=vi.fn(async()=>({}));
+  const r=render(<SourceSettings callBackendTool={first} onApplied={()=>{}}/>);
+  const f=await field();fireEvent.change(f,{target:{value:'config/**/*.json'}});
+  r.rerender(<SourceSettings callBackendTool={second} onApplied={()=>{}}/>);
+  expect((f as HTMLTextAreaElement).value).toBe('config/**/*.json');expect(second).not.toHaveBeenCalled();
+  r.unmount();await waitFor(()=>expect(second).toHaveBeenCalledWith('memory.set_sources',{version:1,include:['config/**/*.json'],exclude:[]}));
+ });
+ it('serializes rapid blur and close updates and keeps the latest draft',async()=>{
+  let release!:()=>void;const hold=new Promise<void>(r=>release=r);
+  const call=vi.fn(async(name:string,params?:any)=>name==='memory.get_sources'?initial:params.include[0]==='ропо2'?hold:{});
+  const r=render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);
+  const f=await field();fireEvent.change(f,{target:{value:'ропо2'}});fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledTimes(2));
+  fireEvent.change(f,{target:{value:'ропо'}});r.unmount();expect(call).toHaveBeenCalledTimes(2);
+  await act(async()=>release());await waitFor(()=>expect(call).toHaveBeenLastCalledWith('memory.set_sources',initial));
+ });
+ it('saves Include and Exclude together when either loses focus',async()=>{
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?initial:{});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
+  const e=screen.getByLabelText('Source excludes');fireEvent.change(e,{target:{value:'cache/**'}});fireEvent.blur(e);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...initial,exclude:['cache/**']}));
+ });
+ it('reports failed saves safely and retries on the next blur',async()=>{
+  let fail=true;const call=vi.fn(async(name:string)=>{if(name==='memory.get_sources')return initial;if(fail)throw new Error('SECRET RESPONSE');return {};});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);const f=await field();
+  fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
+  expect((await screen.findByRole('alert')).textContent).not.toContain('SECRET');
+  fail=false;fireEvent.blur(f);await waitFor(()=>expect(screen.queryByRole('alert')).toBeNull());
+  expect(call).toHaveBeenCalledTimes(3);
+ });
 });
