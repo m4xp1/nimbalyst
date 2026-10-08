@@ -351,7 +351,7 @@ export class Indexer {
     raw: string,
     ref?: { refType?: string; refId?: string }
   ): PreparedSource {
-    const chunks = chunkMarkdown(sourcePath, sourceClass, raw, { ...this.config.chunk, plainText: !/\.md$/i.test(sourcePath) }, ref);
+    const chunks = chunkMarkdown(sourcePath, sourceClass, raw, { ...this.config.chunk, plainText: (ref?.refType ?? 'doc-file') === 'doc-file' && !/\.md$/i.test(sourcePath) }, ref);
     // A2: the page-level vector rides the same dirty-check and prune path as
     // the chunks, so it stays consistent with them for free.
     const page = pageRowFor(sourcePath, sourceClass, raw, chunks.length, ref);
