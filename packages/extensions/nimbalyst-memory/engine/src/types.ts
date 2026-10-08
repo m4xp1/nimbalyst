@@ -156,9 +156,6 @@ export interface EngineConfig {
   exclude?: string[];
   /** Additional exclusions for the primary workspace only (personal roots are unchanged). */
   workspaceExclude?: string[];
-  /** Minimum raw cosine for semantic candidates; keyword matches remain eligible.
-   * Default 0.35 only for OpenAI text-embedding-3-small, otherwise disabled. */
-  minDenseCosine?: number;
   /** Directory (relative to root) holding markdown facts. */
   factsDir: string;
   /** Optional explicit better-sqlite3 native binding path (ABI portability). */
