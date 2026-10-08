@@ -486,7 +486,7 @@ export class SemanticCatalogService {
     const workspaces = new Set([...this.wired.keys(), ...running]);
     const results = await Promise.allSettled([...workspaces].map((ws) => this.reconcileSessions(ws)));
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (errors.length) throw new AggregateError(errors.map((r) => r.reason), 'Could not update session indexing');
+    if (errors.length) throw new Error('Could not update session indexing (' + errors.length + ' workspace(s) failed)');
   }
 
   /** Cancel stale passes immediately, then reconcile after any in-flight ingest. */
