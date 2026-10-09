@@ -21,12 +21,17 @@ internal data class ProcessedSessionEntry(
 /**
  * Turns decrypted wire entries into Room rows, merging each onto the row
  * already stored. Pure apart from two per-session caches: the last draft this
- * device pushed (to ignore self-echoes) and the last client-metadata blob seen
- * from the server (so a draft push can carry the desktop's fields forward).
+ * device pushed (to ignore self-echoes) and the newest client-metadata blob
+ * seen from the server (so a draft push can carry the desktop's fields
+ * forward). The blob is also stored on the row, which is what survives a
+ * restart; the cache only covers a row write that has not landed yet.
  */
 internal class SessionEntryDecoder(private val gson: Gson) {
     private val lastPushedDraftAt = ConcurrentHashMap<String, Long>()
     private val remoteClientMetadata = ConcurrentHashMap<String, JsonObject>()
+
+    /** Fires when a session's server blob becomes known, so a draft held for lack of one can go out. */
+    var onClientMetadataKnown: ((sessionId: String) -> Unit)? = null
 
     companion object {
         private const val TAG = "SessionEntryDecoder"
@@ -59,8 +64,10 @@ internal class SessionEntryDecoder(private val gson: Gson) {
         lastPushedDraftAt[sessionId] = at
     }
 
-    /** The newest client-metadata blob known for [sessionId], as plaintext JSON. */
-    fun clientMetadataBase(sessionId: String): JsonObject? = remoteClientMetadata[sessionId]?.deepCopy()
+    /** The newest client-metadata blob known for [session], or null when the server's is unknown. */
+    fun clientMetadataBase(session: SessionEntity): JsonObject? =
+        remoteClientMetadata[session.id]?.deepCopy()
+            ?: session.clientMetadataJson?.let { runCatching { gson.fromJson(it, JsonObject::class.java) }.getOrNull() }
 
     fun recordPublishedClientMetadata(sessionId: String, blob: JsonObject) {
         remoteClientMetadata[sessionId] = blob.deepCopy()
@@ -93,14 +100,23 @@ internal class SessionEntryDecoder(private val gson: Gson) {
         )
     }
 
+    /**
+     * [serverRow] marks an entry read from the server's stored row (a snapshot
+     * or replication page), where no blob means the server has none. A
+     * broadcast echoes the sender's message, which may simply have omitted it.
+     */
     fun decodeSession(
         entry: ServerSessionEntry,
         crypto: CryptoManager,
         existing: SessionEntity?,
+        serverRow: Boolean = false,
     ): ProcessedSessionEntry? {
         val projectId = crypto.decryptOrNull(entry.encryptedProjectId, entry.projectIdIv) ?: return null
         val titleDecrypted = crypto.decryptOrNull(entry.encryptedTitle, entry.titleIv)
         val clientMetadata = decodeClientMetadata(entry.sessionId, entry.encryptedClientMetadata, entry.clientMetadataIv, crypto)
+        if (serverRow && entry.encryptedClientMetadata == null && existing?.clientMetadataJson == null) {
+            recordRemote(entry.sessionId, JsonObject())
+        }
         val remoteDraftInput = clientMetadata?.draftInput
         val draftInput = remoteDraftInput?.ifBlank { null }
         val acceptDraft = remoteDraftInput != null && shouldAcceptRemoteDraft(
@@ -119,9 +135,9 @@ internal class SessionEntryDecoder(private val gson: Gson) {
                 model = entry.model ?: existing?.model,
                 mode = entry.mode ?: existing?.mode,
                 sessionType = entry.sessionType ?: existing?.sessionType,
-                parentSessionId = entry.parentSessionId ?: existing?.parentSessionId,
+                parentSessionId = if (entry.parentSessionIdPresent) entry.parentSessionId else entry.parentSessionId ?: existing?.parentSessionId,
                 agentRole = entry.agentRole ?: existing?.agentRole,
-                createdBySessionId = entry.createdBySessionId ?: existing?.createdBySessionId,
+                createdBySessionId = if (entry.createdBySessionIdPresent) entry.createdBySessionId else entry.createdBySessionId ?: existing?.createdBySessionId,
                 hostDeviceId = entry.hostDeviceId ?: existing?.hostDeviceId,
                 // Transient and never stored by the server: an entry is a full
                 // snapshot of the sender's view, so absent means none pending.
@@ -156,7 +172,8 @@ internal class SessionEntryDecoder(private val gson: Gson) {
                     clientMetadata?.draftUpdatedAt ?: existing?.draftUpdatedAt
                 } else {
                     existing?.draftUpdatedAt
-                }
+                },
+                clientMetadataJson = remoteBlobJson(entry.sessionId) ?: existing?.clientMetadataJson
             ),
             queuedPrompts = decryptQueuedPrompts(entry.sessionId, entry.encryptedQueuedPrompts, crypto),
             clearQueuedPrompts = entry.queuedPromptCount == 0 || entry.encryptedQueuedPrompts?.isEmpty() == true
@@ -251,8 +268,16 @@ internal class SessionEntryDecoder(private val gson: Gson) {
                 clientMetadata?.draftUpdatedAt ?: existing.draftUpdatedAt
             } else {
                 existing.draftUpdatedAt
-            }
+            },
+            clientMetadataJson = remoteBlobJson(sessionId) ?: existing.clientMetadataJson
         )
+    }
+
+    private fun remoteBlobJson(sessionId: String): String? = remoteClientMetadata[sessionId]?.let(gson::toJson)
+
+    private fun recordRemote(sessionId: String, raw: JsonObject) {
+        remoteClientMetadata[sessionId] = raw
+        onClientMetadataKnown?.invoke(sessionId)
     }
 
     fun decryptQueuedPrompts(
@@ -285,7 +310,7 @@ internal class SessionEntryDecoder(private val gson: Gson) {
         val json = crypto.decryptOrNull(encryptedMetadata, metadataIv) ?: return null
         return try {
             val raw = gson.fromJson(json, JsonObject::class.java) ?: return null
-            remoteClientMetadata[sessionId] = raw
+            recordRemote(sessionId, raw)
             gson.fromJson(raw, ClientMetadata::class.java)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse ClientMetadata: ${e.message}")

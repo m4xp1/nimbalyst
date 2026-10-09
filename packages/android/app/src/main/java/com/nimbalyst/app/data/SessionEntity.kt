@@ -59,5 +59,12 @@ data class SessionEntity(
     /** Stable id of the desktop or headless host that runs this session. */
     val hostDeviceId: String? = null,
     val pendingExecution: PendingExecution? = null,
+    /**
+     * The last client-metadata blob the server holds for this session, as
+     * plaintext JSON. The server replaces the blob whole, so a draft push is
+     * written into this rather than rebuilt from the row's columns, which
+     * would drop fields this build does not model. Null until one is known.
+     */
+    val clientMetadataJson: String? = null,
 )
 

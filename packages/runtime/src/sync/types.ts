@@ -129,6 +129,16 @@ export interface SyncStatus {
  * needs to know (the headless node, which must retain an unpublished transcript
  * row and retry it) reads the outcome.
  */
+/** Local guards never cross the wire; they are checked at the actual send boundary. */
+export interface PushChangeOptions { isCurrent?: () => boolean }
+export interface HierarchyIndexRow {
+  sessionId: string;
+  parentSessionId?: string | null;
+  createdBySessionId?: string | null;
+  hostDeviceId?: string;
+}
+export type HierarchySnapshotListener = (rows: readonly HierarchyIndexRow[], isCurrent: () => boolean) => void | Promise<void>;
+
 export interface PushChangeOutcome {
   /** True when the change was handed to the transport. */
   published: boolean;
@@ -220,6 +230,7 @@ export interface SyncProvider {
   pushChange(
     sessionId: string,
     change: SessionChange,
+    options?: PushChangeOptions,
   ): void | Promise<void | PushChangeOutcome>;
 
   /**
@@ -269,7 +280,8 @@ export interface SyncProvider {
       model?: string;
       mode?: 'agent' | 'planning';
       sessionType?: string;
-      parentSessionId?: string;
+      parentSessionId?: string | null;
+      createdBySessionId?: string | null;
       worktreeId?: string;
       hostDeviceId?: string;
       isArchived?: boolean;
@@ -299,9 +311,15 @@ export interface SyncProvider {
     }>;
   }>;
 
-  /** Subscribe to index changes (session updates broadcast to all connected clients) */
+  /** Verified server rows only, grouped into a complete proposed graph. */
+  onHierarchySnapshot?(callback: HierarchySnapshotListener): () => void;
+
+  /** Live changes and queue recovery; replayHierarchy opts into verified bootstrap hierarchy reconciliation. */
   onIndexChange?(callback: (sessionId: string, entry: {
     sessionId: string;
+    /** Hierarchy placement in a complete index row; undefined means omitted. */
+    parentSessionId?: string | null;
+    createdBySessionId?: string | null;
     /** Stable device ID of the host that owns this session. */
     hostDeviceId?: string;
     title?: string;
@@ -327,7 +345,7 @@ export interface SyncProvider {
     draftInput?: string;
     /** Epoch ms when draftInput was last updated by the sending device */
     draftUpdatedAt?: number;
-  }) => void): () => void;
+  }) => void, options?: { replayHierarchy?: boolean }): () => void;
 
   /** Get cached metadata for a session (populated from syncResponse and metadataBroadcast) */
   getCachedMetadata?(sessionId: string): {
@@ -344,6 +362,8 @@ export interface SyncProvider {
    * Note: Returns decrypted values - title is always present after decryption */
   getCachedIndexEntry?(sessionId: string): {
     sessionId: string;
+    parentSessionId?: string | null;
+    createdBySessionId?: string | null;
     /** Stable device ID of the host that owns this session. */
     hostDeviceId?: string;
     projectId: string;
@@ -570,7 +590,7 @@ export interface SessionIndexData {
   /** Structural type: 'session' (normal), 'workstream' (parent container), 'blitz' (quick task) */
   sessionType?: string;
   /** Parent session ID for workstream/worktree hierarchy */
-  parentSessionId?: string;
+  parentSessionId?: string | null;
   /** Worktree ID for git worktree association */
   worktreeId?: string;
   /** Stable device ID of the host that owns this session. */
@@ -674,7 +694,7 @@ export interface SyncedSessionMetadata {
   /** Structural type: 'session' | 'workstream' | 'blitz' */
   sessionType?: string;
   /** Parent session ID for workstream/worktree hierarchy */
-  parentSessionId?: string;
+  parentSessionId?: string | null;
   /** Worktree association (mirrored from ai_sessions.worktree_id). */
   worktreeId?: string;
   /** Stable device ID of the host that owns this session. */
@@ -682,7 +702,7 @@ export interface SyncedSessionMetadata {
   /** Agent role marker (e.g. 'meta-agent', 'standard'); drives mobile meta-agent grouping. */
   agentRole?: string;
   /** Meta-agent parent session ID for spawned children; drives mobile meta-agent grouping. */
-  createdBySessionId?: string;
+  createdBySessionId?: string | null;
   provider?: string;
   model?: string;
   workspaceId?: string;
@@ -738,7 +758,7 @@ export interface SessionIndexEntry {
   model?: string;
   mode?: 'agent' | 'planning';
   /** Parent session ID for workstream/worktree hierarchy */
-  parentSessionId?: string;
+  parentSessionId?: string | null;
   /** Worktree ID for git worktree association */
   worktreeId?: string;
   /** Stable device ID of the host that owns this session. */
@@ -746,7 +766,7 @@ export interface SessionIndexEntry {
   /** Agent role marker (e.g. 'meta-agent', 'standard'); drives mobile meta-agent grouping. */
   agentRole?: string;
   /** Meta-agent parent session ID for spawned children; drives mobile meta-agent grouping. */
-  createdBySessionId?: string;
+  createdBySessionId?: string | null;
   /** Whether the session is archived */
   isArchived?: boolean;
   /** Whether the session is pinned */

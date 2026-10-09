@@ -15,7 +15,7 @@ import type { RelationshipCandidate } from './RelationshipFieldEditor';
 import { MaterialSymbol } from '../../../ui/icons/MaterialSymbol';
 import { TrackerFieldPills } from './TrackerFieldPills';
 import { useTrackerChipFieldSections } from './trackerChipFields';
-import { labelFieldHints, unwrapLabelFieldValues, useTrackerLabelFields, wrapLabelFieldValue } from './trackerLabelFields';
+import { unwrapLabelFieldValues, useTrackerLabelFields, wrapLabelFieldValue } from './trackerLabelFields';
 import './StatusBarSlider.css';
 import './StatusBar.css';
 
@@ -135,7 +135,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             labelFields={labelFields}
             fields={chipFields}
             values={chipValues}
-            fieldHints={labelFieldHints(labelLayout.fields, localData)}
             teamMembers={teamMembers}
             relationshipCandidates={relationshipCandidates}
             onSave={handleFieldChange}

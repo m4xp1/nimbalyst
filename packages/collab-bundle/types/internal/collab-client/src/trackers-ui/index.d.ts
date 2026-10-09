@@ -103,7 +103,7 @@ export type { OntologyInspectorProps, OntologyInspectorWriter, OntologyInspector
 export type { DomainModel, DomainCategory, DomainGap, DomainLine } from './ontology/ontologyDomain';
 export { buildLabelIndex, effectiveLabelRegistry, hasRole, isFallbackRegistry, isHomePage, labelById, labelName, LABELED_TYPE, narrowerLabels, propertyRange, recordEffectiveLabels, recordOwnLabels, recordRole, } from './ontology/ontologyLabels';
 export type { KindOption, LabelIndex } from './ontology/ontologyLabels';
-export type { QualifierSummary, RelationshipStatus, TypeMapExpectation, TypeMapModel, TypeMapOptions, TypeMapProperty, TypeMapRelationship, TypeMapStatement, TypeMapType, TypeMapZone } from './ontology/ontologyLabelMap';
+export type { RelationshipStatus, TypeMapExpectation, TypeMapModel, TypeMapOptions, TypeMapProperty, TypeMapRelationship, TypeMapStatement, TypeMapType, TypeMapZone } from './ontology/ontologyLabelMap';
 export type { TypeCell, TypePageModel, TypePageOptions, TypeProperty, TypeRelationship, TypeRow } from './ontology/ontologyTypePage';
 export type OntologyTypesApi = typeof import('./ontology/ontologyTypesApi');
 export declare const loadOntologyTypesApi: () => Promise<OntologyTypesApi>;

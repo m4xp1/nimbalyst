@@ -102,7 +102,7 @@ internal object IndexPageValidator {
                     val entry = change.session?.takeIf { it.sessionId == change.id }
                         ?: fail("session payload missing for ${change.id}")
                     val decoded = if (decoder.isFullyReadable(entry, crypto)) {
-                        decoder.decodeSession(entry, crypto, existing[entry.sessionId])
+                        decoder.decodeSession(entry, crypto, existing[entry.sessionId], serverRow = true)
                     } else {
                         null
                     }

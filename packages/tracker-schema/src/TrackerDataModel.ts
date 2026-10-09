@@ -15,7 +15,6 @@ import { validateCitationLocator, validateCitationLocatorList } from './citation
 import {
   isSubjectKindAllowed,
   predicateValueShapeAcceptsFieldType,
-  validatePredicateQualifiers,
   type PredicateDefinition,
 } from './predicateRegistry.js';
 import {
@@ -146,9 +145,10 @@ export interface FieldDefinition {
   relationshipTypeKey?: string;
   /**
    * Predicate id from the project's registry (knowledge-scopes contract 4.1).
-   * Present makes this field's values STATEMENTS: each one is validated against
-   * the predicate's qualifier declarations at write time, and the field's type
-   * must be able to carry the predicate's value shape.
+   * Present makes this field's values STATEMENTS: the field's type must be able
+   * to carry the predicate's value shape, and the owning type must be one of
+   * its subject kinds. A statement is just the named relation; it carries no
+   * qualifiers.
    *
    * Distinct from `relationshipTypeKey` on purpose. That key is a display and
    * behavior hint resolved against a hardcoded vocabulary and never validated;
@@ -204,24 +204,6 @@ export interface TrackerRelationshipValue {
   revisionId?: string;
   /** Room-assigned display number for `revisionId`. Advisory; never resolves. */
   serverRevision?: number;
-  /**
-   * Qualifier values for this statement, when the owning field declares a
-   * `predicate` (contract 4.1): "integrates with Notion VIA the webhook
-   * connector, FOR these operations".
-   *
-   * Deliberately on the relationship value rather than in a parallel structure
-   * beside it. Qualifiers describe ONE edge, and relationship values are
-   * already an add-wins set keyed by `itemId` that syncs on the metadata
-   * socket; a second store would have to reproduce that set's semantics and
-   * would drift from it the first time an edge was added on one device and
-   * removed on another.
-   *
-   * Deliberately NOT inside `metadata` either. `metadata` is an undifferentiated
-   * bag that `deriveRelationshipEdges` copies verbatim into the relationship
-   * index, so hiding qualifiers in it would change what that index stores as a
-   * side effect of declaring a predicate.
-   */
-  qualifiers?: Record<string, unknown>;
 }
 
 /** What a citation says about the claim it is attached to (contract 4.4). */
@@ -331,6 +313,19 @@ export interface TrackerDataModel {
    * Read-only is the only behavioral consequence.
    */
   archived?: boolean;
+  /**
+   * Give items of this type machine-private local numbers (`NIM.75`). Off
+   * unless the type opts in. Team issue keys (`NIM-123`) are unaffected, and a
+   * number already issued stays readable and resolvable after opting out.
+   */
+  localNumbers?: boolean;
+  /**
+   * Where the type's items live in a Local wiki (`@nimbalyst/local-wiki`
+   * FORMAT.md): one markdown page per item, or one CSV for the type. Only a
+   * type that declares it is a wiki type; without it the items stay in the app
+   * database. Kept as written so the `nim` CLI and the app agree.
+   */
+  storage?: 'pages' | 'table';
   /** If false, items of this type cannot be created via tracker_create. Defaults to true. */
   creatable?: boolean;
   /**
@@ -425,8 +420,8 @@ export class TrackerDataModelRegistry {
   /**
    * The project's predicate registry (contract 4.1), the sibling schema
    * artifact to the type definitions above. It lives here rather than in its
-   * own singleton for one reason: `validate()` is where a statement's
-   * qualifiers are checked, and it already has the model in hand. Splitting the
+   * own singleton for one reason: `validate()` is where a statement-bearing
+   * field is checked against its predicate, and it already has the model in hand. Splitting the
    * two would mean every write path had to thread a second registry through to
    * the place that needs both.
    *
@@ -1033,7 +1028,7 @@ export class TrackerDataModelRegistry {
       }
 
       if (field.predicate) {
-        this.validatePredicateField(model, field, value, errors);
+        this.validatePredicateField(model, field, errors);
       }
     }
 
@@ -1048,15 +1043,11 @@ export class TrackerDataModelRegistry {
 
   /**
    * Validate one statement-bearing field against the project's predicate
-   * registry (contract 4.1, and the section 7 gate that a predicate with
-   * required qualifiers rejects a statement missing them identically on every
-   * surface).
+   * registry (contract 4.1).
    *
-   * Three checks, in the order they answer "whose fault is this":
+   * Two checks, in the order they answer "whose fault is this":
    *
-   *  1. The predicate exists. If it does not, nothing below is knowable, and
-   *     validating the qualifiers against an absent contract would accept
-   *     anything.
+   *  1. The predicate exists. If it does not, nothing below is knowable.
    *  2. The registry still agrees with the field DECLARATION -- value shape and
    *     subject kind. These are schema properties, not data properties, so they
    *     are reported ONCE for the field rather than per entry, and they are
@@ -1064,12 +1055,10 @@ export class TrackerDataModelRegistry {
    *     move under a field that was valid when it was written. That is exactly
    *     the destructive case `trackerPredicateRegistryChangeClassifier` exists
    *     to gate, and this is what the gate protects.
-   *  3. Each entry's qualifier bag.
    */
   private validatePredicateField(
     model: TrackerDataModel,
     field: FieldDefinition,
-    value: unknown,
     errors: ValidationIssue[],
   ): void {
     const predicateId = field.predicate as string;
@@ -1098,28 +1087,7 @@ export class TrackerDataModelRegistry {
         message: `Predicate '${predicateId}' accepts subjects of ${predicate.subjectKinds.join(', ')}, not '${model.type}'`,
         code: 'PREDICATE_SUBJECT_KIND_NOT_ALLOWED',
       });
-      return;
     }
-
-    // Only `entity` reaches here today (the shape check above rejects the rest
-    // on a relationship field), so every entry is a relationship value whose
-    // qualifier bag rides on the value itself. When the `claim` kind lands with
-    // its own `value`/`qualifiers` fields, this is where the other shapes join.
-    const entries = Array.isArray(value) ? value : [value];
-    entries.forEach((entry, index) => {
-      if (!entry || typeof entry !== 'object') return;
-      const qualifiers = (entry as TrackerRelationshipValue).qualifiers;
-      const result = validatePredicateQualifiers(predicate, qualifiers);
-      for (const qualifierIssue of result.issues) {
-        errors.push({
-          field: Array.isArray(value)
-            ? `${field.name}[${index}].qualifiers${qualifierIssue.path ? `.${qualifierIssue.path}` : ''}`
-            : `${field.name}.qualifiers${qualifierIssue.path ? `.${qualifierIssue.path}` : ''}`,
-          message: `Field '${field.name}': ${qualifierIssue.message}`,
-          code: qualifierIssue.code,
-        });
-      }
-    });
   }
 }
 
@@ -1189,8 +1157,13 @@ export function ensureTagsSupport(model: TrackerDataModel): TrackerDataModel {
   if (model.supportsTags === false) return model;
   // If the schema already declares a tags role, the author has explicitly
   // chosen where tags live (possibly under a different field name like
-  // `labels`). Respect that completely and don't inject anything.
-  if (model.roles?.tags != null) return model;
+  // `labels`). Respect that completely and don't inject anything -- except
+  // when the role names the default `tags` field the type never declared, which
+  // would otherwise make adding `roles: {tags: tags}` drop the injected field.
+  if (model.roles?.tags != null) {
+    if (model.roles.tags !== 'tags' || model.fields.some(f => f.name === 'tags')) return model;
+    return { ...model, fields: [...model.fields, TAGS_FIELD] };
+  }
 
   const hasTagsField = model.fields.some(f => f.name === 'tags');
   const fields = hasTagsField ? model.fields : [...model.fields, TAGS_FIELD];

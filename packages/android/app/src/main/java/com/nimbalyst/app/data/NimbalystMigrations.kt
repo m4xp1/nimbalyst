@@ -56,5 +56,13 @@ internal object NimbalystMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    /** The server's last client-metadata blob per session, so a draft push after a restart keeps the desktop's fields. */
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Starts empty: a draft waits for the next index sync to supply the blob.
+            db.execSQL("ALTER TABLE `sessions` ADD COLUMN `clientMetadataJson` TEXT")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 }

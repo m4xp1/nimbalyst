@@ -3,6 +3,7 @@ package com.nimbalyst.app.ui.navigation
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nimbalyst.app.sync.DeviceInfo
 import com.nimbalyst.app.sync.SessionCreationOutcome
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,8 +35,13 @@ class WorkspaceNavigation(private val saved: SavedStateHandle) : ViewModel() {
         val pendingCreations: Set<String> = emptySet(),
         /** Why the last create failed, shown as an alert until dismissed. */
         val creationFailure: String? = null,
+        /** Outlives the live roster, which is empty from foreground until the socket reconnects. */
+        val knownDesktopIds: Set<String> = emptySet(),
     ) {
         val hasSelection: Boolean get() = sessionId != null || documentPath != null
+
+        /** Desktop-created sessions carry no host and are listed under a desktop. */
+        val includesUnattributedSessions: Boolean get() = hostDeviceId != null && hostDeviceId in knownDesktopIds
     }
 
     private val _state = MutableStateFlow(
@@ -45,6 +51,7 @@ class WorkspaceNavigation(private val saved: SavedStateHandle) : ViewModel() {
             documentPath = saved[KEY_DOCUMENT],
             hostDeviceId = saved[KEY_HOST],
             showSettings = saved[KEY_SETTINGS] ?: false,
+            knownDesktopIds = saved.get<ArrayList<String>>(KEY_DESKTOPS)?.toSet() ?: emptySet(),
         )
     )
     val state: StateFlow<State> = _state.asStateFlow()
@@ -70,6 +77,14 @@ class WorkspaceNavigation(private val saved: SavedStateHandle) : ViewModel() {
     }
 
     fun chooseHost(hostDeviceId: String?) = mutate { it.copy(hostDeviceId = hostDeviceId, sessionId = null, documentPath = null) }
+
+    /** Record which hosts are desktops; an empty roster is not evidence that one went away. */
+    fun rememberHosts(devices: List<DeviceInfo>) {
+        val current = _state.value.knownDesktopIds
+        val next = current + devices.filter { it.type == "desktop" }.map { it.deviceId } -
+            devices.filter { it.type != "desktop" }.map { it.deviceId }.toSet()
+        if (next != current) mutate { it.copy(knownDesktopIds = next) }
+    }
 
     /** Adopt a default computer once, without overriding the user's choice. */
     fun adoptDefaultHost(deviceId: String?) {
@@ -138,6 +153,7 @@ class WorkspaceNavigation(private val saved: SavedStateHandle) : ViewModel() {
         saved[KEY_DOCUMENT] = next.documentPath
         saved[KEY_HOST] = next.hostDeviceId
         saved[KEY_SETTINGS] = next.showSettings
+        saved[KEY_DESKTOPS] = ArrayList(next.knownDesktopIds)
     }
 
     private companion object {
@@ -146,6 +162,7 @@ class WorkspaceNavigation(private val saved: SavedStateHandle) : ViewModel() {
         const val KEY_DOCUMENT = "documentPath"
         const val KEY_HOST = "hostDeviceId"
         const val KEY_SETTINGS = "showSettings"
+        const val KEY_DESKTOPS = "knownDesktopIds"
     }
 }
 

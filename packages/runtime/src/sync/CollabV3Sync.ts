@@ -1,3 +1,4 @@
+import { applyReplicatedSessionRows, createIndexChangeSubscriptions, createHierarchySnapshotDispatch, dispatchIndexChange, reconcileFetchedIndex } from './indexChangeDispatch';
 import { createPendingIndexPublications } from './pendingIndexPublications';
 import { createSessionQueueReconciler, mergeSessionIndexMetadata, type CachedSessionIndex } from './sessionIndexMetadata';
 import { isRetainedSession, sessionActivityAt, SESSION_TRANSCRIPT_TTL_MS } from '@nimbalyst/collab-protocol';
@@ -128,6 +129,7 @@ import type {
   MobilePushOptions,
   MobilePushResult,
   PushChangeOutcome,
+  PushChangeOptions,
   IndexPublishOutcome,
 } from './types';
 import { filterSessionsForPersonalSync } from './types';
@@ -1103,7 +1105,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
   // Listeners for index changes (session updates broadcast to all connected clients)
   // Listeners receive decrypted data (CachedSessionIndex format)
-  const indexChangeListeners = new Set<(sessionId: string, entry: CachedSessionIndex) => void>();
+  const indexChanges = createIndexChangeSubscriptions(sessionIndexCache, () => personalSyncWriteGate.snapshot().state === 'verified');
+  const { listeners: indexChangeListeners, hierarchyListeners: indexHierarchyListeners } = indexChanges;
+  const hierarchySnapshots = createHierarchySnapshotDispatch(() => indexConnected && personalSyncWriteGate.snapshot().state === 'verified');
 
   // Listeners for session creation requests (from mobile)
   const createSessionRequestListeners = new Set<(request: CreateSessionRequest) => void>();
@@ -1186,7 +1190,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     indexEntry.encryptedQueuedPrompts = await encryptQueuedPrompts(queuedPrompts, config.encryptionKey);
   }
 
-  async function sendIndexUpdate(baseEntry: CachedSessionIndex): Promise<PushChangeOutcome> {
+  async function sendIndexUpdate(baseEntry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
     if (!isRetainedSession(sessionActivityAt(baseEntry)) || wasIndexActivityRejected(baseEntry.sessionId, sessionActivityAt(baseEntry))) return { published: false, reason: 'session outside index retention', retryable: false };
     if (!indexWs || !config.encryptionKey) {
       console.error('[CollabV3] Cannot send session update: index socket or encryption key missing');
@@ -1247,6 +1251,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       indexEntry.clientMetadataIv = clientMetadataIv;
     }
 
+    if (options?.isCurrent && !options.isCurrent()) return { published: false, reason: 'superseded hierarchy publication', retryable: false };
     if (!isPublishStillCurrent(baseEntry.sessionId, socket, generation, publishSeq, 'index update') ||
         sessionIndexCache.get(baseEntry.sessionId) !== cachedAtStart) {
       return { published: false, reason: 'index state changed during publication', retryable: true };
@@ -1267,7 +1272,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     return { published: true };
   }
 
-  async function sendIndexClientMetadataPatch(baseEntry: CachedSessionIndex): Promise<PushChangeOutcome> {
+  async function sendIndexClientMetadataPatch(baseEntry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
     if (!isRetainedSession(sessionActivityAt(baseEntry)) || wasIndexActivityRejected(baseEntry.sessionId, sessionActivityAt(baseEntry))) return { published: false, reason: 'session outside index retention', retryable: false };
     if (!indexWs || !config.encryptionKey) {
       console.error('[CollabV3] Cannot send index metadata patch: index socket or encryption key missing');
@@ -1312,6 +1317,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       patch.clientMetadataIv = clientMetadataIv;
     }
 
+    if (options?.isCurrent && !options.isCurrent()) return { published: false, reason: 'superseded hierarchy publication', retryable: false };
     if (!isPublishStillCurrent(baseEntry.sessionId, socket, generation, publishSeq, 'metadata patch') ||
         sessionIndexCache.get(baseEntry.sessionId) !== cachedAtStart) {
       return { published: false, reason: 'index state changed during publication', retryable: true };
@@ -1583,7 +1589,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       },
       commitPage: async (applied: PreparedIndexChange[]): Promise<void> => {
         assertSameConnection('page application');
-        applyIndexChangesLocally(applied, cacheEntries, { notifyListeners: options.notifyListeners });
+        await applyIndexChangesLocally(applied, cacheEntries, { notifyListeners: options.notifyListeners });
         cacheEntries = new Map<string, CachedSessionIndex>();
       },
     };
@@ -1593,53 +1599,27 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * Mirror the accepted session changes into the local cache. `notifyListeners`
    * is on for live (delta) drains only: under v2 the server sends a bare
    * `indexChangesAvailable` hint instead of `indexBroadcast`, so this is where
-   * the existing index-change callbacks now come from. A cold bootstrap stays
-   * silent rather than replaying thousands of rows through the UI.
+   * the existing index-change callbacks now come from. Bootstrap reconciles
+   * hierarchy and execution queues after verification opens the write gate.
    */
-  function applyIndexChangesLocally(
+  async function applyIndexChangesLocally(
     applied: PreparedIndexChange[],
     cacheEntries: Map<string, CachedSessionIndex>,
     options: { notifyListeners: boolean },
-  ): void {
-    for (const change of applied) {
-      if (change.entity !== 'session') continue;
-      if (change.deleted) {
-        sessionIndexCache.delete(change.id);
-        sessionQueueReconciler.delete(change.id);
-        indexPublicationGate.invalidate(change.id);
-        continue;
-      }
-      const cacheEntry = cacheEntries.get(`${change.id}:${change.revision}`);
-      if (!cacheEntry) continue;
-      sessionIndexCache.set(change.id, sessionQueueReconciler.merge(cacheEntry));
-      indexPublicationGate.recordPublished(change.id, indexPatchSignatureForEntry(cacheEntry));
-      if (!options.notifyListeners) continue;
-
-      applyPendingMetadataUpdates(change.id).catch(err => {
-        console.error('[CollabV3] Error applying pending metadata updates:', err);
-      });
-      indexChangeListeners.forEach((callback) => {
-        try {
-          callback(change.id, cacheEntry);
-        } catch (err) {
-          console.error('[CollabV3] Error in index change listener:', err);
-        }
-      });
-    }
+  ): Promise<void> {
+    await applyReplicatedSessionRows(applied, cacheEntries, id => {
+      sessionIndexCache.delete(id);
+      sessionQueueReconciler.delete(id);
+      indexPublicationGate.invalidate(id);
+    }, async entry => {
+      sessionIndexCache.set(entry.sessionId, sessionQueueReconciler.merge(entry));
+      indexPublicationGate.recordPublished(entry.sessionId, indexPatchSignatureForEntry(entry));
+      if (!options.notifyListeners) return;
+      applyPendingMetadataUpdates(entry.sessionId).catch(err => console.error('[CollabV3] Error applying pending metadata updates:', err));
+      await dispatchIndexChange(indexChangeListeners, entry);
+    });
   }
 
-  function reconcileFetchedQueues(entries: DecryptedSessionIndexEntry[]): void {
-    // A cold bootstrap is otherwise silent. Replay only nonempty queues after
-    // the write gate opens so the owning desktop can consult its durable rows
-    // and clear prompts that ran before this provider/process started.
-    for (const entry of entries) {
-      if (!entry.queuedPrompts?.length) continue;
-      for (const callback of indexChangeListeners) {
-        try { callback(entry.sessionId, { ...sessionIndexCache.get(entry.sessionId), ...entry }); }
-        catch (error) { console.error('[CollabV3] Error reconciling fetched queue:', error); }
-      }
-    }
-  }
 
   /**
    * A read receipt from another device -- live, or replayed on connect. Personal
@@ -1735,7 +1715,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * already have coverage, otherwise a full bootstrap. A server-side cursor
    * reset drops coverage and re-bootstraps; it never means rows were deleted.
    */
-  async function runIndexReplication(options: { notifyListeners: boolean }): Promise<void> {
+  async function runIndexReplication(options: { notifyListeners: boolean }): Promise<boolean> {
     const memberId = currentPersonalMemberId ?? config.personalMemberId;
     if (indexMirrorMemberId !== undefined && memberId !== undefined && indexMirrorMemberId !== memberId) {
       // Account switch: the previous account's rows, revisions and cursor are
@@ -1754,7 +1734,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         prepare: applier.prepare,
         commitPage: applier.commitPage,
       });
-      if (!delta.resetRequired) return;
+      if (!delta.resetRequired) return false;
       console.warn('[CollabV3] Index cursor expired on the server; re-bootstrapping the mirror (absent rows are NOT deletions)');
     }
 
@@ -1767,6 +1747,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       prepare: bootApplier.prepare,
       commitPage: bootApplier.commitPage,
     });
+    return true;
   }
 
   /**
@@ -1806,8 +1787,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * a degraded state rather than a reason to refuse the mirror.
    */
   async function runIndexReplicationWithPersonalState(options: { notifyListeners: boolean }): Promise<void> {
-    await runIndexReplication(options);
+    const bootstrapped = await runIndexReplication(options);
     personalSyncWriteGate.markVerified(indexMirror.skippedRowCount());
+    hierarchySnapshots.replace(indexMirror.snapshot().sessions);
+    await hierarchySnapshots.notify();
+    if (bootstrapped && options.notifyListeners) await reconcileFetchedIndex(sessionIndexCache.values(), sessionIndexCache, indexChangeListeners, indexHierarchyListeners);
     if (indexMirror.skippedRowCount() > 0) console.info('[CollabV3] Index read completed; skipped unreadable rows:', indexMirror.skippedRowCount());
     // A hint that arrived while the mirror was incomplete (or mid-drain) is
     // still recorded; now that coverage exists it can be acted on.
@@ -2330,6 +2314,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       // resumes with a delta instead of re-bootstrapping. Capability is
       // re-probed because the server on the other end may have been upgraded.
       indexConnectionGeneration++;
+      hierarchySnapshots.invalidate();
       indexProtocolCapability = 'unknown';
       cancelPendingIndexPage('Index connection closed while a page request was in flight');
       maxHintedRevision = undefined;
@@ -2393,7 +2378,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
                 legacyUnreadableRows = new Set(snapshot.unreadableRowKeys);
                 personalSyncWriteGate.markVerified(snapshot.skippedRowCount);
                 if (snapshot.skippedRowCount > 0) console.info('[CollabV3] Index read completed; skipped unreadable rows:', snapshot.skippedRowCount);
-                reconcileFetchedQueues(snapshot.rows.map(row => row.decrypted));
+                hierarchySnapshots.replace(snapshot.rows.map(row => row.cacheEntry));
+                await hierarchySnapshots.notify();
+                await reconcileFetchedIndex(snapshot.rows.map(row => row.decrypted), sessionIndexCache, indexChangeListeners, indexHierarchyListeners);
                 pending.resolve({
                   // The legacy response IS the complete snapshot -- that has
                   // always been its meaning, and absence-based reconciliation has
@@ -2451,17 +2438,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
               console.error('[CollabV3] Error applying pending metadata updates:', err);
             });
 
-            // Notify all index change listeners with decrypted data
-            indexChangeListeners.forEach((callback) => {
-              try {
-                callback(entry.sessionId, {
-                  ...decryptedEntry,
-                  sessionId: decryptedEntry.sessionId,
-                });
-              } catch (err) {
-                console.error('[CollabV3] Error in index change listener:', err);
-              }
-            });
+            hierarchySnapshots.update(decryptedEntry);
+            await hierarchySnapshots.notify();
+            await dispatchIndexChange(indexChangeListeners, decryptedEntry);
             break;
           }
 
@@ -3188,7 +3167,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         worktreeId: session.worktreeId,
         hostDeviceId: entry.hostDeviceId,
         agentRole: session.agentRole,
-        createdBySessionId: session.createdBySessionId ?? undefined,
+        createdBySessionId: session.createdBySessionId,
         isArchived: session.isArchived,
         isPinned: session.isPinned,
         branchedFromSessionId: session.branchedFromSessionId,
@@ -3288,7 +3267,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
   }
 
   // Runs inside the per-session queue for metadata and deletions.
-  async function pushChange(sessionId: string, change: SessionChange): Promise<PushChangeOutcome> {
+  async function pushChange(sessionId: string, change: SessionChange, options?: PushChangeOptions): Promise<PushChangeOutcome> {
     const generation = indexConnectionGeneration;
     if (isMessageSyncDisabled(sessionId) && change.type === 'message_added') {
       return { published: false, reason: 'message sync is disabled for this session', retryable: false };
@@ -3413,6 +3392,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       return { published: false, reason: 'index connection changed during metadata encryption', retryable: true };
     }
 
+    if (options?.isCurrent && !options.isCurrent()) return { published: false, reason: 'superseded hierarchy publication', retryable: false };
     // Tracks whether the session-room write actually happened, for the outcome
     // returned at the end. Only `message_added` has nowhere else to land: a
     // metadata update still reaches the index below.
@@ -3484,8 +3464,8 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           // on the floor before reaching iOS.
           const updatedCache = mergeSessionIndexMetadata(cached, meta);
           const outcome = isIndexClientMetadataOnlyUpdate(meta)
-            ? await sendIndexClientMetadataPatch(updatedCache)
-            : await sendIndexUpdate(updatedCache);
+            ? await sendIndexClientMetadataPatch(updatedCache, options)
+            : await sendIndexUpdate(updatedCache, options);
           if (outcome.published && pendingMetadataUpdates.get(sessionId) === pending) {
             pendingMetadataUpdates.delete(sessionId);
           }
@@ -3512,10 +3492,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
             // Meta-agent grouping fields (parity with bulk path's
             // buildSyncedSessionIndexFields + sendIndexUpdate). Without these a
             // freshly-created meta agent/child reaches the server/phone ungrouped
-            // until the next full bulk resync. createdBySessionId is normalized
-            // null -> undefined to match the helper.
+            // until the next full bulk resync. Explicit null clears the manager.
             agentRole: meta.agentRole,
-            createdBySessionId: meta.createdBySessionId ?? undefined,
+            createdBySessionId: meta.createdBySessionId,
             isArchived: meta.isArchived,
             isPinned: (meta as any).isPinned,
             messageCount: 0,
@@ -3535,7 +3514,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
             draftUpdatedAt: (meta as any).draftUpdatedAt,
             hasBeenNamed: (meta as any).hasBeenNamed,
           };
-          const outcome = await sendIndexUpdate(newEntry);
+          const outcome = await sendIndexUpdate(newEntry, options);
           if (outcome.published && pendingMetadataUpdates.get(sessionId) === pending) {
             pendingMetadataUpdates.delete(sessionId);
           }
@@ -3790,6 +3769,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       }
       indexPublicationGate.reset();
       indexConnectionGeneration++;
+      hierarchySnapshots.invalidate();
       indexProtocolCapability = 'unknown';
       cancelPendingIndexPage('Sync disconnected while a page request was in flight');
       maxHintedRevision = undefined;
@@ -3798,6 +3778,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       // Full teardown (sign-out / account switch): the replicated mirror and
       // its cursor belong to that account and must not survive into another.
       indexMirror.reset();
+      hierarchySnapshots.clear();
       indexMirrorMemberId = undefined;
     },
 
@@ -3840,9 +3821,10 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
      * rejection. A caller that has to know (the headless node retains an
      * unpublished transcript row and retries it on reconnect) reads the outcome.
      */
-    async pushChange(sessionId: string, change: SessionChange): Promise<PushChangeOutcome> {
+    async pushChange(sessionId: string, change: SessionChange, options?: PushChangeOptions): Promise<PushChangeOutcome> {
       const generation = indexConnectionGeneration;
       const publish = async (): Promise<PushChangeOutcome> => {
+        if (options?.isCurrent && !options.isCurrent()) return { published: false, reason: 'superseded hierarchy publication', retryable: false };
         if (generation !== indexConnectionGeneration) {
           return { published: false, reason: 'index connection changed before publication', retryable: true };
         }
@@ -3850,13 +3832,13 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           sessionQueueReconciler.record(sessionId, sessionIndexCache.get(sessionId)?.queuedPrompts, change.metadata.queuedPrompts);
         }
         try {
-          if (change.type !== 'metadata_updated') return await pushChange(sessionId, change);
+          if (change.type !== 'metadata_updated') return await pushChange(sessionId, change, options);
           const socketAtStart = indexWs;
           // A remote or bulk update can win during encryption. Re-merge intent
           // against it -- bounded, yielding between attempts, and only while
           // this same socket and generation are still the live ones.
           return await publishWithBoundedRetry(
-            async () => await pushChange(sessionId, change),
+            async () => await pushChange(sessionId, change, options),
             { shouldRetry: () => generation === indexConnectionGeneration && indexConnected && indexWs === socketAtStart },
           );
         } catch (error) {
@@ -4006,7 +3988,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           // partial mirror must fail the fetch instead of being returned.
           const { sessions, projects } = indexMirror.snapshot();
           personalSyncWriteGate.markVerified(indexMirror.skippedRowCount());
-          reconcileFetchedQueues(sessions);
+          await reconcileFetchedIndex(sessions, sessionIndexCache, indexChangeListeners, indexHierarchyListeners);
           return {
             complete: true,
             indexProtocolVersion: 2,
@@ -4056,14 +4038,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       });
     },
 
-    onIndexChange(callback: (sessionId: string, entry: CachedSessionIndex) => void): () => void {
-      indexChangeListeners.add(callback);
-      // console.log('[CollabV3] Added index change listener, total:', indexChangeListeners.size);
-      return () => {
-        indexChangeListeners.delete(callback);
-        // console.log('[CollabV3] Removed index change listener, total:', indexChangeListeners.size);
-      };
-    },
+    onHierarchySnapshot: hierarchySnapshots.subscribe,
+
+    onIndexChange: indexChanges.subscribe,
 
     /** Get cached metadata for a session (from sync_response and metadata_broadcast) */
     getCachedMetadata(sessionId: string): Partial<SessionMetadata> | undefined {
@@ -4663,6 +4640,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       indexConnected = false;
       indexPublicationGate.reset();
       indexConnectionGeneration++;
+      hierarchySnapshots.invalidate();
       indexProtocolCapability = 'unknown';
       cancelPendingIndexPage('Index reconnect requested while a page request was in flight');
       maxHintedRevision = undefined;

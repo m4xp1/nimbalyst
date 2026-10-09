@@ -81,13 +81,13 @@ targets:
           # the workspace-hoisted vite are resolvable.
           export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/$(cat $HOME/.nvm/alias/default 2>/dev/null)/bin:$PATH"
           cd "${SRCROOT}/.."
-          # npm workspaces hoist vite to the monorepo root node_modules. The
+          # The workspace install hoists vite to the monorepo root node_modules. The
           # previous package-local `node_modules/.bin/vite` check was always
           # false here and silently shipped a stale dist on every rebuild.
           # Invoke the hoisted binary directly and fail loudly if it's gone.
           VITE_BIN="${SRCROOT}/../../../node_modules/.bin/vite"
           if [ ! -x "$VITE_BIN" ]; then
-            echo "error: $VITE_BIN missing; run 'npm install' at the monorepo root" >&2
+            echo "error: $VITE_BIN missing; run 'pnpm install' at the monorepo root" >&2
             exit 1
           fi
           "$VITE_BIN" build --config vite.config.transcript.ts
@@ -103,7 +103,7 @@ targets:
           cd "${SRCROOT}/.."
           VITE_BIN="${SRCROOT}/../../../node_modules/.bin/vite"
           if [ ! -x "$VITE_BIN" ]; then
-            echo "error: $VITE_BIN missing; run 'npm install' at the monorepo root" >&2
+            echo "error: $VITE_BIN missing; run 'pnpm install' at the monorepo root" >&2
             exit 1
           fi
           "$VITE_BIN" build --config vite.config.editor.ts

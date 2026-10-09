@@ -86,8 +86,10 @@ class SyncManager internal constructor(
         if (channel == SyncChannel.INDEX) indexClient.sendRaw(json) else sessionClient.sendRaw(json)
     }, errors)
     private val commands = SessionCommands(repository, gson, indexUpdates, { presence.deviceId }, { crypto }, requests)
-    private val sessionState = SessionStatePublisher(repository, decoder, indexUpdates, { crypto }, requests)
-    private val prompts = PromptSender(repository, indexUpdates, { crypto }, { indexClient.isConnected }, indexClient::sendRaw)
+    private val sessionState = SessionStatePublisher(repository, decoder, indexUpdates, { crypto }, requests, scope)
+    private val prompts = PromptSender(repository, indexUpdates, { crypto }, { indexClient.isConnected }, { json ->
+        requests.sendConfirmed(SyncRequestKind.PROMPT, json)
+    })
     private val creations = SessionCreationTracker(
         scope = scope,
         observeSession = repository::observeSession,
@@ -133,6 +135,7 @@ class SyncManager internal constructor(
     val indexCoverage: StateFlow<IndexCoverage> = _indexCoverage.asStateFlow()
 
     init {
+        decoder.onClientMetadataKnown = sessionState::clientMetadataKnown
         // Only the index socket announces: presence is per device, not per room.
         indexClient.deviceAnnouncement = presence::announcement
         indexClient.onConnectionStateChanged = { connected ->
@@ -275,6 +278,7 @@ class SyncManager internal constructor(
             leaveSessionRoom()
             indexIngestion.reset()
             decoder.clear()
+            sessionState.clear()
             replication?.cancel()
             replication = null
             _indexCoverage.value = IndexCoverage()
@@ -570,7 +574,19 @@ class SyncManager internal constructor(
         presence.setForeground(inForeground)
         indexClient.announceNow()
         indexIngestion.submit { replication?.setForeground(inForeground) }
+        // A backgrounded phone is often offline; refreshing then only piles up
+        // failures. The token has likely expired by the time the user is back,
+        // so refresh at once instead of waiting out the interval.
+        if (!inForeground) {
+            stopJwtRefreshTimer()
+        } else if (indexRoomId != null && !screenshotMode) {
+            startJwtRefreshTimer()
+            scope.launch { refreshJwt() }
+        }
     }
+
+    /** Test hook: whether the periodic JWT refresh is running. */
+    internal val isJwtRefreshScheduled: Boolean get() = jwtRefreshJob?.isActive == true
 
     /** Test hook: waits until both rooms have applied everything received so far. */
     internal suspend fun awaitIngestionIdle() {
@@ -590,6 +606,7 @@ class SyncManager internal constructor(
 
     private fun startJwtRefreshTimer() {
         stopJwtRefreshTimer()
+        if (!presence.isInForeground) return
         jwtRefreshJob = scope.launch {
             while (isActive) {
                 delay(JWT_REFRESH_INTERVAL_MS)
@@ -616,14 +633,18 @@ class SyncManager internal constructor(
 
     internal suspend fun refreshJwt() {
         val credentials = credentialStore.credentials ?: return
-        val refreshed = tokenRefresher.refresh(credentials)
-        if (refreshed == null) {
-            if (auth.recordFailure() is AuthHealth.SignedOut) {
-                // Escalate rather than retry forever: clear the session so the UI shows login.
-                disconnect()
-                credentialStore.credentials?.let { credentialStore.save(it.signedOut()) }
+        val refreshed = when (val result = tokenRefresher.refresh(credentials)) {
+            is TokenRefresh.Refreshed -> result.credentials
+            // Offline or a server error: no verdict on the session, so it never counts toward sign-out.
+            TokenRefresh.Unavailable -> return
+            TokenRefresh.Rejected -> {
+                if (auth.recordFailure() is AuthHealth.SignedOut) {
+                    // Escalate rather than retry forever: clear the session so the UI shows login.
+                    disconnect()
+                    credentialStore.credentials?.let { credentialStore.save(it.signedOut()) }
+                }
+                return
             }
-            return
         }
         auth.recordSuccess()
         credentialStore.save(refreshed)

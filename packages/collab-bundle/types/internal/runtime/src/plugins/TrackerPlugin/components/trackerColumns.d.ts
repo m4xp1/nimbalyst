@@ -9,7 +9,6 @@
 import type { TrackerRecord } from '../../../core/TrackerRecord';
 import { type FieldDefinition, type TrackerSchemaRole } from '../../../../../tracker-schema/src/browser';
 import { type CellEditorKind } from './trackerCellEditors';
-import { type ClaimRecord, type EffectivePropertyStorage, type TrackerDataModelRegistry } from '../../../../../tracker-schema/src/browser';
 export type ColumnRenderType = 'badge' | 'text' | 'date' | 'avatar' | 'progress' | 'tags' | 'type-icon' | 'module' | 'url' | 'relationship';
 /**
  * How the structural `type` column presents an item's type: as the type's glyph,
@@ -49,17 +48,6 @@ export interface TrackerColumnDef {
      * so the cell renderer needs no extra argument.
      */
     typeDisplay?: TypeColumnDisplay;
-    /**
-     * Only on columns from {@link resolveLabelColumns}: where the value lives.
-     * A `claim` column has no stored value -- the row layer reads the current
-     * claim (`currentClaimValue`) -- and a `qualified` field column stores
-     * `{ value, qualifiers }`, which a plain cell write would flatten.
-     */
-    labelProperty?: {
-        storage: EffectivePropertyStorage;
-        qualified: boolean;
-        viaLabel: string;
-    };
 }
 /** Per-type column configuration (persisted) */
 export interface TypeColumnConfig {
@@ -103,13 +91,6 @@ export declare function resolveColumnFieldName(recordType: string, column: Track
  * Resolves visible columns from schema roles + tableView.defaultColumns.
  */
 export declare function getDefaultColumnConfig(type: string): TypeColumnConfig;
-/**
- * Columns a view filtered to one label offers: the label's own properties,
- * then its ancestors', each once (`tableColumns`). An item's other labels never
- * widen the set, so the columns stay put as items are relabeled. Properties
- * whose storage cannot be resolved are left out. None are visible by default.
- */
-export declare function resolveLabelColumns(labelId: string, registry?: TrackerDataModelRegistry): TrackerColumnDef[];
 export declare const BUILTIN_COLUMNS: TrackerColumnDef[];
 export declare const DEFAULT_VISIBLE_COLUMNS: string[];
 export declare const BUILTIN_STATUS_COLORS: Record<string, string>;
@@ -158,15 +139,6 @@ export declare function getEffectiveUpdatedDate(record: TrackerRecord): Date | u
  * The only special cases are structural columns (type, updated, module).
  */
 export declare function getCellValue(record: TrackerRecord, columnId: string): any;
-/** Shown in a claim column on a surface that has no claims to read. */
-export declare const CLAIM_CELL_PLACEHOLDER = "-";
-/**
- * Cell value for a column from {@link resolveLabelColumns}. A claim column has
- * no stored value: it reads the current claim through `claimsAbout` when the
- * surface can supply claims, and shows {@link CLAIM_CELL_PLACEHOLDER}
- * otherwise. Every other column reads like {@link getCellValue}.
- */
-export declare function getLabelColumnCellValue(record: TrackerRecord, column: TrackerColumnDef, claimsAbout?: (subjectId: string) => readonly ClaimRecord[]): unknown;
 /**
  * Resolve the schema field backing a column, if any.
  * Structural columns are derived rather than stored, so they have no field.

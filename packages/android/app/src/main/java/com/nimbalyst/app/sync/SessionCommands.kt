@@ -69,14 +69,10 @@ internal class SessionCommands(
 
     /**
      * Writes the parent locally first, then publishes it; republished after
-     * reconnect if it did not land. Null is refused: the server keeps the
-     * stored parent whenever an update's parent is absent, so a move out of a
-     * workstream would undo itself on the next index page.
+     * reconnect if it did not land. Clears carry explicit null; the desktop
+     * validates the move and publishes the authoritative parent and manager.
      */
     suspend fun updateSessionParent(sessionId: String, parentSessionId: String?): Result<Unit> {
-        if (parentSessionId == null) {
-            return Result.failure(IllegalArgumentException("Moving a session out of a workstream is not supported by sync yet."))
-        }
         repository.setSessionParent(sessionId, parentSessionId)
         val json = parentJson(sessionId) ?: return Result.failure(IllegalStateException("Session not found."))
         return landed(

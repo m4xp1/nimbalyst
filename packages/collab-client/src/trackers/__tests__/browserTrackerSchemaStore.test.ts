@@ -166,6 +166,62 @@ describe('the label registry', () => {
   });
 });
 
+describe('defining a new team type from the browser', () => {
+  const customer = { ...seed, type: 'customer', displayName: 'Customer', sharing: 'team' } as unknown as TrackerDataModel;
+
+  it('queues a create-only definition and settles on its own ack, not on a broadcast of the same type', async () => {
+    const store = new BrowserTrackerSchemaStore({ builtins: [seed] });
+    try {
+      let settled = false;
+      const defined = store.defineTeamType(customer).then(() => { settled = true; });
+      const queued = await store.schemaSync.listUnsynced();
+      expect(queued.map(({ type, deleted, createOnly }) => ({ type, deleted, createOnly })))
+        .toEqual([{ type: 'customer', deleted: false, createOnly: 'required' }]);
+      expect(JSON.parse(queued[0].model!)).toMatchObject({ type: 'customer', sharing: 'team', fields: customer.fields });
+
+      // Another client's definition of the same id is not this creation's answer.
+      await store.schemaSync.applyRemote({ type: 'customer', model: JSON.stringify({ ...customer, displayName: 'Client' }), syncId: 3 as never });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      store.schemaSync.onSettled?.({ type: 'customer', model: queued[0].model, accepted: true });
+      await defined;
+      expect(await store.schemaSync.listUnsynced()).toEqual([]);
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('rejects when the room refuses it or cannot refuse an existing type, and stops offering it', async () => {
+    const store = new BrowserTrackerSchemaStore({ builtins: [seed] });
+    try {
+      const raced = store.defineTeamType(customer);
+      const [queued] = await store.schemaSync.listUnsynced();
+      store.schemaSync.onSettled?.({ type: 'customer', model: queued.model, accepted: false, error: { code: 'schemaExists', message: 'exists' } });
+      await expect(raced).rejects.toThrow('Someone else just created a type named "customer"');
+      expect(await store.schemaSync.listUnsynced()).toEqual([]);
+
+      const oldServer = store.defineTeamType({ ...customer, type: 'vendor' });
+      const [vendor] = await store.schemaSync.listUnsynced();
+      store.schemaSync.onSettled?.({ type: 'vendor', model: vendor.model, accepted: false, error: { code: 'createOnlyUnsupported', message: 'This team\'s server must be updated before new types can be created here.' } });
+      await expect(oldServer).rejects.toThrow('server must be updated');
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('refuses an existing id or a personal definition without queueing anything', async () => {
+    const store = new BrowserTrackerSchemaStore({ builtins: [seed] });
+    try {
+      await expect(store.defineTeamType({ ...customer, type: 'bug' })).rejects.toThrow('A type named "bug" already exists.');
+      await expect(store.defineTeamType({ ...customer, sharing: 'personal' })).rejects.toThrow('only team types');
+      expect(await store.schemaSync.listUnsynced()).toEqual([]);
+    } finally {
+      store.dispose();
+    }
+  });
+});
+
 describe('the navigation lane', () => {
   it('keeps a malformed entry out of the tree instead of rendering a folder with no name', () => {
     const store = new BrowserTrackerSchemaStore({ builtins: [seed] });

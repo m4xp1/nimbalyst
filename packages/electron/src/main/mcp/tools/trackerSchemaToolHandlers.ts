@@ -34,7 +34,7 @@ import {
   materializeTrackerTypeDef,
   removeTrackerTypeDef,
 } from '../../services/tracker/trackerTypeDefStore';
-import { applyLabelRegistryArgs, applyPredicateRegistryArgs } from './trackerVocabularyArgs';
+import { applyPredicateRegistryArgs } from './trackerVocabularyArgs';
 import { getDocumentServiceForWorkspace } from './trackerToolItemAccess';
 import {
   destructiveSchemaChangeToolResult,
@@ -128,7 +128,6 @@ function buildTrackerSchemaFromArgs(args: any): any {
     promoteExistingItems: _promoteExistingItems,
     predicates: _predicates,
     removePredicates: _removePredicates,
-    labels: _labels,
     ...rest
   } = args ?? {};
   return rest;
@@ -246,6 +245,25 @@ export async function handleTrackerDefineType(
   args: any,
   workspacePath: string | undefined,
 ): Promise<McpToolResult> {
+  const vocabularySummaries: string[] = [];
+  const result = await defineTrackerType(args, workspacePath, vocabularySummaries);
+  if (!result.isError || vocabularySummaries.length === 0) return result;
+  // Vocabulary is written before the type is checked, and is not rolled back.
+  // Without this the caller sees only the type error, retries, and is told the
+  // registry is "unchanged" by a call that never wrote anything.
+  const note = `\n\nAlready applied before this error:\n${vocabularySummaries.join('\n')}`;
+  return {
+    ...result,
+    content: result.content.map((part, index) =>
+      index === 0 && part.type === 'text' ? { ...part, text: `${part.text ?? ''}${note}` } : part),
+  };
+}
+
+async function defineTrackerType(
+  args: any,
+  workspacePath: string | undefined,
+  vocabularySummaries: string[],
+): Promise<McpToolResult> {
   try {
     if (!workspacePath) {
       return {
@@ -258,22 +276,23 @@ export async function handleTrackerDefineType(
     // an agent doesn't think the type is missing (NIM-760).
     ensureWorkspaceTrackerSchemasLoaded(workspacePath);
 
+    // The earlier knowledge graph's label registry is no longer authored here.
+    // Refuse rather than ignore, so an older skill sees why nothing changed.
+    if (args?.labels !== undefined) {
+      return {
+        content: [{ type: 'text', text: 'Error: `labels` is no longer supported. Give a page a tracker type and use `predicates` for named relations. An existing .nimbalyst/labels.yaml still loads unchanged.' }],
+        isError: true,
+      };
+    }
+
     // Vocabulary first: a type declaring `predicate:` on a field needs the verb
-    // to exist before the declaration below is checked against the registry,
-    // and labels are validated against the predicates they name.
-    const vocabularySummaries: string[] = [];
+    // to exist before the declaration below is checked against the registry.
     let appliedPredicates: PredicateDefinition[] | null = null;
     if (Array.isArray(args?.predicates) || Array.isArray(args?.removePredicates)) {
       const outcome = await applyPredicateRegistryArgs(workspacePath, args);
       if ('error' in outcome) return outcome.error;
       appliedPredicates = outcome.applied;
       vocabularySummaries.push(outcome.summary);
-    }
-    let appliedLabels: Awaited<ReturnType<typeof applyLabelRegistryArgs>> | null = null;
-    if (args?.labels !== undefined) {
-      appliedLabels = await applyLabelRegistryArgs(workspacePath, args, appliedPredicates);
-      if ('error' in appliedLabels) return appliedLabels.error;
-      vocabularySummaries.push(appliedLabels.summary);
     }
     const vocabularySummary = vocabularySummaries.join('\n');
     // A vocabulary-only call is complete here.
@@ -285,7 +304,6 @@ export async function handleTrackerDefineType(
             structured: {
               action: 'defined-vocabulary' as const,
               ...(appliedPredicates ? { count: appliedPredicates.length, predicates: appliedPredicates } : {}),
-              ...(appliedLabels && !('error' in appliedLabels) ? { labels: appliedLabels.applied } : {}),
             },
             summary: vocabularySummary,
           }),

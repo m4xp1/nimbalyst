@@ -1,5 +1,6 @@
 package com.nimbalyst.app.documents
 
+import android.view.View
 import android.webkit.WebView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -312,12 +313,16 @@ fun DocumentEditorScreen(
                         AndroidView(
                             modifier = Modifier.fillMaxSize(),
                             factory = { viewContext ->
-                                createDocumentEditorWebView(viewContext, relay) { errorMessage = it }.also { webView = it }
+                                // A plain View stands in when no WebView could be created; errorMessage explains why.
+                                createDocumentEditorWebView(viewContext, relay) { errorMessage = it }
+                                    ?.also { webView = it } ?: View(viewContext)
                             },
                             onRelease = { view ->
-                                // Save anything typed in the last half second, then free the renderer.
-                                flush(view) { view.destroy() }
-                                if (webView === view) webView = null
+                                if (view is WebView) {
+                                    // Save anything typed in the last half second, then free the renderer.
+                                    flush(view) { view.destroy() }
+                                    if (webView === view) webView = null
+                                }
                             },
                         )
                     }

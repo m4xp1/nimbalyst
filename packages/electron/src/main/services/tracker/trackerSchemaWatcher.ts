@@ -4,7 +4,10 @@ import * as fsPromises from 'fs/promises';
 import chokidar from 'chokidar';
 import {
   globalRegistry,
+  registryTrackerTypeLookup,
+  resolveTrackerTypeInheritance,
   type TrackerDataModel,
+  type TrackerTypeDeclaration,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 import {
   materializeYamlTrackerTypeDef,
@@ -21,7 +24,7 @@ import {
   projectedSchemaFormForFile,
   refreshSharedSchemaHeader,
   resolveOwningTeamName,
-  resolveSchemaModelFromContent,
+  parseSchemaDeclarationFromContent,
   writeBackSharedSchema,
 } from './trackerSchemaProjection';
 import {
@@ -101,13 +104,29 @@ export async function reloadWorkspaceSchemaFile(
 ): Promise<void> {
   if (isSelfWrittenSchemaFile(filePath)) return; // our own write-back, not a user edit
   const fileName = path.basename(filePath);
-  let model: TrackerDataModel;
+  // What gets registered: a derived type stays declared so base changes reach it.
+  let declared: TrackerTypeDeclaration;
   try {
-    model = resolveSchemaModelFromContent(fileName, fs.readFileSync(filePath, 'utf-8'));
+    declared = parseSchemaDeclarationFromContent(fileName, fs.readFileSync(filePath, 'utf-8'));
   } catch (err) {
     console.error(`[TrackerSchemaService] Failed to reload ${filePath}:`, err);
     return;
   }
+  const resolution = resolveTrackerTypeInheritance(declared, registryTrackerTypeLookup);
+  if (!resolution.model) {
+    if (resolution.errors.every((error) => error.code === 'INHERITANCE_UNKNOWN_BASE')) {
+      // A subtype saved before its base. Register the declaration so the
+      // registry resolves it the moment the base loads; there is nothing to
+      // gate or mirror until then.
+      globalRegistry.register(declared);
+      notifySchemaChanged();
+      logger.main.info(`[TrackerSchemaService] '${declared.type}' is waiting for its base type: ${resolution.errors[0]?.message}`);
+      return;
+    }
+    console.error(`[TrackerSchemaService] Failed to reload ${filePath}:`, resolution.errors.map((e) => e.message).join('; '));
+    return;
+  }
+  const model: TrackerDataModel = resolution.model;
 
   // A hand edit cannot carry a confirmation: the file is already saved by the
   // time we hear about it, and there is no modal to show at watcher time. So the
@@ -161,7 +180,11 @@ export async function reloadWorkspaceSchemaFile(
   // both left the registry stale for anything reading it on the same tick and
   // made a personal tracker's edit fail to load whenever unrelated team-schema
   // work threw.
-  globalRegistry.register(model);
+  const waitingBefore = globalRegistry.getUnresolvedDerivedTypes();
+  globalRegistry.register(declared);
+  // Subtypes that were waiting on this type resolve now (the registry
+  // re-resolves dependents on every register); they still need mirroring.
+  const nowResolved = waitingBefore.filter((type) => globalRegistry.get(type));
   // console.log(`[TrackerSchemaService] Reloaded schema: ${model.type}`);
   notifySchemaChanged();
 
@@ -186,11 +209,16 @@ export async function reloadWorkspaceSchemaFile(
       },
     });
     if (model.sharing === 'team') {
-      globalRegistry.register(model);
+      globalRegistry.register(declared);
       await refreshSharedSchemaHeader(workspacePath, filePath, model);
     }
   } catch (err) {
     console.error(`[TrackerSchemaService] Failed to mirror ${model.type} after reload:`, err);
+  }
+
+  for (const type of nowResolved) {
+    const dependent = globalRegistry.get(type);
+    if (dependent) await materializeYamlTrackerTypeDef(workspacePath, dependent);
   }
 }
 

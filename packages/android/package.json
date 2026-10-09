@@ -13,7 +13,7 @@
     "android:test:unit": "./gradlew :app:testDebugUnitTest"
   },
   "dependencies": {
-    "@nimbalyst/runtime": "file:../runtime",
+    "@nimbalyst/runtime": "workspace:*",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

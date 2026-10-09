@@ -33,11 +33,12 @@ object ModelLabel {
         "opus-5" to "5",
         "sonnet" to "5.5",
         "sonnet-5" to "5",
-        "haiku" to "4.5",
+        "haiku" to "5.5",
         "opus-4-8" to "4.8",
         "opus-4-7" to "4.7",
         "opus-4-6" to "4.6",
         "sonnet-4-6" to "4.6",
+        "haiku-4-5" to "4.5",
     )
 
     private val contextSuffix = Regex("-(?:1m|200k)$")
@@ -80,6 +81,7 @@ object ModelLabel {
         "claude-fable-5" to "Fable 5",
         "claude-sonnet-5-5" to "Sonnet 5.5",
         "claude-sonnet-5" to "Sonnet 5",
+        "claude-haiku-5-5" to "Haiku 5.5",
         "claude-opus-5" to "Opus 5",
         "claude-opus-4-8" to "Opus 4.8",
         "claude-opus-4-7" to "Opus 4.7",

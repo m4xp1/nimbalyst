@@ -64,6 +64,7 @@ import { createCollectionItem } from '../TrackerMode/createCollectionItem';
 import { loadTrackerTeamMembers } from '../TrackerMode/useTrackerTeamMembers';
 import { assertFileSaveSucceeded, getSaveFailureMessage, resolveSaveFailureType, type FileSaveResult } from '../../utils/fileSaveResult';
 import { customEditorSaveBaseline, resolveSaveAttempt } from './resolveSaveAttempt';
+import { requestConfirmation } from '../../dialogs/requestConfirmation';
 import { reloadFromDisk, type ReloadOutcome } from './reloadFromDisk';
 import { resolveDiffResolutionSave } from './resolveDiffResolutionSave';
 import { resolveCustomEditorReview } from './resolveCustomEditorReview';
@@ -814,11 +815,15 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             window.electronAPI.saveFile(content, path, lastKnown, source),
           confirmOverwrite: () => {
             logger.ui.info('[TabEditor] Save conflict detected, prompting user');
-            return window.confirm(
-              'The file has been modified externally since you opened it.\n\n' +
-              'Do you want to overwrite the external changes with your edits?\n\n' +
-              'Click OK to overwrite, or Cancel to reload the file from disk.'
-            );
+            return requestConfirmation({
+              title: 'Overwrite external changes?',
+              message:
+                'The file has been modified externally since you opened it.\n\n' +
+                'Do you want to overwrite the external changes with your edits?\n\n' +
+                'Click OK to overwrite, or Cancel to reload the file from disk.',
+              confirmLabel: 'Overwrite',
+              destructive: true,
+            });
           },
         },
       );
@@ -2984,11 +2989,15 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           // ask. Cancel keeps the buffer and the editor exactly as they are
           // (NIM-5359, finding 3).
           if (hasUnresolvedReview()) {
-            const discard = window.confirm(
-              'An AI edit is still pending review, so these edits cannot be saved yet.\n\n' +
+            const discard = await requestConfirmation({
+              title: 'Discard unsaved edits?',
+              message:
+                'An AI edit is still pending review, so these edits cannot be saved yet.\n\n' +
                 'Switching editors reloads the file from disk and discards them.\n\n' +
                 'Click OK to discard your edits, or Cancel to stay here and resolve the review first.',
-            );
+              confirmLabel: 'Discard',
+              destructive: true,
+            });
             if (!discard) {
               logger.ui.info(
                 `[TabEditor] Editor-mode toggle cancelled for ${fileName}: unsaved edits kept`,

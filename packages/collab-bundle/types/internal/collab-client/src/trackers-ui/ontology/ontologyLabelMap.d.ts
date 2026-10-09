@@ -10,7 +10,7 @@ import { type LabelIndex } from './ontologyLabels';
 import type { OntologyRecordLike } from './ontologyRecords';
 import { type TypeMapRelationship } from './typeMap/typeMapRelationships';
 import { type TypeMapZone } from './typeMap/typeMapZones';
-export type { RelationshipStatus, TypeMapRelationship, TypeMapStatement, QualifierSummary, TypeMapExpectation } from './typeMap/typeMapRelationships';
+export type { RelationshipStatus, TypeMapRelationship, TypeMapStatement, TypeMapExpectation } from './typeMap/typeMapRelationships';
 export type { TypeMapZone } from './typeMap/typeMapZones';
 export interface TypeMapProperty {
     id: string;

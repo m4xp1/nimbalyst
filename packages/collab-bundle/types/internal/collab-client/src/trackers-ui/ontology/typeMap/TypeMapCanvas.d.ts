@@ -15,7 +15,11 @@ export interface TypeMapCanvasProps {
     /** Ids (`type:x`, `rel:x`) in the hovered or selected neighbourhood. */
     lit: ReadonlySet<string>;
     selection: MapSelection;
-    onSelect: (selection: MapSelection) => void;
+    /** The click comes along so a type can open in a new tab on Cmd/Ctrl. */
+    onSelect: (selection: MapSelection, event?: {
+        metaKey: boolean;
+        ctrlKey: boolean;
+    }) => void;
     onHover: (selection: MapSelection) => void;
 }
 export declare const TypeMapCanvas: import("react").NamedExoticComponent<TypeMapCanvasProps>;

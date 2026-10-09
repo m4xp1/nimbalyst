@@ -1,6 +1,7 @@
 package com.nimbalyst.app.ui.sessiondetail
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -38,7 +39,13 @@ fun rememberAttachmentLaunchers(viewModel: SessionDetailViewModel): AttachmentLa
     }
     val launchCamera = {
         val file = viewModel.prepareCameraCapture()
-        camera.launch(AttachmentStore.uriForCameraFile(context, file))
+        try {
+            camera.launch(AttachmentStore.uriForCameraFile(context, file))
+        } catch (_: ActivityNotFoundException) {
+            // No app handles ACTION_IMAGE_CAPTURE (no camera, or it is disabled).
+            viewModel.onCameraResult(false)
+            Toast.makeText(context, R.string.camera_app_unavailable, Toast.LENGTH_SHORT).show()
+        }
     }
     // The manifest declares CAMERA for the QR scanner, which makes the capture
     // intent require the grant too.

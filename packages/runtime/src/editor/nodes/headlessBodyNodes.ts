@@ -41,10 +41,13 @@ import EditorNodes from './EditorNodes';
 import { ImageNode } from '../plugins/ImagesPlugin/ImageNodeCore';
 import { PageBreakNode } from '../plugins/PageBreakPlugin/PageBreakNodeCore';
 import { MermaidNode } from '../plugins/MermaidPlugin/MermaidNodeCore';
+import { QuadrantNode } from '../plugins/QuadrantPlugin/QuadrantNodeCore';
 import { DecisionNode } from '../plugins/DecisionPlugin/DecisionNodeCore';
 import { EmbeddedFileNode } from '../plugins/EmbedPlugin/EmbeddedFileNodeCore';
 import { DocumentReferenceNode } from '../../plugins/DocumentLinkPlugin/DocumentLinkNode';
 import { TrackerReferenceNode } from '../../plugins/TrackerLinkPlugin/TrackerReferenceNodeCore';
+import { PageMarkNode } from '../plugins/PageMarkPlugin/PageMarkNode';
+import { CitationNode } from '../plugins/CitationPlugin/CitationNodeCore';
 
 const HeadlessBodyNodes: Array<Klass<LexicalNode>> = [
   ...EditorNodes,
@@ -56,10 +59,13 @@ const HeadlessBodyNodes: Array<Klass<LexicalNode>> = [
   PageBreakNode,
   ImageNode,
   MermaidNode,
+  QuadrantNode,
   DecisionNode,
   EmbeddedFileNode,
   DocumentReferenceNode,
   TrackerReferenceNode,
+  PageMarkNode,
+  CitationNode,
 ];
 
 export default HeadlessBodyNodes;

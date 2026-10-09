@@ -31,6 +31,11 @@ public struct SessionListView: View {
     }
 
     @State private var searchText = ""
+    @State private var fileSearchText = ""
+    /// Search lives behind a header button: system search fields pin to the
+    /// column bottom (or float over the window on iOS 26) and cover rows.
+    @State private var isSearchPresented = false
+    @FocusState private var searchFieldFocused: Bool
     @State private var isCreatingSession = false
     @State private var pendingCreationRequests: Set<String> = []
 
@@ -89,22 +94,27 @@ public struct SessionListView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Sessions | Files segmented control
-            Picker("Tab", selection: $selectedTab) {
-                ForEach(ProjectTab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
+            if isSearchPresented {
+                InlineSearchField(
+                    prompt: selectedTab == .sessions ? "Search sessions" : "Search files",
+                    text: selectedTab == .sessions ? $searchText : $fileSearchText,
+                    focused: $searchFieldFocused,
+                    onDismiss: dismissSearch
+                )
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
 
-            // Tab content
+            // The session list scrolls the tab picker away with its rows, so a
+            // short landscape sidebar is not spent on fixed chrome.
             switch selectedTab {
             case .sessions:
                 sessionListContent
             case .files:
-                DocumentListView(project: project, selection: $selection)
+                tabPicker
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                DocumentListView(project: project, selection: $selection, searchText: $fileSearchText)
                     .environmentObject(appState)
             }
         }
@@ -188,8 +198,9 @@ public struct SessionListView: View {
                     VoiceStatusPill(state: voice.state)
                 }
                 #endif
-                if selectedTab == .sessions && model.facets.hasArchived {
-                    archiveToggle
+                searchButton
+                if selectedTab == .sessions && (model.facets.hasPhaseData || model.facets.hasArchived) {
+                    filterMenu
                 }
                 if selectedTab == .sessions {
                     creationMenu
@@ -198,31 +209,72 @@ public struct SessionListView: View {
         }
     }
 
-    private var archiveToggle: some View {
-        Button {
-            withAnimation { showArchived.toggle() }
-        } label: {
-            Image(systemName: showArchived ? "archivebox.fill" : "archivebox")
-                .font(.system(size: 14))
-                .foregroundStyle(showArchived ? NimbalystColors.primary : .secondary)
+    private var tabPicker: some View {
+        Picker("Tab", selection: $selectedTab) {
+            ForEach(ProjectTab.allCases, id: \.self) { tab in
+                Text(tab.rawValue).tag(tab)
+            }
         }
+        .pickerStyle(.segmented)
+    }
+
+    private var searchButton: some View {
+        Button {
+            if isSearchPresented {
+                dismissSearch()
+            } else {
+                withAnimation(.easeOut(duration: 0.15)) { isSearchPresented = true }
+                searchFieldFocused = true
+            }
+        } label: {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(isSearchPresented ? NimbalystColors.primary : .secondary)
+        }
+        .accessibilityLabel(isSearchPresented ? "Close search" : "Search")
+        .accessibilityIdentifier("sidebar-search-button")
+    }
+
+    private func dismissSearch() {
+        searchFieldFocused = false
+        searchText = ""
+        fileSearchText = ""
+        withAnimation(.easeOut(duration: 0.15)) { isSearchPresented = false }
+    }
+
+    private var isFiltering: Bool { phaseFilter != .all || showArchived }
+
+    /// Phase and archive filters share one toolbar menu instead of a segmented
+    /// row, which cost a full row of sidebar height in landscape.
+    private var filterMenu: some View {
+        Menu {
+            if model.facets.hasPhaseData {
+                Picker("Phase", selection: $phaseFilter) {
+                    ForEach(PhaseFilter.allCases, id: \.self) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            if model.facets.hasArchived {
+                Toggle(isOn: $showArchived.animation()) {
+                    Label("Show Archived", systemImage: "archivebox")
+                }
+            }
+        } label: {
+            Image(systemName: isFiltering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .foregroundStyle(isFiltering ? NimbalystColors.primary : .secondary)
+        }
+        .accessibilityLabel("Filter sessions")
+        .accessibilityIdentifier("session-filter-menu")
     }
 
     // MARK: - Session List Content
 
     @ViewBuilder
     private var sessionListRows: some View {
-        // Phase filter - only show when sessions have phase data
-        if model.facets.hasPhaseData {
-            Picker("Filter", selection: $phaseFilter) {
-                ForEach(PhaseFilter.allCases, id: \.self) { filter in
-                    Text(filter.rawValue).tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
+        tabPicker
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-        }
 
         // Scrolling back up past the window's head re-attaches the page that was
         // dropped, so trimming is invisible rather than a dead end at the top.
@@ -233,19 +285,23 @@ public struct SessionListView: View {
         // Meta-agent groups always render first, in their own section (mirrors desktop,
         // which places the "Meta Agent" group at the very top). Gated on the alpha flag.
         if metaAgentEnabled && !model.metaAgentItems.isEmpty {
-            Section("Meta Agent") {
+            Section {
                 ForEach(model.metaAgentItems) { item in
                     metaAgentGroupView(item)
                 }
+            } header: {
+                sectionHeader("Meta Agent")
             }
         }
 
         // All items interleaved by time period
         ForEach(model.sections) { periodGroup in
-            Section(periodGroup.period.rawValue) {
+            Section {
                 ForEach(periodGroup.items) { item in
                     sessionListItemView(item)
                 }
+            } header: {
+                sectionHeader(periodGroup.period.rawValue)
             }
         }
 
@@ -262,6 +318,14 @@ public struct SessionListView: View {
         if isSearching && !model.isHistoryComplete && !model.isEmpty {
             searchCoverageRow
         }
+    }
+
+    /// Plain-list headers default to a large title style that spends a row's
+    /// height on "Today"; a footnote label keeps more sessions on screen.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 
     private var isSearching: Bool { !searchText.isEmpty }
@@ -299,6 +363,9 @@ public struct SessionListView: View {
                 sessionListRows
             }
             .listStyle(.plain)
+            #if os(iOS)
+            .environment(\.defaultMinListHeaderHeight, 24)
+            #endif
             // Holding the reader's place when the window trims its head is the only
             // reason a page leaving memory is invisible.
             .onChange(of: model.scrollAnchor) { _, anchor in
@@ -307,7 +374,6 @@ public struct SessionListView: View {
                 model.clearScrollAnchor()
             }
         }
-        .searchable(text: $searchText, prompt: "Search sessions")
         .refreshable {
             model.refresh()
             appState.requestSync()
@@ -439,11 +505,11 @@ public struct SessionListView: View {
                 hasMoreChildren: model.childrenHaveMore.contains(pageItem.group.key),
                 isExpanded: groupExpansionBinding(for: pageItem.group.key),
                 voiceFocusedSessionId: voiceFocusedSessionId,
-                onLoadMoreChildren: { model.loadMoreChildren(groupKey: pageItem.group.key) }
+                onLoadMoreChildren: { model.loadMoreChildren(groupKey: pageItem.group.key) },
+                onSelectRoot: { selection = .session(pageItem.parent.id) },
+                headerContextMenu: { groupContextMenu(for: pageItem) },
+                childContextMenu: { row in moveToWorkstreamMenu(for: row) }
             )
-            .contextMenu {
-                groupContextMenu(for: pageItem)
-            }
         case .session(let row):
             SessionRow(
                 session: row,
@@ -502,21 +568,7 @@ public struct SessionListView: View {
             Label("Start Workstream", systemImage: "folder.badge.plus")
         }
 
-        if !model.workstreamParents.isEmpty {
-            Menu("Move to Workstream") {
-                if model.canLoadPreviousWorkstreams {
-                    Button("Newer Workstreams") { model.loadNewerWorkstreams() }
-                }
-                ForEach(model.workstreamParents) { workstream in
-                    Button(workstream.titleDecrypted ?? "Workstream") {
-                        reparentSession(sessionId: row.id, newParentId: workstream.id)
-                    }
-                }
-                if model.workstreamParentsHaveMore {
-                    Button("Older Workstreams") { model.loadOlderWorkstreams() }
-                }
-            }
-        }
+        moveToWorkstreamMenu(for: row)
 
         Divider()
 
@@ -537,7 +589,29 @@ public struct SessionListView: View {
     }
 
     @ViewBuilder
+    private func moveToWorkstreamMenu(for row: SessionListRow) -> some View {
+        if !model.workstreamParents.isEmpty {
+            Menu("Move to Workstream") {
+                if model.canLoadPreviousWorkstreams {
+                    Button("Newer Workstreams") { model.loadNewerWorkstreams() }
+                }
+                ForEach(model.workstreamParents.filter { $0.id != row.id && $0.id != row.parentSessionId && $0.worktreeId == row.worktreeId }) { workstream in
+                    Button(workstream.titleDecrypted ?? "Workstream") {
+                        reparentSession(sessionId: row.id, newParentId: workstream.id)
+                    }
+                }
+                if model.workstreamParentsHaveMore {
+                    Button("Older Workstreams") { model.loadOlderWorkstreams() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private func groupContextMenu(for item: SessionListPageItem) -> some View {
+        if item.parent.sessionType != "workstream" && item.parent.sessionType != "blitz" {
+            moveToWorkstreamMenu(for: item.parent)
+        }
         Button {
             createChildSession(parentId: item.parent.id, groupKey: item.group.key)
         } label: {

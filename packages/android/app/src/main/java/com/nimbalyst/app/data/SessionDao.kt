@@ -71,6 +71,9 @@ interface SessionDao {
     @Query("UPDATE sessions SET draftInput = :draftInput, draftUpdatedAt = :draftUpdatedAt WHERE id = :sessionId")
     suspend fun updateDraftInput(sessionId: String, draftInput: String?, draftUpdatedAt: Long)
 
+    @Query("UPDATE sessions SET clientMetadataJson = :clientMetadataJson WHERE id = :sessionId")
+    suspend fun updateClientMetadata(sessionId: String, clientMetadataJson: String)
+
     @Query("UPDATE sessions SET isArchived = :isArchived WHERE id = :sessionId")
     suspend fun updateArchived(sessionId: String, isArchived: Boolean)
 

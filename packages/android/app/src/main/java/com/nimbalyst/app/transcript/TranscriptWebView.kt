@@ -89,13 +89,15 @@ fun TranscriptWebView(
     }
 
     Box(modifier = modifier) {
-        key(host.webView) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { host.webView },
-                // A dead view is destroyed here; a live one goes back to the pool.
-                onRelease = { view -> TranscriptWebViewPool.recycle(view) }
-            )
+        host.webView?.let { webView ->
+            key(webView) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { webView },
+                    // A dead view is destroyed here; a live one goes back to the pool.
+                    onRelease = { view -> TranscriptWebViewPool.recycle(view) }
+                )
+            }
         }
         host.error?.let { message ->
             TranscriptErrorCard(

@@ -259,3 +259,16 @@ class TranscriptBridgeRelayTest {
     //   assertEquals(Looper.getMainLooper(), Looper.myLooper())
     // from within the handler lambda — omitted here to keep the test harness simple.
 }
+
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
+class TranscriptExternalLinksOpenTest {
+    @Test
+    fun `a link no installed app can open returns false instead of crashing`() {
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        shadowOf(app).checkActivities(true)
+
+        assertFalse(TranscriptExternalLinks.open(app, "https://nimbalyst.com/privacy-policy"))
+        assertFalse(TranscriptExternalLinks.open(app, "mailto:a@b.c"))
+    }
+}

@@ -364,7 +364,6 @@ export function planOntologyChange<T extends OntologyRecordLike>(change: Ontolog
           before: [{ label: predicate.id, value: used ? 'in use' : 'not declared' }],
           after: [
             { label: predicate.id, value: `${predicate.direction}, ${predicate.valueShape}${predicate.inverseLabel ? `, inverse "${predicate.inverseLabel}"` : ''}` },
-            ...Object.keys(predicate.qualifiers ?? {}).length ? [{ label: 'Qualifiers', value: Object.keys(predicate.qualifiers ?? {}).join(', ') }] : [],
           ],
         },
         satisfied: Boolean(change.appliedAt),
@@ -551,7 +550,7 @@ export interface ProposalRequestDraft {
 
 /**
  * What the Improve button writes: a `proposed` proposal with no changes and a
- * request naming the health check and the pages, which the knowledge skill's
+ * request naming the health check and the pages, which the wiki update skill's
  * agent workflow picks up and fills in.
  */
 export function proposalRequestFor<T extends OntologyRecordLike>(item: HealthItem<T>): ProposalRequestDraft {

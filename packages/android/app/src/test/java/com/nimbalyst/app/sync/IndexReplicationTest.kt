@@ -61,7 +61,7 @@ class IndexReplicationTest {
                 override var credentials: PairingCredentials? = credentials
                 override fun save(credentials: PairingCredentials) = Unit
             },
-            NotificationManager(context), scope, factory, TokenRefresher { it }
+            NotificationManager(context), scope, factory, TokenRefresher { TokenRefresh.Refreshed(it) }
         )
     }
 

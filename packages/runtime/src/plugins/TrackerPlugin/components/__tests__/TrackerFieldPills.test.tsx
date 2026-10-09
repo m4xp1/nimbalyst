@@ -3,7 +3,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TrackerFieldPills } from '../TrackerFieldPills';
 import { globalRegistry, emptyLabelRegistry, type FieldDefinition } from '@nimbalyst/tracker-schema';
-import { labelFieldHints, labelPropertyToFieldDefinition, unwrapLabelFieldValues } from '../trackerLabelFields';
+import { labelPropertyToFieldDefinition, unwrapLabelFieldValues } from '../trackerLabelFields';
 
 const statusField: FieldDefinition = {
   name: 'state',
@@ -138,7 +138,7 @@ describe('TrackerFieldPills', () => {
     screen.getByTestId('tracker-document-field-pill-state');
   });
 
-  it('shows a qualified label property by its value, with the qualifiers on hover', () => {
+  it('shows a legacy qualified label property by its value, never the stored object', () => {
     const flag = labelPropertyToFieldDefinition({
       id: 'feature-flag',
       label: 'Feature flag',
@@ -146,11 +146,10 @@ describe('TrackerFieldPills', () => {
       qualifiers: { rollout: { type: 'number', label: 'Rollout %' } },
     }, 'feature');
     const stored = { 'feature-flag': { value: 'new-editor', qualifiers: { rollout: 25 } } };
-    renderPills([flag], unwrapLabelFieldValues([flag], stored), { fieldHints: labelFieldHints([flag], stored) });
+    renderPills([flag], unwrapLabelFieldValues([flag], stored));
 
     const chip = screen.getByTestId('tracker-field-pill-feature-flag');
     expect(chip.textContent).toContain('new-editor');
-    expect(chip.getAttribute('title')).toBe('Feature flag: new-editor\nRollout %: 25');
   });
 
   it('names labels on a label-ref chip and keeps an unknown label rather than dropping it', async () => {

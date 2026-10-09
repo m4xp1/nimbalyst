@@ -66,7 +66,8 @@ class NimbalystFirebaseMessagingService : FirebaseMessagingService() {
             ?: message.notification?.body
             ?: "You have a new notification."
 
-        Log.d(TAG, "FCM message received: sessionId=$sessionId title=$title")
+        // The title carries session content; never log it.
+        Log.d(TAG, "FCM message received: sessionId=$sessionId")
 
         if (VisibleSession.shouldSuppress(sessionId)) {
             Log.d(TAG, "Session $sessionId is on screen; skipping notification.")

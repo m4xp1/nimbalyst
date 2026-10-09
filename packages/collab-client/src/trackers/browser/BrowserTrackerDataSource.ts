@@ -400,6 +400,11 @@ export class BrowserTrackerDataSource implements TrackerDataSource {
     return this.syncState;
   }
 
+  /** Push the schema lane now; before bootstrap finishes, the bootstrap pushes it. */
+  flushSchemas(): Promise<void> {
+    return this.engine.flushSchemas();
+  }
+
   /**
    * Not available in the browser yet, and it throws rather than approximating.
    *

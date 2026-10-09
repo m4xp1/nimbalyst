@@ -82,6 +82,66 @@ describe('label registry validation', () => {
   });
 });
 
+describe('field property qualifiers', () => {
+  const withFlagQualifiers = (qualifiers: Record<string, unknown>): LabelRegistry => {
+    const registry = specRegistry();
+    registry.properties = registry.properties.map(p => (p.id === 'flag' ? { ...p, qualifiers } as typeof p : p));
+    return registry;
+  };
+
+  it('validates qualifier declarations with label codes and paths', () => {
+    const result = validateLabelRegistry(
+      withFlagQualifiers({ mode: { type: 'select' }, since: { type: 'string', itemType: 'string', hint: 'x' } }),
+      { predicateIds: PREDICATE_IDS },
+    );
+    expect(result.valid).toBe(false);
+    expect(result.issues.map(i => `${i.code} ${i.path}`)).toEqual([
+      'LABEL_MISSING_FIELD properties[3].qualifiers.mode.options',
+      'LABEL_INVALID_FIELD properties[3].qualifiers.since.itemType',
+    ]);
+    expect(result.warnings.map(w => w.path)).toEqual(['properties[3].qualifiers.since.hint']);
+  });
+
+  it('checks a stored qualifier bag: required, unknown, and wrong type', () => {
+    const registry = new TrackerDataModelRegistry();
+    registry.register({
+      type: 'entity',
+      displayName: 'Entity',
+      displayNamePlural: 'Entities',
+      fields: [{ name: 'title', type: 'string', required: true }, { name: 'labels', type: 'label-ref', multiValue: true }],
+    } as TrackerDataModel);
+    registry.setLabels(withFlagQualifiers({
+      since: { type: 'string', required: true },
+      stage: { type: 'select', options: ['beta', 'ga'] },
+    }));
+    const result = registry.validate('entity', {
+      title: 'Sync lane',
+      customFields: { flag: { value: 'labels-v1', qualifiers: { stage: 'rc', sinse: '0.9' } } },
+    });
+    expect(result.warnings?.map(w => `${w.code} ${w.field}`)).toEqual([
+      'LABEL_QUALIFIER_REQUIRED flag.qualifiers.since',
+      'LABEL_QUALIFIER_INVALID_OPTION flag.qualifiers.stage',
+      'LABEL_QUALIFIER_UNKNOWN flag.qualifiers.sinse',
+    ]);
+  });
+
+  it('classifies an optional qualifier as additive and a newly required one as destructive', () => {
+    const before = specRegistry();
+    const added = classifyLabelRegistryChanges(before, withFlagQualifiers({
+      since: { type: 'string' },
+      notes: { type: 'string' },
+    }));
+    expect(added.classification).toBe('additive');
+    expect(added.changes).toEqual([
+      expect.objectContaining({ kind: 'property-qualifier-changed', id: 'flag', detail: 'qualifier-added:notes' }),
+    ]);
+
+    const required = classifyLabelRegistryChanges(before, withFlagQualifiers({ since: { type: 'string', required: true } }));
+    expect(required.classification).toBe('destructive');
+    expect(required.changes[0]).toMatchObject({ detail: 'qualifier-made-required:since', destructive: true });
+  });
+});
+
 describe('label resolution', () => {
   it('closes item labels and the legacy kind under every broader parent', () => {
     const registry = specRegistry();

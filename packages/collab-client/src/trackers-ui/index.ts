@@ -271,7 +271,7 @@ export {
   recordRole,
 } from './ontology/ontologyLabels';
 export type { KindOption, LabelIndex } from './ontology/ontologyLabels';
-export type { QualifierSummary, RelationshipStatus, TypeMapExpectation, TypeMapModel, TypeMapOptions, TypeMapProperty, TypeMapRelationship, TypeMapStatement, TypeMapType, TypeMapZone } from './ontology/ontologyLabelMap';
+export type { RelationshipStatus, TypeMapExpectation, TypeMapModel, TypeMapOptions, TypeMapProperty, TypeMapRelationship, TypeMapStatement, TypeMapType, TypeMapZone } from './ontology/ontologyLabelMap';
 export type { TypeCell, TypePageModel, TypePageOptions, TypeProperty, TypeRelationship, TypeRow } from './ontology/ontologyTypePage';
 // The type map, type pages and label health load on demand (see `ontologyTypesApi.ts`).
 export type OntologyTypesApi = typeof import('./ontology/ontologyTypesApi');

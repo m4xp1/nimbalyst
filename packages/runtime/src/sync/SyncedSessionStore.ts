@@ -101,6 +101,7 @@ export function createSyncedSessionStore(
 ): SessionStore {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const connectedSessions = new Set<string>();
+  const hierarchyPublications = new Map<string, object>();
 
   // Track which sessions should be synced
   function shouldSync(sessionId: string, workspaceId?: string): boolean {
@@ -128,11 +129,14 @@ export function createSyncedSessionStore(
   // Await publication so asynchronous failures cannot escape the warning path.
   // metadata_updated changes can flow via the index channel even without a session room connection,
   // so we allow them through regardless of connectedSessions state.
-  async function pushToSync(sessionId: string, change: SessionChange): Promise<void> {
+  async function pushToSync(sessionId: string, change: SessionChange, isCurrent?: () => boolean): Promise<void> {
     if (!connectedSessions.has(sessionId) && change.type !== 'metadata_updated') return;
 
     try {
-      const outcome = await syncProvider.pushChange(sessionId, change);
+      if (isCurrent && !isCurrent()) return;
+      const outcome = isCurrent
+        ? await syncProvider.pushChange(sessionId, change, { isCurrent })
+        : await syncProvider.pushChange(sessionId, change);
       warnIfUnpublished(message => console.warn(message), sessionId, '[SyncedSessionStore] Failed to publish change', outcome);
     } catch (error) {
       console.warn(`[SyncedSessionStore] Failed to push change for ${sessionId}:`, error);
@@ -142,6 +146,13 @@ export function createSyncedSessionStore(
   return {
     findByProviderSessionId: baseStore.findByProviderSessionId?.bind(baseStore),
     getMany: baseStore.getMany?.bind(baseStore),
+    listPendingHierarchyIntents: baseStore.listPendingHierarchyIntents?.bind(baseStore),
+    acknowledgeHierarchyIntent: baseStore.acknowledgeHierarchyIntent?.bind(baseStore),
+    applyRemoteHierarchySnapshot: baseStore.applyRemoteHierarchySnapshot ? async (rows, isCurrent) => {
+      const result = await baseStore.applyRemoteHierarchySnapshot!(rows, isCurrent);
+      for (const row of result) if (row.accepted) hierarchyPublications.set(row.sessionId, {});
+      return result;
+    } : undefined,
 
     async ensureReady(): Promise<void> {
       return baseStore.ensureReady();
@@ -180,14 +191,27 @@ export function createSyncedSessionStore(
       sessionId: string,
       metadata: UpdateSessionMetadataPayload
     ): Promise<void> {
+      const changesHierarchy = metadata.parentSessionId !== undefined || metadata.createdBySessionId !== undefined;
+      const generation = changesHierarchy ? {} : undefined;
+      if (generation) hierarchyPublications.set(sessionId, generation);
+      const isCurrent = generation ? () => hierarchyPublications.get(sessionId) === generation : undefined;
       // Update base store
       await baseStore.updateMetadata(sessionId, metadata);
+      // Remote reconciliation owns its guarded canonical publication.
+      if (metadata.hierarchySync?.source === 'remote') return;
 
       // Build the sync payload from SYNC_RELEVANT_FIELDS. The store is the
       // single source of truth for what reaches other devices -- callers do
       // not (and should not) need to remember to follow updateMetadata with
       // an explicit pushChange.
       const syncMetadata = buildSyncPayload(metadata as unknown as Record<string, unknown>);
+      if (changesHierarchy) {
+        const canonical = await baseStore.get(sessionId);
+        if (canonical) {
+          syncMetadata.parentSessionId = canonical.parentSessionId ?? null;
+          syncMetadata.createdBySessionId = canonical.createdBySessionId ?? null;
+        }
+      }
 
       // Draft input gets a separate freshness timestamp; bumping updatedAt
       // here would cause the row to jump to the top on every keystroke.
@@ -209,7 +233,7 @@ export function createSyncedSessionStore(
       void pushToSync(sessionId, {
         type: 'metadata_updated',
         metadata: syncMetadata as unknown as SyncedSessionMetadata,
-      });
+      }, isCurrent);
     },
 
     async get(sessionId: string): Promise<ChatSession | null> {

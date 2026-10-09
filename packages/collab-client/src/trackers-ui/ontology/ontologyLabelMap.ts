@@ -13,7 +13,7 @@ import { buildRelationships, declaredProperties, hasValue, type TypeMapRelations
 import { buildZones, type TypeMapZone } from './typeMap/typeMapZones';
 import { claimRecordsOf } from './ontologyTypePage';
 
-export type { RelationshipStatus, TypeMapRelationship, TypeMapStatement, QualifierSummary, TypeMapExpectation } from './typeMap/typeMapRelationships';
+export type { RelationshipStatus, TypeMapRelationship, TypeMapStatement, TypeMapExpectation } from './typeMap/typeMapRelationships';
 export type { TypeMapZone } from './typeMap/typeMapZones';
 
 export interface TypeMapProperty {

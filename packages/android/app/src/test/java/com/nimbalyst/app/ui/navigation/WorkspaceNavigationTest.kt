@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.nimbalyst.app.sync.DeviceInfo
 import com.nimbalyst.app.sync.SessionCreationOutcome
 import com.nimbalyst.app.sync.SyncErrorKind
 import kotlinx.coroutines.CompletableDeferred
@@ -57,6 +58,28 @@ class WorkspaceNavigationTest {
         nav.select("other")
         nav.adoptResolvedSession("pushed", "project-b")
         assertEquals("project-a", nav.state.value.projectId)
+    }
+
+    @Test
+    fun `desktop history stays listed while the roster is empty or the process restarts`() {
+        fun device(id: String, type: String) =
+            DeviceInfo(deviceId = id, name = id, type = type, platform = "test", connectedAt = 0, lastActiveAt = 0)
+        val saved = SavedStateHandle()
+        val nav = WorkspaceNavigation(saved).apply {
+            rememberHosts(listOf(device("mac", "desktop"), device("vm", "headless")))
+            adoptDefaultHost("mac")
+        }
+        assertTrue(nav.state.value.includesUnattributedSessions)
+        // Reconnecting after foreground reports no devices until the roster arrives.
+        nav.rememberHosts(emptyList())
+        assertTrue(nav.state.value.includesUnattributedSessions)
+        assertTrue(WorkspaceNavigation(saved).state.value.includesUnattributedSessions)
+
+        nav.chooseHost("vm")
+        assertFalse("headless hosts own only their own sessions", nav.state.value.includesUnattributedSessions)
+        nav.clearAccount()
+        nav.chooseHost("mac")
+        assertFalse("another account's roster does not carry over", nav.state.value.includesUnattributedSessions)
     }
 
     @Test

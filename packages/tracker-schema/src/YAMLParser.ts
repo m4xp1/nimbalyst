@@ -245,6 +245,10 @@ function applyOptionalModelProperties<T extends { type: string }>(target: T, dat
   // Only written when true: an unarchived tracker is the overwhelming majority
   // and `archived: false` on every file would be noise.
   if (data.archived === true) model.archived = true;
+  // Same rule: only an opt-in is written, so absent means off.
+  if (data.localNumbers === true) model.localNumbers = true;
+  // A wiki type's storage; absent means the type is not in the wiki.
+  if (data.storage === 'pages' || data.storage === 'table') model.storage = data.storage;
 
   return target;
 }
@@ -297,8 +301,11 @@ export function parseTrackerTypeYAML(yamlString: string): TrackerDataModel | Der
 /**
  * Serialize a TrackerDataModel to YAML string
  */
-export function serializeTrackerYAML(model: TrackerDataModel): string {
-  return yaml.dump(normalizeTrackerSharingModel(model), {
+export function serializeTrackerYAML(model: TrackerDataModel | DerivedTrackerTypeDeclaration): string {
+  // A derived type that says nothing about sharing inherits its base's; the
+  // normalizer would stamp it `personal`.
+  const inheritsSharing = typeof model.extends === 'string' && model.extends.length > 0 && model.sharing === undefined;
+  return yaml.dump(inheritsSharing ? model : normalizeTrackerSharingModel(model as TrackerDataModel), {
     indent: 2,
     lineWidth: 120,
     noRefs: true,
@@ -310,7 +317,7 @@ export function serializeTrackerYAML(model: TrackerDataModel): string {
  */
 export function validateTrackerYAML(yamlString: string): { valid: boolean; error?: string } {
   try {
-    parseTrackerYAML(yamlString);
+    parseTrackerTypeYAML(yamlString);
     return { valid: true };
   } catch (error) {
     return {
@@ -333,8 +340,9 @@ export function validateTrackerYAML(yamlString: string): { valid: boolean; error
  * that has no room yet.
  *
  * Returns issues rather than throwing, and returns every issue: a registry is
- * authored by hand and a reader who is told about one bad qualifier at a time
- * edits the file once per mistake.
+ * authored by hand and a reader who is told about one bad field at a time
+ * edits the file once per mistake. A `qualifiers` key left from an earlier
+ * registry is an unknown-field warning, not a failure.
  */
 export function parsePredicateRegistryYAML(yamlString: string): PredicateRegistryValidation {
   let data: unknown;
@@ -360,9 +368,18 @@ export function parsePredicateRegistryYAML(yamlString: string): PredicateRegistr
   return validatePredicateRegistry(predicates === undefined ? data : predicates);
 }
 
-/** Serialize a registry to the `.nimbalyst/predicates.yaml` shape. */
+/**
+ * Serialize a registry to the `.nimbalyst/predicates.yaml` shape. Relations
+ * carry no qualifiers, so a retired `qualifiers` block an older registry still
+ * holds is dropped here rather than written back.
+ */
 export function serializePredicateRegistryYAML(predicates: readonly PredicateDefinition[]): string {
-  return yaml.dump({ predicates }, { indent: 2, lineWidth: 120, noRefs: true });
+  const cleaned = predicates.map(predicate => {
+    if (!('qualifiers' in predicate)) return predicate;
+    const { qualifiers: _retired, ...rest } = predicate as PredicateDefinition & { qualifiers?: unknown };
+    return rest;
+  });
+  return yaml.dump({ predicates: cleaned }, { indent: 2, lineWidth: 120, noRefs: true });
 }
 
 // ---------------------------------------------------------------------------

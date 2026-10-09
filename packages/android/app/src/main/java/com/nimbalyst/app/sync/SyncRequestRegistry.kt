@@ -3,10 +3,12 @@ package com.nimbalyst.app.sync
 import android.util.Log
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** What an outbound sync message is for, and what the user loses when it fails. */
 internal enum class SyncRequestKind(val failureDescription: String, val isUserVisible: Boolean = true) {
@@ -17,6 +19,8 @@ internal enum class SyncRequestKind(val failureDescription: String, val isUserVi
     REPARENT("The move is saved on this device and may not have reached your desktop. It will be sent again when the connection returns."),
     TOOL_RESULT("Your response is saved on this device but may be missing from the transcript elsewhere."),
     CREATE_WORKTREE("The desktop did not confirm the new worktree. It may still appear; check the session list before trying again."),
+    /** The composer shows its own error and gets the text back. */
+    PROMPT("The desktop did not confirm your prompt. Check the session before sending it again.", isUserVisible = false),
     PUSH_TOKEN("Notifications may not reach this device until it reconnects.", isUserVisible = false),
 }
 
@@ -41,7 +45,8 @@ internal data class SyncRequestOutcome(val requestId: String, val kind: SyncRequ
  * never replayed: by reconnect the desktop has moved on.
  *
  * OkHttp reports only whether a frame was queued, and a queued frame can die
- * with the socket. So an accepted index edit with a rebuild stays unconfirmed
+ * with the socket. So an accepted index edit with a rebuild, or a
+ * [sendConfirmed] prompt, stays unconfirmed
  * until the server answers a `ping` sent after it: the room handles one
  * socket's messages in order, so the `pong` proves every earlier frame
  * arrived. A disconnect parks whatever is still unconfirmed for [reconnect],
@@ -60,6 +65,8 @@ internal class SyncRequestRegistry(
         val coalesceKey: String?,
         val rebuild: (suspend () -> String?)?,
         var timeout: Job? = null,
+        /** Set by [sendConfirmed]: completed true on the covering pong, false when the socket drops first. */
+        val delivered: CompletableDeferred<Boolean>? = null,
     )
 
     private val pending = ConcurrentHashMap<String, Pending>()
@@ -91,6 +98,20 @@ internal class SyncRequestRegistry(
         return dispatch(id, json, expectsResponse = false)
     }
 
+    /**
+     * Sends [json], which is never replayed, and returns only once the room
+     * has proven receipt with a `pong`. False when the socket refused the
+     * frame, dropped before the pong, or no pong came within the timeout: the
+     * caller gets its content back to retry by hand.
+     */
+    suspend fun sendConfirmed(kind: SyncRequestKind, json: String): Boolean {
+        val id = UUID.randomUUID().toString()
+        val delivered = CompletableDeferred<Boolean>()
+        pending[id] = Pending(kind, SyncChannel.INDEX, coalesceKey = null, rebuild = null, delivered = delivered)
+        if (!dispatch(id, json, expectsResponse = false)) return false
+        return withTimeoutOrNull(timeoutMs) { delivered.await() } ?: false
+    }
+
     /** Sends [json] and waits for [resolve] with [requestId]. Returns whether the socket accepted it. */
     fun request(kind: SyncRequestKind, requestId: String, json: String, channel: SyncChannel = SyncChannel.INDEX): Boolean {
         val entry = Pending(kind, channel, coalesceKey = null, rebuild = null)
@@ -119,8 +140,12 @@ internal class SyncRequestRegistry(
         pending.keys.toList().forEach { fail(it, SyncErrorKind.TRANSPORT, "disconnected before the send was confirmed") }
         synchronized(barrierLock) {
             // The newest parked write for a key wins; an unconfirmed one never
-            // replaces a newer failure already waiting.
-            unconfirmed.forEach { (key, entry) -> replay.putIfAbsent(key, entry) }
+            // replaces a newer failure already waiting. A confirmed send is
+            // never replayed; its caller hears it may not have landed.
+            unconfirmed.forEach { (key, entry) ->
+                entry.delivered?.complete(false)
+                if (entry.rebuild != null) replay.putIfAbsent(key, entry)
+            }
             unconfirmed.clear()
             pingCovers = null
         }
@@ -133,7 +158,7 @@ internal class SyncRequestRegistry(
     fun deliveryConfirmed() {
         val more = synchronized(barrierLock) {
             val covered = pingCovers ?: return
-            covered.forEach(unconfirmed::remove)
+            covered.forEach { unconfirmed.remove(it)?.delivered?.complete(true) }
             pingCovers = null
             unconfirmed.isNotEmpty()
         }
@@ -154,10 +179,11 @@ internal class SyncRequestRegistry(
 
     /** Drops everything without reporting: the account changed and these belong to another identity. */
     fun cancel() {
-        pending.values.forEach { it.timeout?.cancel() }
+        pending.values.forEach { it.timeout?.cancel(); it.delivered?.complete(false) }
         pending.clear()
         replay.clear()
         synchronized(barrierLock) {
+            unconfirmed.values.forEach { it.delivered?.complete(false) }
             unconfirmed.clear()
             pingCovers = null
         }
@@ -169,7 +195,8 @@ internal class SyncRequestRegistry(
         when {
             !accepted -> fail(id, SyncErrorKind.TRANSPORT, "the socket refused the frame")
             !expectsResponse -> {
-                if (entry.rebuild != null && entry.channel == SyncChannel.INDEX) awaitDelivery(id, entry)
+                val proven = entry.rebuild != null || entry.delivered != null
+                if (proven && entry.channel == SyncChannel.INDEX) awaitDelivery(id, entry)
                 succeed(id)
             }
         }

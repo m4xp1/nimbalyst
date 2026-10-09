@@ -55,6 +55,7 @@ export { SuperProgressSnapshotWidget } from './SuperProgressSnapshotWidget';
 export { SuperLoopProgressWidget } from './SuperLoopProgressWidget';
 export { UpdateSessionMetaWidget } from './UpdateSessionMetaWidget';
 export { TrackerToolWidget } from './TrackerToolWidget';
+export { PageUpdateWidget } from './PageUpdateWidget';
 export { CrossSessionToolWidget } from './CrossSessionToolWidget';
 export { MemoryToolWidget } from './MemoryToolWidget';
 export { ToolWidgetErrorBoundary } from './ToolWidgetErrorBoundary';
@@ -119,6 +120,7 @@ import { SuperProgressSnapshotWidget } from './SuperProgressSnapshotWidget';
 import { SuperLoopProgressWidget } from './SuperLoopProgressWidget';
 import { UpdateSessionMetaWidget } from './UpdateSessionMetaWidget';
 import { TrackerToolWidget } from './TrackerToolWidget';
+import { PageUpdateWidget } from './PageUpdateWidget';
 import { MemoryToolWidget } from './MemoryToolWidget';
 import { CrossSessionToolWidget } from './CrossSessionToolWidget';
 
@@ -210,6 +212,9 @@ const BUILT_IN_TOOL_WIDGETS: CustomToolWidgetRegistry = {
   'tracker_update': TrackerToolWidget,
   'tracker_link_session': TrackerToolWidget,
   'tracker_link_file': TrackerToolWidget,
+
+  // An agent edit to a page: one "Updated <page>" line that opens the page.
+  'applyCollabDocEdit': PageUpdateWidget,
 
   // nimbalyst-memory MCP tools - recall/search show the query + returned
   // source documents (title + snippet) instead of a raw JSON blob. Both the

@@ -7,6 +7,7 @@ import { ThinkingModeSelector } from './ThinkingModeSelector';
 import { OpenCodeRoleSelector } from './OpenCodeRoleSelector';
 import { ContextUsageDisplay } from './ContextUsageDisplay';
 import { ActionPromptsDropdown } from './ActionPromptsDropdown';
+import type { ActionPickerSettings } from '../../store/atoms/actionPrompts';
 import { HelpTooltip } from '../../help';
 
 type MenuName = 'model' | 'effort' | 'actions';
@@ -40,7 +41,7 @@ interface AIInputControlsProps
   > {
   modelPickerOpenRequest: number;
   focusInput: () => void;
-  onActionInsert: (body: string) => void;
+  onActionInsert: (body: string, picker?: ActionPickerSettings) => void;
 }
 
 export function AIInputControls({

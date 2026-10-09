@@ -38,7 +38,8 @@ class SyncRequestRegistryTest {
 
         online = true
         registry.reconnect()
-        assertEquals(listOf("draft-now"), sent)
+        // The ping is the delivery barrier for the replayed edit.
+        assertEquals(listOf("draft-now", """{"type":"ping"}"""), sent)
 
         registry.request(SyncRequestKind.CREATE_WORKTREE, "r2", "{}")
         errors.clear()

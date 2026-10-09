@@ -14,6 +14,9 @@ final class WorkspaceNavigationState: ObservableObject {
     @Published private(set) var selection: WorkspaceSelection?
     @Published var compactColumn: NavigationSplitViewColumn = .sidebar
     @Published private(set) var hosts: [DeviceInfo] = []
+    /// Outlives `hosts`, which is empty from foreground until the socket reconnects.
+    /// Changes only alongside a `hosts` write, so it needs no publisher of its own.
+    private var knownDesktopIds: Set<String> = []
     private var hostSubscription: AnyCancellable?
     private weak var hostSource: AnyObject?
     private var composeStates: [String: SessionComposeState] = [:]
@@ -30,9 +33,19 @@ final class WorkspaceNavigationState: ObservableObject {
         hostSubscription?.cancel()
         hostSubscription = publisher.sink { [weak self] devices in
             guard let self else { return }
-            hosts = devices.filter { $0.type == "desktop" || $0.type == "headless" }
+            let roster = devices.filter { $0.type == "desktop" || $0.type == "headless" }
+            for device in roster {
+                if device.type == "desktop" { knownDesktopIds.insert(device.deviceId) }
+                else { knownDesktopIds.remove(device.deviceId) }
+            }
+            hosts = roster
             adoptDefaultHost(from: hosts)
         }
+    }
+
+    /// Desktop-created sessions carry no hostDeviceId and are listed under a desktop.
+    var includesUnattributedSessions: Bool {
+        hostDeviceId.map(knownDesktopIds.contains) ?? false
     }
 
     func stopObservingHosts() {
@@ -70,6 +83,7 @@ final class WorkspaceNavigationState: ObservableObject {
 
     func clearAccount() {
         hostDeviceId = nil
+        knownDesktopIds = []
         composeStates.removeAll()
         chooseProject(nil)
     }
@@ -140,7 +154,7 @@ struct WorkspaceNavigationView: View {
                 if let project = navigation.project {
                     SessionListView(
                         project: project, selection: selection, hostDeviceId: navigation.hostDeviceId,
-                        includeUnattributedSessions: hosts.contains { $0.deviceId == navigation.hostDeviceId && $0.type == "desktop" }
+                        includeUnattributedSessions: navigation.includesUnattributedSessions
                     )
                         .id(project.id)
                         .toolbar {

@@ -1038,9 +1038,10 @@ export class ClaudeProvider extends BaseAIProvider {
     // minor-versioned `claude-sonnet-4-N` ids (major 4, still accepts). The
     // legacy `claude-3-7-sonnet` form has `sonnet` later in the string and so
     // doesn't match this anchored prefix -- it falls through to `true`.
-    const sonnetMajor = id.match(/^claude-sonnet-(\d{1,2})(?:-|$)/);
-    if (sonnetMajor) {
-      const major = parseInt(sonnetMajor[1], 10);
+    // Haiku 5+ (`claude-haiku-5-5`) follows the same rule; Haiku 4.5 accepts.
+    const sonnetOrHaikuMajor = id.match(/^claude-(?:sonnet|haiku)-(\d{1,2})(?:-|$)/);
+    if (sonnetOrHaikuMajor) {
+      const major = parseInt(sonnetOrHaikuMajor[1], 10);
       return major < 5;
     }
 

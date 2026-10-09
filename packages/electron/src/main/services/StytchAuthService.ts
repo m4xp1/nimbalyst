@@ -967,19 +967,25 @@ export async function resolvePersonalUserId(serverUrl: string): Promise<Personal
     return cached;
   }
 
-  const sessionToken = authState.sessionToken;
-  if (!sessionToken) {
+  if (!authState.sessionToken) {
     logger.main.warn('[StytchAuthService] Cannot resolve personalUserId: no session token');
     return cached;
   }
 
-  const jwt = authState.sessionJwt;
-  if (!jwt) {
-    logger.main.warn('[StytchAuthService] Cannot resolve personalUserId: no JWT');
-    return cached;
-  }
-
   try {
+    // At launch authState.sessionJwt is whatever was persisted by the last run
+    // -- typically a team-scoped JWT whose 5-minute lifetime is long gone. The
+    // worker's auth gate rejects it with a bare 401 before the exchange runs, so
+    // refresh first, exactly as doRefreshPersonalSession does. The refresh also
+    // rotates the session token, so both are read after it.
+    await refreshSession(serverUrl);
+    const sessionToken = authState.sessionToken;
+    const jwt = authState.sessionJwt;
+    if (!jwt || !sessionToken) {
+      logger.main.warn('[StytchAuthService] Cannot resolve personalUserId: no JWT after refresh');
+      return cached;
+    }
+
     // Convert ws(s):// to http(s):// for fetch
     const httpUrl = serverUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
     logger.main.info('[StytchAuthService] Resolving personalUserId via session exchange to personal org:', personalOrgId);

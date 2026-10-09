@@ -6,7 +6,6 @@ import {
   resolveTrackerLabelFields,
   unwrapLabelFieldValues,
   wrapLabelFieldValue,
-  labelFieldHints,
 } from '../trackerLabelFields';
 import {
   getTrackerFieldLayout,
@@ -71,6 +70,27 @@ describe('getTrackerFieldLayout', () => {
     // object field stay out of the compact surface entirely.
     expect(getTrackerFieldLayout(model.type).map((field) => field.name))
       .toEqual(['state', 'owner', 'tags', 'estimate']);
+  });
+
+  it('leaves lists in the default layout and drops them from the header layout', () => {
+    globalRegistry.register({
+      ...model,
+      type: 'fieldLayoutHeaderSpec',
+      fields: [
+        ...model.fields,
+        { name: 'areas', type: 'multiselect', options: [] },
+        { name: 'stakeholders', type: 'array', itemType: 'string' },
+        { name: 'labels', type: 'label-ref' },
+        { name: 'dependsOn', type: 'relationship', multiValue: true },
+        { name: 'parent', type: 'relationship' },
+      ],
+    });
+
+    // Quick create still edits tags and collections through the default layout.
+    expect(getTrackerFieldLayout('fieldLayoutHeaderSpec').map((field) => field.name))
+      .toEqual(['state', 'owner', 'tags', 'estimate', 'stakeholders', 'labels', 'dependsOn', 'parent']);
+    expect(getTrackerFieldLayout('fieldLayoutHeaderSpec', [], { singleValuedOnly: true }).map((field) => field.name))
+      .toEqual(['state', 'owner', 'estimate', 'parent']);
   });
 
   it('returns nothing for an unregistered tracker type', () => {
@@ -162,7 +182,7 @@ describe('fields that follow labels', () => {
       ['flag', 'Feature flag'],
       ['surface', 'Surface'],
     ]);
-    expect(labeled.claims.map((property) => property.id)).toEqual(['part-of-subsystem']);
+    // A claim-stored property (earlier knowledge graph) is neither a field nor flagged as unknown.
     expect(labeled.unknown.map((property) => property.id)).toEqual(['mystery']);
     expect(getTrackerFieldLayout(model.type, labeled.fields).map((field) => field.name))
       .toEqual(['state', 'owner', 'tags', 'estimate', 'labels', 'flag', 'surface']);
@@ -175,14 +195,13 @@ describe('fields that follow labels', () => {
       .toEqual(['surface']);
   });
 
-  it('edits a qualified value bare, keeps its qualifiers on save, and exposes them as a hover hint', () => {
+  it('edits a legacy qualified value bare and keeps its qualifiers on save', () => {
     installVocabulary();
     const { fields } = resolveTrackerLabelFields(model.type, { labels: ['feature'] });
     const flag = fields.find((field) => field.name === 'flag')!;
     const stored = { flag: { value: 'new-editor', qualifiers: { rollout: 25 } }, surface: 'web' };
 
     expect(unwrapLabelFieldValues(fields, stored)).toEqual({ flag: 'new-editor', surface: 'web' });
-    expect(labelFieldHints(fields, stored)).toEqual({ flag: 'Rollout %: 25' });
     expect(wrapLabelFieldValue(flag, 'newer-editor', stored.flag))
       .toEqual({ value: 'newer-editor', qualifiers: { rollout: 25 } });
     expect(wrapLabelFieldValue(flag, '', stored.flag)).toBeNull();
@@ -201,6 +220,6 @@ describe('fields that follow labels', () => {
     };
     globalRegistry.register(bugType);
     expect(resolveTrackerLabelFields(bugType.type, { labels: ['feature'], kind: 'capability' }))
-      .toEqual({ fields: [], claims: [], unknown: [] });
+      .toEqual({ fields: [], unknown: [] });
   });
 });

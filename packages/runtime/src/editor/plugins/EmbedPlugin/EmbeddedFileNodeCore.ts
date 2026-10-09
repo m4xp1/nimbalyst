@@ -36,6 +36,8 @@ import { createNodeDecoratorSlot } from '../../nodes/nodeDecoratorSlot';
 import { parseEmbedAttrs, serializeEmbedAttrs } from './embedAttrs';
 
 export type EmbedAttrs = Record<string, string>;
+export const PLACED_VIEW_ATTR_KEYS = ['mode', 'cols', 'sort', 'filter', 'group', 'scope', 'w', 'ordering', 'hide', 'start', 'end', 'x', 'y', 'xl', 'yl', 'q', 'pin', 'height', 'width'] as const;
+
 
 export interface EmbeddedFilePayload {
   src: string;
@@ -59,12 +61,16 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
   __src: string;
   __label: string;
   __attrs: EmbedAttrs;
+  // Separate primitive Yjs properties let independent settings merge. Null
+  // uses the original markdown value; an empty string explicitly removes it.
+  [key: `__view_${string}`]: string | null;
 
   constructor(src: string, label: string, attrs: EmbedAttrs, key?: NodeKey) {
     super(key);
     this.__src = src;
     this.__label = label;
     this.__attrs = attrs;
+    for (const key of PLACED_VIEW_ATTR_KEYS) this[`__view_${key}`] = null;
   }
 
   static getType(): string {
@@ -72,12 +78,14 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
   }
 
   static clone(node: EmbeddedFileNode): EmbeddedFileNode {
-    return new EmbeddedFileNode(
+    const clone = new EmbeddedFileNode(
       node.__src,
       node.__label,
       { ...node.__attrs },
       node.__key,
     );
+    for (const key of PLACED_VIEW_ATTR_KEYS) clone[`__view_${key}`] = node[`__view_${key}`];
+    return clone;
   }
 
   static importJSON(
@@ -96,7 +104,7 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
       version: 1,
       src: this.__src,
       label: this.__label,
-      attrs: { ...this.__attrs },
+      attrs: this.getAttrs(),
     };
   }
 
@@ -122,7 +130,7 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
     a.href = this.__src;
     a.textContent = this.__label || this.__src;
     a.setAttribute('data-lexical-embedded-file', 'true');
-    const title = serializeEmbedAttrs(this.__attrs);
+    const title = serializeEmbedAttrs(this.getAttrs());
     if (title) {
       a.title = title;
     }
@@ -162,7 +170,14 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
   }
 
   getAttrs(): EmbedAttrs {
-    return { ...this.__attrs };
+    const latest = this.getLatest();
+    const attrs = { ...latest.__attrs };
+    for (const key of PLACED_VIEW_ATTR_KEYS) {
+      const value = latest[`__view_${key}`];
+      if (value === '') delete attrs[key];
+      else if (typeof value === 'string') attrs[key] = value;
+    }
+    return attrs;
   }
 
   setSrc(src: string): void {
@@ -178,6 +193,16 @@ export class EmbeddedFileNode extends DecoratorNode<JSX.Element | null> {
   setAttrs(attrs: EmbedAttrs): void {
     const writable = this.getWritable();
     writable.__attrs = { ...attrs };
+    for (const key of PLACED_VIEW_ATTR_KEYS) writable[`__view_${key}`] = null;
+  }
+
+  /** Merge one settings gesture into the current node, preserving other keys. */
+  patchViewAttrs(patch: Readonly<Record<string, string | null>>): void {
+    const current = this.getAttrs();
+    for (const [key, value] of Object.entries(patch)) {
+      if (!(PLACED_VIEW_ATTR_KEYS as readonly string[]).includes(key)) throw new Error(`Unknown view setting: ${key}`);
+      if ((current[key] ?? null) !== (value || null)) this.getWritable()[`__view_${key}`] = value ?? '';
+    }
   }
 
   decorate(editor: LexicalEditor, config: EditorConfig): JSX.Element | null {

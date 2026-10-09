@@ -1,75 +1,33 @@
-# September 24th, 2026 Release
+# September 30th, 2026 Release
 
 ### New Features
 
-- **Claude Opus 5.5** is available in Claude Agent, Claude Code CLI, and the Claude API, and is the new Claude API default. Older Opus versions stay selectable.
-- **GPT-6 Sol and GPT-6 Luna** are available for Codex and OpenAI API sessions, with GPT-6 Sol as the new default.
-- **Knowledge extension** (off by default) gives agents a shared ontology for team knowledge graphs: entities, claims, questions, findings, the verbs that connect them, and a hierarchy of areas.
-- **Trackers on phones.** Browse trackers with stacked lists, compact filters, and an explicit plan editing mode.
-- **GPT Live voice on iOS** with session context, spoken prompt handling, audio routing, synced-file access, and desktop announcements.
-- **Follow external Claude Code and Codex CLI sessions live**, including their names, from Agent Features settings (alpha).
-- **Share Namenym naming projects** for collaborative editing and individual favorites on desktop and the web.
-- Manage paired computers by hiding, restoring, or renaming devices when using a compatible sync server.
-- Open shared documents in the browser from their document menu.
-- Claude usage shows model-specific weekly allowances remaining and reset times, including Fable.
-- Active transcript turns show elapsed time (#1483, contributed by @FrozenLeafStudio).
-- Fenced code blocks in the chat panel show a copy button with confirmation (#1521, contributed by @LCKYN).
+- **Sonnet 5.5** for Claude Agent and the Claude API. The Sonnet row now runs Sonnet 5.5, and Sonnet 5 stays selectable.
+- **GPT-6.1 Sol** in the Codex and OpenAI model pickers, now the default Codex model.
+- **Crew Extension (alpha, off by default):** persistent agent teammates that work scheduled shifts within token budgets and flag you when something needs you. Use `/crew:hire` in any agent session to design a new Crew member.
+- **Opt-in unlimited open projects**, with a scrollable project rail and cleanup of resources for projects you are not using (#1579, contributed by @jszobody).
+- Extensions can start and drive their own agent sessions.
 
 ### Improvements
 
-- Canvas boards gain richer editing controls, zoomed-out previews, and screen navigation with editable titles and screenshot links.
-- Prisma diagrams gain clearer relationship routing and layout controls while preserving source text during layout-only saves.
-- GPT Live voice previews play instantly offline without an API key.
-- The AI model, effort, and Actions menus can be navigated entirely by keyboard.
-- Claude sessions use an updated SDK for more reliable MCP tools and resume, while respecting enterprise restrictions.
-- Required Claude approvals default to Deny and allow only one-time approval.
-- Settings diagnostics distinguish agent-verified trust from user-authored configuration.
-- Reduced memory in the menu bar island.
-- Slash-command search ranks exact matches first, then prefixes.
+- Claude Code sessions waiting on a background shell or sub-agent show a distinct indicator and name the task in the transcript.
+- Quick Track's Cmd+Enter creates the item and closes the popup without switching to Tracker mode, and the title field now spans the popup.
+- Improved load performance for very large Codex sessions.
 
 ### Fixed
 
-- Open files recover from missed disk changes, preserve unsaved edits, and block saves when the disk version cannot be verified.
-- Accepting large document rewrites preserves paragraph order; rejecting them restores the original formatting.
-- An agent edit to a long, list-heavy markdown file no longer freezes the editor while its inline diff is computed.
-- Find in markdown files highlights and moves between matches again after switching between raw and rich view, and Cmd+G / Cmd+Shift+G step through matches.
-- Tracker field edits preserve untouched frontmatter comments, formatting, dates, and line endings (#1552).
-- Pasting tracker values across grouped rows keeps each value aligned with its record (#1548).
-- Tracker lists grouped by type, and row type badges, show type names instead of raw type ids.
-- SQLite migrations retain progress, verify the switch after restart, and preserve recovery copies when history cannot be copied.
-- Restarting Nimbalyst preserves open projects.
-- Workspace windows stay on-screen after disconnecting or rearranging monitors (#1535).
-- Selecting Stable while running a newer build no longer rolls the app back on every launch (#1545).
-- Personal session sync keeps publishing when some server entries use another device's key, and unreadable sync credentials preserve the existing encryption key (#1545, #1542).
-- Organizations recover after startup sign-in delays, and a failed directory lookup is retried instead of showing an empty organization list.
-- Codex honors writable directories, detects unexpected read-only sessions, and offers Windows sandbox setup (#1544).
-- Codex turns survive transient reconnects, and file tracking handles rebuilds, slow commands, restarts, and overlapping sessions without false edits or warnings.
-- Codex can ask interactive questions when tool approval is set to never (#1553), and can read the reference files that come with extension skills.
-- OpenCode sessions resume after a permission prompt instead of stalling (#1563).
-- Spawned sessions run correctly in projects opened through symlinks or different path casing (#1551).
-- Foreground commands no longer trigger background-task wake-ups, and genuine completions are delivered once (#1493).
-- Cancelling a question clears its waiting state without hiding other pending prompts (#1549).
-- Review with AI starts a pull request review without requiring a custom slash command (#1556).
-- Commit proposals stay in the session worktree and reject unsupported checkout overrides.
-- Git pushes stay connected during long checks and report SSH disconnects and termination signals clearly.
-- The GitHub panel clears unrelated AI sessions when the selected PR or issue has no matching session.
-- Claude plugins no longer load duplicate, unconfigured copies (#1465).
-- Claude usage consistently shows percent used, matching its progress bars (#1546).
-- Extensions that are off by default no longer give agents their skills until they are enabled.
-- Memory extension re-indexing skips unchanged files and records instead of rebuilding its whole search index for each batch.
-- Voice mode starts more reliably, communicates with coding agents, sleeps through silent audio, and reports auto-approved commits.
-- Editor screenshots avoid freezes and support unopened Markdown, code, image, and extension files.
-- Browser previews no longer remain over the app after switching tabs (#1547).
-- Image previews refresh after external edits and recover from failed loads (#1543).
-- In-app HTML previews render UTF-8 text correctly even when the document omits a charset declaration.
-- Shared CSVs retain all rows and concurrent edits, and custom-editor reviews complete after Keep or Revert.
-- Landscape PDF pages use the correct page size and text alignment.
-- File-linked sessions and Actions metadata refresh without missed changes or repeated background lookups.
-- Cloudflare sandbox failures show clearer errors and refresh connection status before retrying, and removing a sandbox also removes its container application.
-- The macOS menu bar island follows the dark theme, and its status colors match the panel: green for running sessions and blue for unread.
-- On Windows, Gemini connects to the open Antigravity editor (#1532, contributed by @FrozenLeafStudio) and offers current Flash models (#1519, contributed by @LCKYN).
-- Packaged file search uses the bundled ripgrep reliably (#1482, contributed by @FrozenLeafStudio).
-- Internal MCP servers accept Streamable HTTP clients that omit a required response media type (#1533, contributed by @FrozenLeafStudio).
-- On Linux, the taskbar and window switcher show the Nimbalyst icon instead of a generic one (#697, contributed by @benoitperrin).
-- Mobile-created sessions target the desktop, open without restarting, and report creation and sync failures accurately.
-- Consumed messages stay out of the mobile queue, delivery warnings clear when the desktop picks them up, and slash commands sync automatically after reconnecting.
+- Compound Bash commands no longer prompt for permission after a user PreToolUse hook has allowed them (#426, contributed by @yanekm).
+- Overlapping file-tree scans no longer exhaust memory while files change in large projects (#1604, contributed by @jszobody).
+- Agent sessions no longer read and cache large or binary files written into the workspace, which flooded the log and grew memory.
+- Inline diffs no longer freeze the window for agent edits across long, list-heavy markdown files (#1606).
+- A sent prompt no longer stays duplicated below the transcript when the turn is slow to start (#1620).
+- Transcript messages no longer flash and redraw while a session is streaming.
+- Sessions no longer stay marked as running, or lose their waiting-for-you state, around an open question. A question left unanswered by sending a new message now shows as skipped.
+- Claude Agent sessions in an externally created worktree no longer stay stuck on "running" after a background command finishes.
+- Following external Claude Code sessions keeps importing after the agent changes directory, and skips unchanged logs.
+- Codex auto-review and subagent threads no longer appear as separate "# AGENTS.md instructions" sessions.
+- File @-mention suggestions pick up newly created and renamed files without a reload.
+- Clicking the Dock or tray icon brings back the project window after the app sat in the background.
+- Context menus and popovers no longer open under the title bar, where their first item could not be clicked.
+- Workstream sessions in the session list keep their "updated" time current.
+- Tracker types defined in a background project's window now appear in its tracker pane without a reload.

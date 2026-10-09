@@ -133,6 +133,13 @@ describe('SessionManager (runtime server)', () => {
     await manager.initialize();
   });
 
+  it('persists inherited worktree, parent and manager together when creating a phone child', async () => {
+    const insert = vi.spyOn(store, 'create');
+    const session = await manager.createSession('claude-code', undefined, 'ws', undefined, 'claude-code:opus', 'session', 'agent', 'wt', '/ws/wt', 'ws', 'standard', 'parent', undefined, 'parent');
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ parentSessionId: 'parent', createdBySessionId: 'parent', worktreeId: 'wt', workspaceId: 'ws' }));
+    expect(session).toMatchObject({ parentSessionId: 'parent', createdBySessionId: 'parent', worktreeId: 'wt' });
+  });
+
   it('returns persisted tool messages when listing sessions', async () => {
     const session = await manager.createSession('claude-code', { content: 'text' }, 'ws');
 

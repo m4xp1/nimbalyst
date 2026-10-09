@@ -257,6 +257,10 @@ class NimbalystRepository(
         database.sessionDao().updateDraftInput(sessionId, draftInput, draftUpdatedAt)
     }
 
+    suspend fun updateClientMetadata(sessionId: String, clientMetadataJson: String) {
+        database.sessionDao().updateClientMetadata(sessionId, clientMetadataJson)
+    }
+
     suspend fun messageCount(sessionId: String): Int =
         database.messageDao().countForSession(sessionId)
 

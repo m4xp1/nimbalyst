@@ -108,7 +108,7 @@ internal class IndexMessageHandler(
         val projects = response.projects.mapNotNull { decoder.decodeProject(it, crypto) }
         val previous = repository.getSessions(response.sessions.map { it.sessionId })
         val sessions = response.sessions.mapNotNull { entry ->
-            decoder.decodeSession(entry, crypto, previous[entry.sessionId])
+            decoder.decodeSession(entry, crypto, previous[entry.sessionId], serverRow = true)
         }
         val health = SnapshotHealth.of(response, readableSessions = sessions.size, readableProjects = projects.size)
         val syncedAt = System.currentTimeMillis()

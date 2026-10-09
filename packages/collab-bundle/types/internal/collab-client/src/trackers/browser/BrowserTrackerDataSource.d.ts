@@ -75,6 +75,8 @@ export declare class BrowserTrackerDataSource implements TrackerDataSource {
     snapshot(): Promise<TrackerDataSnapshot>;
     subscribe(cb: (change: TrackerDataChange) => void): () => void;
     status(): TrackerSyncState;
+    /** Push the schema lane now; before bootstrap finishes, the bootstrap pushes it. */
+    flushSchemas(): Promise<void>;
     /**
      * Not available in the browser yet, and it throws rather than approximating.
      *

@@ -15,13 +15,25 @@ import org.robolectric.annotation.Config
 class DocumentEditorBridgeTest {
     @Test
     fun theEditorWebViewCannotReachFilesOrContentProviders() {
-        val settings = createDocumentEditorWebView(ApplicationProvider.getApplicationContext(), EditorBridgeRelay()) {}.settings
+        val settings = createDocumentEditorWebView(ApplicationProvider.getApplicationContext(), EditorBridgeRelay()) {}!!.settings
         assertFalse(settings.allowFileAccess)
         assertFalse(settings.allowContentAccess)
         @Suppress("DEPRECATION")
         assertFalse(settings.allowFileAccessFromFileURLs)
         @Suppress("DEPRECATION")
         assertFalse(settings.allowUniversalAccessFromFileURLs)
+    }
+
+    @Test
+    fun aMissingWebViewProviderReportsAFailureInsteadOfCrashing() {
+        var failure: String? = null
+        val view = createDocumentEditorWebView(
+            ApplicationProvider.getApplicationContext(),
+            EditorBridgeRelay(),
+            newWebView = { throw RuntimeException("No WebView installed") },
+        ) { failure = it }
+        assertNull(view)
+        assertTrue(failure != null)
     }
 
     @Test

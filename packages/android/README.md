@@ -39,9 +39,9 @@ packages/android/
 
 ```bash
 cd packages/android
-npm install
-npm run build:transcript
-npm run sync:transcript-assets
+pnpm install
+pnpm run build:transcript
+pnpm run sync:transcript-assets
 ```
 
 ### Android app
@@ -49,10 +49,10 @@ npm run sync:transcript-assets
 The project targets `JavaVersion.VERSION_17` / `jvmTarget = "17"`. CI uses Temurin 17; OpenJDK 20 also works locally. Avoid GraalVM, which can fail the AGP `jlink` step. From the repository root:
 
 ```bash
-npm run android:test:unit         # ./gradlew :app:testDebugUnitTest
-npm run android:assemble:debug    # ./gradlew :app:assembleDebug
-npm run android:assemble:release  # ./gradlew :app:assembleRelease
-npm run android:bundle:release    # ./gradlew :app:bundleRelease
+pnpm run android:test:unit         # ./gradlew :app:testDebugUnitTest
+pnpm run android:assemble:debug    # ./gradlew :app:assembleDebug
+pnpm run android:assemble:release  # ./gradlew :app:assembleRelease
+pnpm run android:bundle:release    # ./gradlew :app:bundleRelease
 ```
 
 To run Gradle directly:
@@ -67,7 +67,7 @@ Open `packages/android/` in Android Studio, not the repo root.
 
 ### Play Store screenshots
 
-`npm run android:screenshots` and `npm run android:walkthrough` drive an emulator against the debug-only screenshot mode. See [ANDROID_MARKETING_SCREENSHOTS.md](../../docs/ANDROID_MARKETING_SCREENSHOTS.md).
+`pnpm run android:screenshots` and `pnpm run android:walkthrough` drive an emulator against the debug-only screenshot mode. See [ANDROID_MARKETING_SCREENSHOTS.md](../../docs/ANDROID_MARKETING_SCREENSHOTS.md).
 
 ### Builds, signing, and CI
 
@@ -75,7 +75,7 @@ Open `packages/android/` in Android Studio, not the repo root.
 - CI can inject Firebase config from the optional `ANDROID_GOOGLE_SERVICES_JSON_BASE64` GitHub secret by decoding it to `app/google-services.json` before the Gradle build.
 - The release `signingConfig` reads the keystore path and credentials from `NIMBALYST_ANDROID_KEYSTORE`, `NIMBALYST_ANDROID_KEYSTORE_PASSWORD`, `NIMBALYST_ANDROID_KEY_ALIAS`, and `NIMBALYST_ANDROID_KEY_PASSWORD`. With no keystore the release build is unsigned. Minification stays off.
 - `.github/workflows/android-build.yml` builds the APK and AAB. Pushes and pull requests run an unsigned job with no signing secrets. A signed build runs only for an `android/v*` tag, in a job gated on the `android-release` protected environment, and fails fast if `ANDROID_GOOGLE_SERVICES_JSON_BASE64` is missing.
-- To cut a signed release: `git tag android/vX.Y.Z && git push origin android/vX.Y.Z`, then approve the `android-release` deployment. For a local signed AAB, run `npm run android:bundle:signed`.
+- To cut a signed release: `git tag android/vX.Y.Z && git push origin android/vX.Y.Z`, then approve the `android-release` deployment. For a local signed AAB, run `pnpm run android:bundle:signed`.
 
 ### Server side
 

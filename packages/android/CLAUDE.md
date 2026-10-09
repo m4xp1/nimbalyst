@@ -83,14 +83,14 @@ packages/android/
 
 ### Commands
 
-From the repository root the npm scripts wrap the Gradle tasks:
+From the repository root the package scripts wrap the Gradle tasks:
 
 ```bash
-npm run android:build:transcript    # build the transcript bundle
-npm run android:test:unit           # ./gradlew :app:testDebugUnitTest
-npm run android:assemble:debug      # ./gradlew :app:assembleDebug
-npm run android:assemble:release    # ./gradlew :app:assembleRelease
-npm run android:bundle:release      # ./gradlew :app:bundleRelease
+pnpm run android:build:transcript    # build the transcript bundle
+pnpm run android:test:unit           # ./gradlew :app:testDebugUnitTest
+pnpm run android:assemble:debug      # ./gradlew :app:assembleDebug
+pnpm run android:assemble:release    # ./gradlew :app:assembleRelease
+pnpm run android:bundle:release      # ./gradlew :app:bundleRelease
 ```
 
 To invoke Gradle directly, point `JAVA_HOME` at a JDK 17+ install (no hard-coded user path):
@@ -103,7 +103,7 @@ JAVA_HOME=/path/to/jdk ./gradlew :app:testDebugUnitTest
 
 ### Play Store screenshots and video
 
-`npm run android:screenshots` and `npm run android:walkthrough` drive an emulator against the debug-only screenshot mode in `app/src/debug/java/com/nimbalyst/app/screenshots/` (inert stub in `app/src/release/`). Never move that code into `src/main` — it seeds demo data and a fake paired state. See [ANDROID_MARKETING_SCREENSHOTS.md](../../docs/ANDROID_MARKETING_SCREENSHOTS.md).
+`pnpm run android:screenshots` and `pnpm run android:walkthrough` drive an emulator against the debug-only screenshot mode in `app/src/debug/java/com/nimbalyst/app/screenshots/` (inert stub in `app/src/release/`). Never move that code into `src/main` — it seeds demo data and a fake paired state. See [ANDROID_MARKETING_SCREENSHOTS.md](../../docs/ANDROID_MARKETING_SCREENSHOTS.md).
 
 ### Builds, signing, and CI
 
@@ -111,8 +111,9 @@ JAVA_HOME=/path/to/jdk ./gradlew :app:testDebugUnitTest
 - CI can inject Firebase config from the optional `ANDROID_GOOGLE_SERVICES_JSON_BASE64` GitHub secret by decoding it to `app/google-services.json` before the Gradle build.
 - The release `signingConfig` reads the keystore path and credentials from environment variables: `NIMBALYST_ANDROID_KEYSTORE`, `NIMBALYST_ANDROID_KEYSTORE_PASSWORD`, `NIMBALYST_ANDROID_KEY_ALIAS`, `NIMBALYST_ANDROID_KEY_PASSWORD`. When the keystore is absent the release build is simply unsigned. Minification stays off (signed is not the same as minified).
 - CI builds both the APK and Play-ready AAB via `.github/workflows/android-build.yml`, which is split by trust: pushes and pull requests run an unsigned job that receives no signing secrets and uploads `android-unsigned-apk` / `android-unsigned-aab`, while a signed build runs only for an `android/v*` tag in a job gated on the `android-release` protected environment. A signed build still fails fast when `ANDROID_GOOGLE_SERVICES_JSON_BASE64` is missing, so a signed AAB never ships with push silently inert.
-- Cutting a signed Android release from CI: `git tag android/vX.Y.Z && git push origin android/vX.Y.Z`, then approve the `android-release` deployment. Shared build steps live in the composite action at `.github/actions/android-build/`, which reads no `secrets` context — signing material reaches it only as explicit inputs from the signed job, which is what keeps the validation path secretless by construction.
-- To build a signed release locally, run `npm run android:bundle:signed` (wraps `scripts/android-bundle-signed.sh`). It pulls all signing secrets from the 1Password item `Nimbalyst Android Signing` (Nimbalyst vault) at build time via `op read`: the upload keystore is fetched to a temp file deleted on exit, and passwords/alias are injected into the Gradle env only. Never commit a keystore — `*.jks`/`*.keystore` are gitignored.
+- Versioning follows the desktop train: `versionName` is read from `packages/electron/package.json`, and `versionCode` is `((major*1000 + minor)*1000 + patch)*100 + N`, where `N` (0-99, `NIMBALYST_ANDROID_BUILD_NUMBER`) is an Android-only rebuild slot for re-uploading the same train to Play.
+- Cutting a signed Android release from CI: `git tag android/vX.Y.Z && git push origin android/vX.Y.Z` (the tag must equal the desktop version; use `android/vX.Y.Z.N` for rebuild slot `N`), then approve the `android-release` deployment. Shared build steps live in the composite action at `.github/actions/android-build/`, which reads no `secrets` context — signing material reaches it only as explicit inputs from the signed job, which is what keeps the validation path secretless by construction.
+- To build a signed release locally, run `pnpm run android:bundle:signed` (wraps `scripts/android-bundle-signed.sh`). It pulls all signing secrets from the 1Password item `Nimbalyst Android Signing` (Nimbalyst vault) at build time via `op read`: the upload keystore is fetched to a temp file deleted on exit, and passwords/alias are injected into the Gradle env only. Never commit a keystore — `*.jks`/`*.keystore` are gitignored.
 
 Open `packages/android/` in Android Studio, not the repo root.
 

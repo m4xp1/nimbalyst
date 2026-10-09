@@ -57,18 +57,30 @@ export interface CollabReferenceOption {
    * and travels with the link through markdown (NIM-2473).
    */
   embedType?: string;
+  /** Material symbol shown beside it; a team page's `groups` when absent. */
+  icon?: string;
 }
 
 /**
- * Injected by the host when the current editor is a collaborative document.
- * When present, the `@` typeahead lists shared documents instead of local
- * workspace files, and reference clicks open the shared document.
+ * Injected by the host when the current editor is a page (team or Personal),
+ * or to add pages to a local file's list. When present, the `@` typeahead
+ * lists this source's pages, and reference clicks on their targets open them.
  */
 export interface CollabReferenceSource {
-  /** Enumerate the shareable documents (already excludes the current doc). */
+  /** Enumerate the linkable pages (already excludes the current one). */
   listOptions(): CollabReferenceOption[];
-  /** Open a shared document from its reference target (deep link / collab URI). */
-  openReference(target: string): void;
+  /** Open a page from its reference target (deep link / collab URI / console link). */
+  /** `newTab` when the click asked for one (Cmd/Ctrl, or the middle button). */
+  openReference(target: string, options?: { newTab: boolean }): void;
+  /** Whether a reference target is one of this source's; a shared-doc link when absent. */
+  ownsTarget?(target: string): boolean;
+  /** List the workspace's files after this source's pages (a local file's `@`). */
+  includeLocalFiles?: boolean;
+}
+
+function sourceOwnsTarget(source: CollabReferenceSource, target: string | null | undefined): boolean {
+  if (!target) return false;
+  return source.ownsTarget ? source.ownsTarget(target) : isCollabReferenceHref(target);
 }
 
 /**
@@ -135,10 +147,9 @@ function CollabReferencePastePlugin({
           if (!clipboardData || clipboardData.files.length > 0) return false;
 
           const value = clipboardData.getData('text/plain').trim();
-          if (!isCollabReferenceHref(value)) return false;
+          if (!sourceOwnsTarget(collabReferenceSource, value)) return false;
 
           const documentId = parseCollabReferenceDocumentId(value);
-          if (!documentId) return false;
 
           // Read the source at paste time rather than the typeahead's cached
           // list: `listOptions` is a synchronous read of live atoms, and the
@@ -148,7 +159,7 @@ function CollabReferencePastePlugin({
           // handed out. The id is the fallback for a link copied before the
           // target's query string changed shape.
           const known = options.find((option) => option.target === value)
-            ?? options.find((option) => option.documentId === documentId);
+            ?? (documentId ? options.find((option) => option.documentId === documentId) : undefined);
           if (!known) return false;
 
           event.preventDefault();
@@ -164,6 +175,7 @@ function CollabReferencePastePlugin({
                 collabTarget: known.target,
                 folderPath: known.folderPath,
                 collabEmbedType: known.embedType,
+                collabIcon: known.icon,
               },
               known.target,
             );
@@ -190,6 +202,8 @@ interface ReferenceDoc {
   folderPath?: string;
   /** Present only for collab references; the shared document's file extension. */
   collabEmbedType?: string;
+  /** Present only for collab references; the symbol shown beside it. */
+  collabIcon?: string;
 }
 
 const DOCUMENT_REFERENCE_STYLE_ID = 'document-reference-styles';
@@ -378,9 +392,9 @@ interface DocumentLinkPluginProps {
   // Optional anchor element to render the menu within
   anchorElem?: HTMLElement | null;
   /**
-   * When set, the editor is a collaborative document: `@` suggests shared
-   * documents (from this source) instead of local workspace files, and
-   * reference clicks open the shared document. Absent for local documents.
+   * When set, `@` suggests this source's pages (instead of local workspace
+   * files, unless it sets `includeLocalFiles`), and reference clicks on its
+   * targets open the page. Absent: local files only.
    */
   collabReferenceSource?: CollabReferenceSource | null;
 }
@@ -396,6 +410,7 @@ export function DocumentLinkPlugin({
   const { documentPath: currentDocumentPath } = useDocumentPath();
   const [queryString, setQueryString] = useState<string>('');
   const [documents, setDocuments] = useState<ReferenceDoc[]>([]);
+  const localFilesRef = useRef<ReferenceDoc[]>([]);
   const menuOpenRef = useRef(false);
   const lastFetchTimeRef = useRef<number>(0);
   const CACHE_DURATION_MS = 5000; // 5 second cache
@@ -480,12 +495,12 @@ export function DocumentLinkPlugin({
       // collab URI) instead of a workspace-relative path. Route them through
       // the collab opener; the local document-service path would fail to
       // resolve them and could spawn a blank window.
+      if (collabReferenceSource && sourceOwnsTarget(collabReferenceSource, documentPath)) {
+        collabReferenceSource.openReference(documentPath!, { newTab: event.button === 1 || event.metaKey || event.ctrlKey });
+        return;
+      }
       if (isCollabReferenceHref(documentPath)) {
-        if (collabReferenceSource) {
-          collabReferenceSource.openReference(documentPath!);
-        } else {
-          console.warn('[DocumentLinkPlugin] Collab reference clicked with no collab source available', documentPath);
-        }
+        console.warn('[DocumentLinkPlugin] Collab reference clicked with no collab source available', documentPath);
         return;
       }
 
@@ -537,11 +552,10 @@ export function DocumentLinkPlugin({
 
   // Load documents only when menu opens, with cache
   const loadDocuments = useCallback(async () => {
-    // Collaborative document: suggest shared documents instead of local files.
-    // The source is already computed from live atoms, so no fetch/cache needed.
-    if (collabReferenceSource) {
-      const options = collabReferenceSource.listOptions();
-      setDocuments(options.map((opt): ReferenceDoc => ({
+    // A page: suggest the source's pages instead of local files. The source is
+    // already computed from live atoms, so no fetch/cache needed.
+    const pages = collabReferenceSource
+      ? collabReferenceSource.listOptions().map((opt): ReferenceDoc => ({
         id: opt.documentId,
         name: opt.title,
         // fuzzy matcher ranks on name + path; folder breadcrumb feeds path.
@@ -549,7 +563,11 @@ export function DocumentLinkPlugin({
         collabTarget: opt.target,
         folderPath: opt.folderPath,
         collabEmbedType: opt.embedType,
-      })));
+        collabIcon: opt.icon,
+      }))
+      : [];
+    if (collabReferenceSource && !collabReferenceSource.includeLocalFiles) {
+      setDocuments(pages);
       return;
     }
 
@@ -557,14 +575,16 @@ export function DocumentLinkPlugin({
     const timeSinceLastFetch = now - lastFetchTimeRef.current;
 
     // Skip fetch if cache is still valid
-    if (timeSinceLastFetch < CACHE_DURATION_MS && documents.length > 0) {
+    if (timeSinceLastFetch < CACHE_DURATION_MS && localFilesRef.current.length > 0) {
+      setDocuments([...pages, ...localFilesRef.current]);
       return;
     }
 
     const docs = await documentService.listDocuments();
-    setDocuments(docs);
+    localFilesRef.current = docs;
+    setDocuments([...pages, ...docs]);
     lastFetchTimeRef.current = now;
-  }, [documentService, documents.length, collabReferenceSource]);
+  }, [documentService, collabReferenceSource]);
 
   // triggerFn is provided by the host; ensure stable reference via useMemo
   const resolvedTriggerFn = useMemo(() => triggerFn, [triggerFn]);
@@ -588,7 +608,7 @@ export function DocumentLinkPlugin({
         secondaryText: truncatedPath || undefined,
         // Full path in tooltip for hover
         tooltip: doc.collabTarget ? (doc.folderPath || doc.name) : doc.path,
-        icon: <MaterialSymbol style={{ fontSize: 16, verticalAlign: 'middle' }} icon={doc.collabTarget ? 'groups' : 'description'}/>,
+        icon: <MaterialSymbol style={{ fontSize: 16, verticalAlign: 'middle' }} icon={doc.collabTarget ? (doc.collabIcon ?? 'groups') : 'description'}/>,
         // Don't use sections - removes the heavy uppercase headers
         // section: doc.workspace || 'Documents',
         keywords: [doc.name, doc.workspace, doc.path].filter(Boolean) as string[],

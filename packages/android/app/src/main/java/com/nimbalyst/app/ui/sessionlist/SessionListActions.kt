@@ -137,13 +137,13 @@ internal fun rowActions(group: SessionListGrouping.Group, hasWorkstreams: Boolea
             RowAction.DELETE,
         )
         GroupKind.WORKSTREAM -> listOf(RowAction.ADD_SESSION, archive, RowAction.DELETE)
-        GroupKind.WORKTREE, GroupKind.META_AGENT -> listOf(archive, RowAction.DELETE)
+        GroupKind.WORKTREE -> listOf(archive, RowAction.DELETE)
     }
 }
 
 /** Groups act on every member; a standalone row on itself. */
 internal fun actionTargets(group: SessionListGrouping.Group): List<String> = when (group.kind) {
-    GroupKind.WORKTREE, GroupKind.META_AGENT -> group.sessionIds
+    GroupKind.WORKTREE -> group.sessionIds
     else -> listOf(group.parent.id)
 }
 
@@ -155,7 +155,7 @@ internal fun RowActionsMenu(
     onDismiss: () -> Unit,
     onAction: (RowAction) -> Unit,
 ) {
-    val isGroup = group.kind == GroupKind.WORKTREE || group.kind == GroupKind.META_AGENT
+    val isGroup = group.kind == GroupKind.WORKTREE
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         rowActions(group, hasWorkstreams).forEach { action ->
             if (action == RowAction.ARCHIVE || action == RowAction.UNARCHIVE) HorizontalDivider()

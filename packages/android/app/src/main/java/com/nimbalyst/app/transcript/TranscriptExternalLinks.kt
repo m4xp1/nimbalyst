@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.browser.customtabs.CustomTabsIntent
+import com.nimbalyst.app.R
 
 /** What to do with a navigation or `open_url` request from the transcript. */
 enum class TranscriptLinkAction {
@@ -78,7 +79,7 @@ object TranscriptExternalLinks {
             // Custom Tabs falls back to a browser on its own; this only fires
             // when no app can open the link at all.
             Log.w(TAG, "No app can open $url", error)
-            Toast.makeText(context, "No app can open this link.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, R.string.link_no_app, Toast.LENGTH_SHORT).show()
             false
         }
     }

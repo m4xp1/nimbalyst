@@ -361,7 +361,9 @@ final class SessionListWindowModel: ObservableObject {
         renderedItemCount = merged.count
         metaAgentItems = merged.filter { $0.group.kind == .metaAgent }
         sections = Self.sections(for: merged.filter { $0.group.kind != .metaAgent })
-        children = snapshot.children
+        // A projection refresh can replace a live snapshot with identical tree
+        // rows. Do not republish every expanded subtree in that handoff.
+        if children != snapshot.children { children = snapshot.children }
         childrenHaveMore = snapshot.childrenHaveMore
         workstreamParents = snapshot.workstreamParents
         workstreamParentsHaveMore = snapshot.workstreamParentsHaveMore
@@ -416,9 +418,9 @@ final class SessionListWindowModel: ObservableObject {
         var added = false
         for item in items where item.group.childCount > 0 && expandedGroups[item.group.key] == nil {
             guard restoredExpansionKeys.insert(item.group.key).inserted else { continue }
-            let shouldExpand = item.group.kind == .metaAgent
-                ? !persistedCollapsedKeys.contains(item.group.key)
-                : persistedExpandedKeys.contains(item.group.key)
+            let needsAttention = item.group.status != .idle
+            let shouldExpand = !persistedCollapsedKeys.contains(item.group.key)
+                && (needsAttention || persistedExpandedKeys.contains(item.group.key))
             if shouldExpand {
                 expandedGroups[item.group.key] = SessionListChildWindow(limit: Self.childPageSize)
                 expansionOrder.append(item.group.key)

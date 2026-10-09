@@ -8,9 +8,10 @@
 
 import { useMemo } from 'react';
 import { globalRegistry } from '../models';
-import type {
-  FieldDefinition,
-  TrackerSchemaRole,
+import {
+  isSingleValuedField,
+  type FieldDefinition,
+  type TrackerSchemaRole,
 } from '@nimbalyst/tracker-schema';
 import type { TrackerRecord } from '../../../core/TrackerRecord';
 
@@ -49,10 +50,15 @@ const CHIP_UNSUPPORTED_FIELD_TYPES = new Set(['multiselect', 'object']);
  * Opaque objects, structural fields, and read-only values stay in the ordinary
  * detail view instead of turning a compact header into a second inspector.
  * Custom text fields remain eligible; only the built-in description is omitted.
+ *
+ * `singleValuedOnly` is for page headers: lists of any kind (arrays, labels,
+ * multi-valued links) stay out of them. Every other surface (StatusBar, the
+ * classic detail pane, quick create) keeps tags and collections.
  */
 export function getTrackerFieldLayout(
   trackerType: string,
   labelFields: readonly FieldDefinition[] = [],
+  options: { singleValuedOnly?: boolean } = {},
 ): FieldDefinition[] {
   const model = globalRegistry.get(trackerType);
   if (!model) return [];
@@ -67,6 +73,7 @@ export function getTrackerFieldLayout(
       || BUILTIN_FIELDS.has(field.name)
       || field.readOnly
       || CHIP_UNSUPPORTED_FIELD_TYPES.has(field.type)
+      || (options.singleValuedOnly && !isSingleValuedField(field))
     ) {
       return;
     }

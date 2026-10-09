@@ -111,7 +111,7 @@ class SessionListGroupingTest {
             )
         )
         assertEquals(setOf("plain-parent", "child-of-plain", "orphan"), visibleIds(result))
-        assertTrue(result.all { it.kind == GroupKind.STANDALONE })
+        assertEquals(setOf("ws:plain-parent", "s:orphan"), result.map { it.key }.toSet())
     }
 
     @Test
@@ -130,19 +130,36 @@ class SessionListGroupingTest {
     }
 
     @Test
-    fun `meta-agent groups only form when the feature is enabled`() {
+    fun `three level trees use parents rather than manager roles and clamp indentation`() {
         val sessions = listOf(
-            session("meta", updatedAt = 1L, agentRole = "meta-agent"),
-            session("sub", updatedAt = 2L, createdBySessionId = "meta", parentSessionId = "ws"),
-            session("ws", updatedAt = 3L, sessionType = "workstream")
+            session("root", 1L, agentRole = "meta-agent"),
+            session("manager", 2L, parentSessionId = "root"),
+            session("worker", 3L, parentSessionId = "manager"),
+            session("deep", 100L, parentSessionId = "worker", isExecuting = true),
+            session("sibling", 10L, parentSessionId = "root"),
+            session("isolated", 20L, createdBySessionId = "root"),
         )
-        val enabled = groups(sessions, SessionListFilter(metaAgentEnabled = true))
-        assertEquals(listOf("sub"), enabled.single { it.key == "meta:meta" }.children.map { it.id })
-        assertTrue(enabled.single { it.key == "ws:ws" }.children.isEmpty())
+        for (enabled in listOf(true, false)) {
+            val result = groups(sessions, SessionListFilter(metaAgentEnabled = enabled))
+            assertEquals(setOf("ws:root", "s:isolated"), result.map { it.key }.toSet())
+            val tree = result.single { it.key == "ws:root" }
+            assertEquals(listOf("manager", "worker", "deep", "sibling"), tree.children.map { it.id })
+            assertEquals(listOf(1, 2, 2, 1), tree.children.map { SessionListGrouping.indentationLevel(it, tree) })
+            assertEquals(AggregatedStatus.PROCESSING, tree.status)
+        }
+    }
 
-        val disabled = groups(sessions, SessionListFilter(metaAgentEnabled = false))
-        assertEquals(listOf("sub"), disabled.single { it.key == "ws:ws" }.children.map { it.id })
-        assertEquals(GroupKind.STANDALONE, disabled.single { it.parent.id == "meta" }.kind)
+    @Test
+    fun `cycles stay visible and a filtered ancestor releases its subtree`() {
+        val cycle = groups(listOf(session("a", 1L, parentSessionId = "b"), session("b", 2L, parentSessionId = "a")))
+        assertEquals(setOf("a", "b"), visibleIds(cycle))
+        assertEquals(1, cycle.size)
+        val filtered = groups(listOf(session("root", 1L, title = "Root"),
+            session("manager", 2L, parentSessionId = "root", title = "Match manager"),
+            session("worker", 3L, parentSessionId = "manager", title = "Match worker")),
+            SessionListFilter(searchText = "Match"))
+        assertEquals("ws:manager", filtered.single().key)
+        assertEquals(listOf("worker"), filtered.single().children.map { it.id })
     }
 
     @Test

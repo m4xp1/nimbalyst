@@ -30,11 +30,15 @@ import {
   LegacyDocumentReferenceTransformer,
 } from '../../plugins/DocumentLinkPlugin/DocumentLinkNode';
 import { TrackerReferenceTransformer } from '../../plugins/TrackerLinkPlugin/TrackerReferenceTransformer';
+import { CITATION_TRANSFORMER } from '../plugins/CitationPlugin/CitationTransformer';
 import { DECISION_TRANSFORMER } from '../plugins/DecisionPlugin/DecisionTransformer';
+import { PAGE_MARK_TRANSFORMER } from '../plugins/PageMarkPlugin/PageMarkTransformer';
+import { NAMED_PAGE_VIEW_TRANSFORMER } from '../plugins/EmbedPlugin/namedPageView';
 import { EMBED_TRANSFORMER } from '../plugins/EmbedPlugin/EmbedTransformer';
 import { EMOJI_TRANSFORMER } from '../plugins/EmojisPlugin/EmojiTransformer';
 import { IMAGE_TRANSFORMER } from '../plugins/ImagesPlugin/ImageTransformer';
 import { MERMAID_TRANSFORMER } from '../plugins/MermaidPlugin/MermaidTransformer';
+import { QUADRANT_TRANSFORMER } from '../plugins/QuadrantPlugin/QuadrantTransformer';
 import { PAGE_BREAK_TRANSFORMER } from '../plugins/PageBreakPlugin/PageBreakTransformer';
 import { createTableTransformer } from '../plugins/TablePlugin/createTableTransformer';
 import { CORE_TRANSFORMERS } from './core-transformers';
@@ -42,6 +46,10 @@ import { CORE_TRANSFORMERS } from './core-transformers';
 const HEADLESS_TABLE_TRANSFORMER = createTableTransformer(() => HEADLESS_BODY_TRANSFORMERS);
 
 const HEADLESS_BODY_TRANSFORMERS: Transformer[] = [
+  // A mark that opens with a link starts at the same offset as the link;
+  // Lexical keeps the first transformer on a tie.
+  PAGE_MARK_TRANSFORMER,
+  CITATION_TRANSFORMER,
   // Must precede TrackerReferenceTransformer, whose nimbalyst:// matcher is
   // intentionally broad enough to otherwise claim shared-document links.
   CollabDocumentReferenceTransformer,
@@ -52,8 +60,10 @@ const HEADLESS_BODY_TRANSFORMERS: Transformer[] = [
   EMOJI_TRANSFORMER,
   IMAGE_TRANSFORMER,
   MERMAID_TRANSFORMER,
+  QUADRANT_TRANSFORMER,
   PAGE_BREAK_TRANSFORMER,
   HEADLESS_TABLE_TRANSFORMER,
+  NAMED_PAGE_VIEW_TRANSFORMER,
   EMBED_TRANSFORMER,
   ...CORE_TRANSFORMERS,
 ];

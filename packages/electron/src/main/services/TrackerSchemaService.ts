@@ -14,7 +14,11 @@ import { isTrackerSchemaFile } from './trackerSchemaWatchUtils';
 import {
   globalRegistry,
   loadBuiltinTrackers,
-  parseTrackerYAML,
+  parseTrackerTypeYAML,
+  resolveTrackerTypeDeclaration,
+  resolveTrackerTypeDeclarations,
+  declarationForResolvedModel,
+  registryTrackerTypeLookup,
   serializeTrackerYAML,
   normalizeTrackerSharingModel,
   serializeTrackerSchemaPatchYAML,
@@ -28,6 +32,7 @@ import {
   resolveTrackerTypeInheritance,
   type TrackerDataModel,
   type DerivedTrackerTypeDeclaration,
+  type TrackerTypeDeclaration,
   type TrackerSchemaPatch,
   type TrackerSchemaRole,
   getRoleField,
@@ -71,8 +76,12 @@ import {
   findWorkspaceSchemaFileByType,
   normalizedForSchemaComparison,
   orderSchemaFilesForLoad,
+  parseSchemaDeclarationFromContent,
+  readWorkspaceSchemaModelsFromDisk,
+  parseSyncedTrackerSchemaForm,
   parseSyncedTrackerSchemaModel,
   patchFileNameForType,
+  registerResolvedTrackerSchema,
   projectUnprojectedSharedSchemas,
   resolveOwningTeamName,
   resolveSchemaModelFromContent,
@@ -203,7 +212,8 @@ function migrateWorkspaceTrackerSharing(
     if (changedByPolicy || hasLegacyShape) {
       fs.writeFileSync(loaded.filePath, serializeSchemaForFile(loaded.fileName, migrated), 'utf-8');
     }
-    globalRegistry.register(migrated);
+    // A subtype stays registered as its declaration; see registerResolvedTrackerSchema.
+    registerResolvedTrackerSchema(migrated);
     migratedWorkspaceModels.push(migrated);
   }
 
@@ -284,18 +294,29 @@ function loadWorkspaceSchemas(workspacePath: string): void {
       ));
       shouldReconcileYamlMirror = true;
 
+      // Register declarations first and read resolved models after, so a
+      // derived type (`extends`) loads whichever order its base's file sorts in.
+      const declaredFiles: Array<Omit<LoadedWorkspaceSchemaFile, 'model'> & { type: string }> = [];
       for (const file of files) {
         try {
           const filePath = path.join(trackersDir, file);
           const content = fs.readFileSync(filePath, 'utf-8');
-          const model = resolveSchemaModelFromContent(file, content);
-          globalRegistry.register(model); // workspace schemas are not builtin
-          loaded.push(model);
-          loadedFiles.push({ fileName: file, filePath, content, model });
-          // console.log(`[TrackerSchemaService] Loaded workspace schema: ${model.type}`);
+          const declared = parseSchemaDeclarationFromContent(file, content);
+          globalRegistry.register(declared); // workspace schemas are not builtin
+          declaredFiles.push({ fileName: file, filePath, content, type: declared.type });
+          // console.log(`[TrackerSchemaService] Loaded workspace schema: ${declared.type}`);
         } catch (err) {
           console.error(`[TrackerSchemaService] Failed to load ${file}:`, err);
         }
+      }
+      for (const { type, ...file } of declaredFiles) {
+        const model = globalRegistry.get(type);
+        if (!model) {
+          console.error(`[TrackerSchemaService] Failed to load ${file.fileName}: '${type}' extends a type that is not defined`);
+          continue;
+        }
+        loaded.push(model);
+        loadedFiles.push({ ...file, model });
       }
     } else {
       shouldReconcileYamlMirror = true;
@@ -395,27 +416,27 @@ export async function registerMaterializedSyncedTypes(
   // and safe to complete; only the in-memory registry can leak across projects.
   if (isStillActiveWorkspace && !isStillActiveWorkspace()) return 0;
   let registered = 0;
+  const forms: NonNullable<ReturnType<typeof parseSyncedTrackerSchemaForm>>[] = [];
   for (const def of defs) {
     if (!def?.type) continue;
     // The on-disk YAML is authoritative only for a type the team does not share,
     // and it is already registered; never clobber it with the mirror copy.
     if (def.source === 'yaml' && def.sync_id == null) continue;
-    let model: TrackerDataModel | null = null;
-    try {
-      // `model` is JSON TEXT on SQLite but may be a parsed object on PGLite;
-      // parseSyncedTrackerSchemaModel wants a JSON string, so normalize.
-      const raw: unknown = def.model;
-      const modelJson = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      model = parseSyncedTrackerSchemaModel(def.type, modelJson) ?? null;
-    } catch {
-      model = null;
-    }
-    if (!model) continue;
+    // `model` is JSON TEXT on SQLite but may be a parsed object on PGLite;
+    // parseSyncedTrackerSchemaForm wants a JSON string, so normalize.
+    const raw: unknown = def.model;
+    const form = parseSyncedTrackerSchemaForm(def.type, typeof raw === 'string' ? raw : JSON.stringify(raw));
+    if (form) forms.push(form);
+  }
+  // Bases before subtypes: a subtype row without a stored declaration recovers
+  // one by diffing against its base, which must already be the team's.
+  forms.sort((a, b) => Number(Boolean(a.model.extends)) - Number(Boolean(b.model.extends)));
+  for (const { model, declared } of forms) {
     // A personal YAML schema is the durable result of the sharing migration.
     // Do not let a pre-migration team-owned mirror row reclaim the registry
     // during the short window before materialization clears its old sync_id.
     if (globalRegistry.get(model.type)?.sharing === 'personal') continue;
-    globalRegistry.register(model);
+    registerResolvedTrackerSchema(model, declared);
     registered++;
   }
   if (registered > 0) notifySchemaChanged();
@@ -460,9 +481,9 @@ export async function handleSchemaFileDeleted(workspacePath: string, filePath: s
 
   if (missingTeamCopies.length > 0) {
     for (const row of missingTeamCopies) {
-      const model = parseSyncedTrackerSchemaModel(row.type, row.model);
-      if (!model) continue;
-      await writeBackSharedSchema(workspacePath, model, globalRegistry.isBuiltin(row.type));
+      const form = parseSyncedTrackerSchemaForm(row.type, row.model);
+      if (!form) continue;
+      await writeBackSharedSchema(workspacePath, form.model, globalRegistry.isBuiltin(row.type), form.declared);
     }
     return;
   }
@@ -773,16 +794,16 @@ export function ensureWorkspaceTrackerSchemasLoaded(workspacePath: string | null
   }
 
   const isActive = currentWorkspacePath === null || currentWorkspacePath === workspacePath;
-  const models: TrackerDataModel[] = [];
+  const declarations: TrackerTypeDeclaration[] = [];
 
   for (const file of files) {
     try {
       const content = fs.readFileSync(path.join(trackersDir, file), 'utf-8');
-      const model = resolveSchemaModelFromContent(file, content);
+      const declared = parseSchemaDeclarationFromContent(file, content);
       if (isActive) {
-        globalRegistry.register(model); // workspace schemas are not builtin
+        globalRegistry.register(declared); // workspace schemas are not builtin
       } else {
-        models.push(model);
+        declarations.push(declared);
       }
     } catch (err) {
       console.error(`[TrackerSchemaService] ensureWorkspaceTrackerSchemasLoaded failed for ${file}:`, err);
@@ -791,7 +812,7 @@ export function ensureWorkspaceTrackerSchemasLoaded(workspacePath: string | null
 
   // Replace rather than merge: the full YAML dir was just re-read, so a type
   // whose file was deleted must not linger in the cached layer.
-  if (!isActive) globalRegistry.setWorkspaceLayer(workspacePath, models);
+  if (!isActive) globalRegistry.setWorkspaceLayer(workspacePath, resolveTrackerTypeDeclarations(declarations));
 }
 
 export function isBuiltinTrackerSchema(type: string): boolean {
@@ -926,7 +947,9 @@ export async function upsertWorkspaceTrackerSchema(
   if (!workspacePath) throw new Error('workspacePath is required');
 
   const yamlContent = typeof schema === 'string' ? schema : serializeTrackerYAML(schema);
-  const model = parseTrackerYAML(yamlContent);
+  // A derived type is written as declared and resolved against its base here,
+  // which both validates it and gives the gate a full model to compare.
+  const model = resolveTrackerTypeDeclaration(parseTrackerTypeYAML(yamlContent));
 
   if (globalRegistry.isBuiltin(model.type) && !options?.allowBuiltinOverride) {
     throw new Error(`Cannot redefine built-in tracker type '${model.type}'`);
@@ -1096,42 +1119,6 @@ export interface WorkspaceSchemaDrift {
   hasDrift: boolean;
 }
 
-interface WorkspaceSchemaDiskRead {
-  models: TrackerDataModel[];
-  canReconcile: boolean;
-}
-
-/**
- * Read and parse the on-disk YAML schema models for a workspace. Best-effort:
- * unreadable directories and unparseable files are skipped (logged) rather than
- * treated as an empty set, mirroring the safeguard in loadWorkspaceSchemas so a
- * transient read error never masquerades as "all YAML deleted."
- */
-function readWorkspaceSchemaModelsFromDisk(workspacePath: string): WorkspaceSchemaDiskRead {
-  const trackersDir = path.join(workspacePath, '.nimbalyst', 'trackers');
-  const models: TrackerDataModel[] = [];
-  let files: string[];
-  try {
-    if (!fs.existsSync(trackersDir)) return { models, canReconcile: true };
-    files = orderSchemaFilesForLoad(fs.readdirSync(trackersDir).filter(
-      f => f.endsWith('.yaml') || f.endsWith('.yml'),
-    ));
-  } catch (err) {
-    console.error(`[TrackerSchemaService] readWorkspaceSchemaModelsFromDisk failed for ${trackersDir}:`, err);
-    return { models, canReconcile: false };
-  }
-
-  for (const file of files) {
-    try {
-      const content = fs.readFileSync(path.join(trackersDir, file), 'utf-8');
-      models.push(resolveSchemaModelFromContent(file, content));
-    } catch (err) {
-      console.error(`[TrackerSchemaService] Failed to parse ${file} for drift check:`, err);
-    }
-  }
-  return { models, canReconcile: true };
-}
-
 /**
  * Compare the on-disk YAML schemas against the DB-materialized mirror and report
  * per-type drift. Powers the "schema mirror is out of date" warning in the
@@ -1186,19 +1173,24 @@ export async function resyncWorkspaceSchemaMirror(
 function resolveInboundSchemaPayload(
   type: string,
   modelJson: string,
-): { model: TrackerDataModel; isPatch: boolean; declared?: DerivedTrackerTypeDeclaration } | null {
+): {
+  model: TrackerDataModel;
+  isPatch: boolean;
+  declared?: DerivedTrackerTypeDeclaration;
+  /** The declaration to persist with the mirror row and file, resolvable here or not. */
+  declaredForm?: DerivedTrackerTypeDeclaration;
+} | null {
   const decoded = decodeTrackerSchemaPayload(type, modelJson);
   if (!decoded) return null;
   if (decoded.kind === 'model') {
     // A derived type arrives as both forms. Prefer re-resolving the DECLARED
     // form against this machine's base, so a base field this app version ships
     // reaches the derived type instead of being frozen at the sender's version.
+    // A payload from before declarations travelled recovers one from the base.
     // The sender's resolved model is the fallback when the base is unknown here.
-    if (decoded.declared) {
-      const { model, errors } = resolveTrackerTypeInheritance(
-        decoded.declared,
-        t => globalRegistry.getDeclaredModel(t) ?? globalRegistry.get(t),
-      );
+    const declaredForm = declarationForResolvedModel(decoded.model, decoded.declared);
+    if (declaredForm) {
+      const { model, errors } = resolveTrackerTypeInheritance(declaredForm, registryTrackerTypeLookup);
       if (model) {
         return {
           model: normalizeTrackerSharingModel(model, 'team'),
@@ -1207,7 +1199,8 @@ function resolveInboundSchemaPayload(
           // declaration whose base this app does not know would drop the type
           // from the registry entirely, even though the mirror has a usable
           // resolved model.
-          declared: decoded.declared,
+          declared: declaredForm,
+          declaredForm,
         };
       }
       console.warn(
@@ -1218,6 +1211,7 @@ function resolveInboundSchemaPayload(
     return {
       model: normalizeTrackerSharingModel(decoded.model, 'team'),
       isPatch: false,
+      declaredForm,
     };
   }
 
@@ -1257,9 +1251,10 @@ export function encodeTrackerSchemaDefForPush<T extends { type: string; model: s
 
   // A derived type travels as its resolved model PLUS its declaration, so a
   // peer can re-resolve against its own base (see the payload module).
-  const declared = globalRegistry.getDeclaredModel(def.type);
+  const form = parseSyncedTrackerSchemaForm(def.type, def.model);
+  const declared = form?.declared ?? globalRegistry.getDeclaredModel(def.type);
   if (declared) {
-    const model = parseSyncedTrackerSchemaModel(def.type, def.model) ?? globalRegistry.get(def.type);
+    const model = form?.model ?? globalRegistry.get(def.type);
     if (model) return { ...def, model: encodeTrackerSchemaModelPayload(model, declared) };
   }
 
@@ -1324,9 +1319,11 @@ export async function applyRemoteWorkspaceTrackerSchemaDef(
   // The mirror stores the RESOLVED model, never the delta: every consumer (the
   // registry, the `nim` CLI, drift detection) reads a full model, and the
   // resolution depends on this machine's builtin seed.
+  // A subtype's declaration is stored beside it, so a restart registers the
+  // declaration rather than this copy.
   const result = await applyRemoteTrackerSchemaDef(
     workspacePath,
-    model ? { ...def, model: JSON.stringify(model) } : def,
+    model ? { ...def, model: encodeTrackerSchemaModelPayload(model, resolved?.declaredForm) } : def,
   );
   if (!result.applied) return result;
 
@@ -1334,7 +1331,7 @@ export async function applyRemoteWorkspaceTrackerSchemaDef(
   // the file keeps whatever it had, and there is no baseline to tell a later
   // hand edit from a leftover -- so the edit could never be pushed (#1178).
   if (model && !result.deleted) {
-    await writeBackSharedSchema(workspacePath, model, resolved?.isPatch ?? false);
+    await writeBackSharedSchema(workspacePath, model, resolved?.isPatch ?? false, resolved?.declaredForm);
   }
 
   if (result.deleted) {
@@ -1347,7 +1344,7 @@ export async function applyRemoteWorkspaceTrackerSchemaDef(
     } else if (model) {
       // The declaration, when this machine could resolve it, so a later change
       // to the base type reaches this type without another sync round.
-      globalRegistry.register(resolved?.declared ?? model);
+      registerResolvedTrackerSchema(model, resolved?.declared);
     }
     notifySchemaChanged();
   }

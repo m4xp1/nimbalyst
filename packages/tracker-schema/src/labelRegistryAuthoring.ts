@@ -18,14 +18,10 @@
  */
 
 import {
-  classifyPredicateRegistryChanges,
-  isDestructivePredicateRegistryChange,
-} from './trackerPredicateRegistryChangeClassifier.js';
-import {
-  validatePredicateQualifierDeclaration,
-  type PredicateDefinition,
-  type PredicateIssue,
-} from './predicateRegistry.js';
+  classifyLabelPropertyQualifierChanges,
+  validateLabelPropertyQualifierDeclaration,
+  type LabelQualifierIssue,
+} from './labelPropertyQualifiers.js';
 import {
   emptyLabelRegistry,
   DEFAULT_LABEL_BASE_FIELD_NAMES,
@@ -364,10 +360,10 @@ function validatePropertyEntry(entry: unknown, base: string, c: Collector): stri
     if (!isPlainObject(entry.qualifiers)) {
       c.issues.push(labelIssue('LABEL_INVALID_FIELD', `${base}.qualifiers`, `'qualifiers' must be an object keyed by qualifier name`));
     } else {
-      const issues: PredicateIssue[] = [];
-      const warnings: PredicateIssue[] = [];
+      const issues: LabelQualifierIssue[] = [];
+      const warnings: LabelQualifierIssue[] = [];
       for (const [name, declaration] of Object.entries(entry.qualifiers)) {
-        validatePredicateQualifierDeclaration(name, declaration, issues, warnings);
+        validateLabelPropertyQualifierDeclaration(name, declaration, issues, warnings);
       }
       for (const found of issues) c.issues.push({ ...found, path: `${base}.${found.path}` });
       for (const found of warnings) c.warnings.push({ ...found, path: `${base}.${found.path}` });
@@ -726,18 +722,13 @@ export function classifyLabelRegistryChanges(
       push(isRangeWidening(before.range, property.range) ? 'property-range-widened' : 'property-range-narrowed', 'properties', id);
     }
     if ((before.multiValue === true) !== (property.multiValue === true)) push('property-multi-value-changed', 'properties', id);
-    // Qualifier declarations share the predicate grammar, so they share its verdicts.
-    const asPredicate = (p: FieldPropertyDefinition): PredicateDefinition => ({
-      id, label: id, subjectKinds: ['*'], valueShape: 'text', direction: 'directed', qualifiers: p.qualifiers,
-    });
-    for (const change of classifyPredicateRegistryChanges([asPredicate(before)], [asPredicate(property)]).changes) {
-      const detail = 'qualifierName' in change ? `${change.kind}:${change.qualifierName}` : change.kind;
+    for (const change of classifyLabelPropertyQualifierChanges(before.qualifiers, property.qualifiers)) {
       changes.push({
         kind: 'property-qualifier-changed',
         section: 'properties',
         id,
-        detail,
-        destructive: isDestructivePredicateRegistryChange(change),
+        detail: `${change.kind}:${change.qualifierName}`,
+        destructive: change.destructive,
       });
     }
   }

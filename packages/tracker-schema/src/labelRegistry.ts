@@ -37,11 +37,10 @@
  */
 
 import {
-  validatePredicateQualifiers,
-  type PredicateDefinition,
-  type PredicateIssue,
-  type PredicateQualifierDefinition,
-} from './predicateRegistry.js';
+  validateLabelPropertyQualifiers,
+  type LabelPropertyQualifierDefinition,
+  type LabelQualifierErrorCode,
+} from './labelPropertyQualifiers.js';
 
 // ---------------------------------------------------------------------------
 // Model
@@ -118,10 +117,10 @@ export interface FieldPropertyDefinition {
   /** For `select` / `multiselect`. */
   options?: LabelPropertyOption[];
   /**
-   * Same declaration shape as predicate qualifiers. When present the value is
-   * stored as `{ value, qualifiers }`; otherwise it is stored bare.
+   * See `./labelPropertyQualifiers.ts`. When present the value is stored as
+   * `{ value, qualifiers }`; otherwise it is stored bare.
    */
-  qualifiers?: Record<string, PredicateQualifierDefinition>;
+  qualifiers?: Record<string, LabelPropertyQualifierDefinition>;
   /** Offered as a search facet. */
   facet?: boolean;
   description?: string;
@@ -205,7 +204,7 @@ export type LabelErrorCode =
   | 'LABEL_PROPERTY_EXPECTS_QUALIFIED_VALUE';
 
 export interface LabelIssue {
-  code: LabelErrorCode | PredicateIssue['code'];
+  code: LabelErrorCode | LabelQualifierErrorCode;
   path: string;
   message: string;
 }
@@ -391,8 +390,7 @@ export function validateFieldPropertyValue(property: FieldPropertyDefinition, st
   if (isQualifiedFieldProperty(property)) {
     if (isPlainObject(stored) && 'value' in stored) {
       value = stored.value;
-      const asPredicate = { id: property.id, qualifiers: property.qualifiers } as PredicateDefinition;
-      for (const found of validatePredicateQualifiers(asPredicate, stored.qualifiers).issues) {
+      for (const found of validateLabelPropertyQualifiers(property.id, property.qualifiers, stored.qualifiers)) {
         issues.push({ ...found, path: `qualifiers${found.path ? `.${found.path}` : ''}` });
       }
     } else {
