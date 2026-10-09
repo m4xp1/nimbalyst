@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.nimbalyst.app.R
 import com.nimbalyst.app.sync.DeviceInfo
+import com.nimbalyst.app.transcript.TranscriptExternalLinks
 import com.nimbalyst.app.ui.navigation.credentialsForScannedPairing
 import com.nimbalyst.app.ui.theme.NimbalystColors
 import com.nimbalyst.app.utils.RelativeTimestamp
@@ -268,7 +269,7 @@ fun SettingsScreen(
                 }
                 TextButton(
                     onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_POLICY_URL)))
+                        TranscriptExternalLinks.open(context, PRIVACY_POLICY_URL)
                     },
                     contentPadding = PaddingValues(0.dp)
                 ) {

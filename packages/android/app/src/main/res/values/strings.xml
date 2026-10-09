@@ -44,4 +44,9 @@
     <string name="phase_complete">Complete</string>
     <string name="context_usage_percent">%1$d%%</string>
     <string name="context_usage_label">Context %1$d%%</string>
+    <string name="webview_unavailable">Android System WebView is unavailable or updating. Try again in a moment.</string>
+    <string name="link_no_app">No app can open this link.</string>
+    <string name="login_no_browser">No browser is available to sign in with Google.</string>
+    <string name="camera_app_unavailable">No camera app is available.</string>
+    <string name="pairing_camera_unavailable">This device\'s camera could not be started, so the pairing code cannot be scanned.</string>
 </resources>

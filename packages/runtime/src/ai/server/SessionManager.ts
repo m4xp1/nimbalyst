@@ -868,7 +868,9 @@ export class SessionManager {
     agentRole: AgentRole = 'standard',
     createdBySessionId?: string | null,
     /** Initial metadata, written with the row (not in a follow-up update). */
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    /** Initial tree placement, validated and persisted with the row. */
+    parentSessionId?: string | null
   ): Promise<SessionData> {
     // workspacePath is REQUIRED - sessions cannot exist outside of a workspace
     if (!workspacePath) {
@@ -894,6 +896,7 @@ export class SessionManager {
       worktreeProjectPath,
       agentRole,
       createdBySessionId,
+      parentSessionId,
       ...(metadata ? { metadata } : {}),
     });
 
@@ -924,6 +927,7 @@ export class SessionManager {
       worktreeProjectPath,
       agentRole,
       createdBySessionId: createdBySessionId ?? null,
+      parentSessionId: parentSessionId ?? undefined,
       ...(metadata ? { metadata } : {}),
     };
 

@@ -2,6 +2,7 @@ package com.nimbalyst.app.sync
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.google.gson.JsonNull
 import com.nimbalyst.app.crypto.CryptoManager
 import com.nimbalyst.app.data.SessionEntity
 
@@ -39,16 +40,21 @@ internal class SessionIndexUpdates(private val gson: Gson) {
      * the server ([remoteClientMetadata]). Sending only the draft would erase
      * the desktop's context usage, pending-prompt flag and naming marker for
      * every device until the desktop next republished them (NIM-7281). Fields
-     * this build does not know about are carried through untouched.
+     * this build does not know about are carried through untouched. There is
+     * no fallback built from the row: the caller holds the draft until a blob
+     * is known.
+     *
+     * Prompts and moves ([prompt], [parent]) carry no blob at all, which the
+     * server treats as "keep the stored one".
      */
     fun draft(
         session: SessionEntity,
         draft: String,
         draftUpdatedAt: Long,
-        remoteClientMetadata: JsonObject?,
+        remoteClientMetadata: JsonObject,
         crypto: CryptoManager,
     ): DraftUpdate {
-        val blob = remoteClientMetadata?.deepCopy() ?: localClientMetadata(session)
+        val blob = remoteClientMetadata.deepCopy()
         blob.addProperty("draftInput", draft)
         blob.addProperty("draftUpdatedAt", draftUpdatedAt)
         val encrypted = crypto.encrypt(gson.toJson(blob))
@@ -75,23 +81,12 @@ internal class SessionIndexUpdates(private val gson: Gson) {
      * undoes itself. The row's own updatedAt is kept so a move does not
      * reorder the list.
      */
-    fun parent(session: SessionEntity, parentSessionId: String?, crypto: CryptoManager): String =
-        encode(base(session, crypto, updatedAt = session.updatedAt).copy(parentSessionId = parentSessionId))
-
-    /** Best reconstruction from the Room row, for a session with no server blob seen yet. */
-    private fun localClientMetadata(session: SessionEntity): JsonObject = gson.toJsonTree(
-        ClientMetadata(
-            currentContext = if (session.contextTokens != null && session.contextWindow != null) {
-                ContextInfo(tokens = session.contextTokens, contextWindow = session.contextWindow)
-            } else {
-                null
-            },
-            phase = session.phase,
-            tags = session.tagsJson?.let {
-                runCatching { gson.fromJson(it, Array<String>::class.java).toList() }.getOrNull()
-            }
-        )
-    ).asJsonObject
+    fun parent(session: SessionEntity, parentSessionId: String?, crypto: CryptoManager): String {
+        val entry = base(session, crypto, updatedAt = session.updatedAt).copy(parentSessionId = parentSessionId)
+        val message = gson.toJsonTree(IndexUpdateMessage(session = entry)).asJsonObject
+        if (parentSessionId == null) message.getAsJsonObject("session").add("parentSessionId", JsonNull.INSTANCE)
+        return message.toString()
+    }
 
     private fun base(session: SessionEntity, crypto: CryptoManager, updatedAt: Long): IndexUpdateEntry {
         // Pass the stored title ciphertext through, and re-encrypt only when we

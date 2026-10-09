@@ -79,8 +79,10 @@ vi.mock('../../../database/PGLiteDatabaseWorker', () => ({
 // returns before any of them is used.
 vi.mock('../CommitProposalExecution', () => ({ cancelCommitProposalOnce: vi.fn(), acceptsCommitProposalResponse: vi.fn() }));
 vi.mock('../../SessionCommitService', () => ({ SessionCommitService: {} }));
-vi.mock('@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository', () => ({ TranscriptMigrationRepository: {} }));
-vi.mock('../../../tray/TrayManager', () => ({ TrayManager: { getInstance: () => ({}) } }));
+vi.mock('@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository', () => ({
+  TranscriptMigrationRepository: { hasService: () => false },
+}));
+vi.mock('../../../tray/TrayManager', () => ({ TrayManager: { getInstance: () => ({ onPromptResolved: vi.fn() }) } }));
 vi.mock('../../../mcp/tools/codexToolCallResolver', () => ({
   resolveRequestUserInputPromptTargets: (id: string) => ({ promptId: id, waiterPromptIds: [id] }),
 }));
@@ -108,6 +110,8 @@ import { codexQuestionRecoveryId, deliverCodexQuestionAnswer } from '../codexQue
 import { registerAskUserQuestionAnswerHandler } from '../ipc/registerAskUserQuestionAnswerHandler';
 import { markToolResultPersisted } from '../claudeCliToolResultSeen';
 import { clearTerminalizedAskUserQuestions } from '../askUserQuestionFallbackResolution';
+import { configureRequestUserInputResume } from '../requestUserInputOrphanedAnswer';
+import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 
 const HUMAN = { inputType: 'user' };
 const user = { type: 'user_message' };
@@ -254,6 +258,56 @@ describe('supersedeOpenQuestions', () => {
 
     expect(result).toEqual({ success: false, error: 'This form is already closed.' });
     expect(newForm).not.toHaveBeenCalled();
+  });
+
+  // #1647: the form outlived its waiter (app restart, abandoned MCP call), so
+  // the only way the answers reach the agent is a resumed turn carrying them.
+  const respondToForm = (promptId: string, response: Record<string, unknown>) => {
+    registerSessionPromptResponseHandler();
+    return h.handlers.get('messages:respond-to-prompt')!({ sender: { send: vi.fn() } }, {
+      sessionId: sid,
+      promptId,
+      promptType: 'request_user_input_request',
+      response,
+      respondedBy: 'desktop',
+    });
+  };
+
+  it('resumes the session with a form answer that reaches no live waiter, exactly once', async () => {
+    const resume = vi.fn(async () => undefined);
+    configureRequestUserInputResume(resume);
+    const answers = { notes: { type: 'editText', text: 'thirty minutes of typing', edited: true } };
+
+    expect(await respondToForm('form_orphan', { answers })).toMatchObject({ success: true });
+
+    expect(h.rows).toEqual([
+      expect.objectContaining({ toolUseId: 'form_orphan', result: expect.objectContaining({ cancelled: false, answers }) }),
+    ]);
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: sid,
+      workspacePath: '/ws',
+      message: expect.stringContaining('thirty minutes of typing'),
+    }));
+
+    expect(await respondToForm('form_orphan', { answers })).toEqual({ success: false, error: 'This form is already closed.' });
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a cancel', 'claude-code', { answers: {}, cancelled: true }, true],
+    ['a claude-code-cli answer', 'claude-code-cli', { answers: { ok: { type: 'confirm', value: true } } }, false],
+  ])('closes the form without resuming for %s', async (_label, provider, response, cancelled) => {
+    vi.mocked(AISessionsRepository.get).mockResolvedValue({ provider, workspacePath: '/ws' } as any);
+    const resume = vi.fn(async () => undefined);
+    configureRequestUserInputResume(resume);
+
+    expect(await respondToForm('form_quiet', response)).toMatchObject({ success: true });
+
+    expect(h.rows).toEqual([expect.objectContaining({ toolUseId: 'form_quiet', result: expect.objectContaining({ cancelled }) })]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(resume).not.toHaveBeenCalled();
+    vi.mocked(AISessionsRepository.get).mockResolvedValue({ provider: 'claude-code', workspacePath: '/ws' } as any);
   });
 
   it('skips a Codex question whose answer recovery is already queued', async () => {

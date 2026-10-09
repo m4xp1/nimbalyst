@@ -211,8 +211,11 @@ private fun MainApp(navigation: WorkspaceNavigation, sessionStores: SessionDetai
     // The computer picker lists desktop and headless machines; the list is scoped to the
     // chosen one. Desktop history synced before sessions carried a host stays under a desktop.
     val hosts = remember(connectedDevices) { ExecutionHosts.hosts(connectedDevices) }
-    LaunchedEffect(hosts) { navigation.adoptDefaultHost(ExecutionHosts.defaultHost(connectedDevices)?.deviceId) }
-    val includeUnattributed = hosts.any { it.deviceId == nav.hostDeviceId && it.type == "desktop" }
+    LaunchedEffect(hosts) {
+        navigation.rememberHosts(hosts)
+        navigation.adoptDefaultHost(ExecutionHosts.defaultHost(connectedDevices)?.deviceId)
+    }
+    val includeUnattributed = nav.includesUnattributedSessions
     val computerPicker: @Composable RowScope.() -> Unit = {
         ComputerPicker(
             hosts = hosts,

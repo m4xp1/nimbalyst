@@ -320,7 +320,6 @@ describe('predicate registry payload (knowledge-scopes 4.1)', () => {
     subjectKinds: ['product'],
     valueShape: 'entity',
     direction: 'directed',
-    qualifiers: { via: { type: 'relationship', required: true } },
   }];
 
   it('round-trips under the reserved schema type', () => {

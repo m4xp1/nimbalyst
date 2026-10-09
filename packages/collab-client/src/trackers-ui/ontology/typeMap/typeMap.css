@@ -88,6 +88,7 @@
 
 /* Canvas */
 .type-map-work { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; min-height: 0; }
+.type-map-work-full { grid-template-columns: minmax(0, 1fr); }
 @container ontology-type-map (max-width: 860px) {
   .type-map-work { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(420px, 1fr) auto; }
   .type-map-inspector { max-height: 420px; }
@@ -293,7 +294,6 @@ button.type-map-bar:hover .type-map-bar-label { color: var(--nim-text); text-dec
 .type-map-example em { color: var(--nim-primary); font-style: normal; }
 .type-map-link { padding: 0; border: 0; background: transparent; color: var(--nim-link); font: inherit; cursor: pointer; }
 .type-map-link:hover { text-decoration: underline; }
-.type-map-qualifiers { display: flex; flex-wrap: wrap; gap: 6px; }
 .type-map-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .type-map-actions button {
   flex: 1 1 auto;

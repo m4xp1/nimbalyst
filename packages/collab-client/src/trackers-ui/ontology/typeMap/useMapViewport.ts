@@ -4,12 +4,11 @@
  * zoom tier (`data-zoom` on the svg) drives semantic zoom in CSS.
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { bindMapGestures, MIN_ZOOM, MAX_ZOOM } from './mapGestures';
+export { MIN_ZOOM, MAX_ZOOM } from './mapGestures';
 
 export interface View { k: number; x: number; y: number }
 export interface Box { x: number; y: number; w: number; h: number }
-
-export const MIN_ZOOM = 0.2;
-export const MAX_ZOOM = 3;
 
 /** Below 0.3 nothing is readable; below 1 only major pills; 1.3 and up, types list their properties. */
 export function zoomTier(k: number): 'tiny' | 'fit' | 'mid' | 'near' {
@@ -76,8 +75,13 @@ export function useMapViewport(bounds: { width: number; height: number } | null)
     }
   }, []);
 
-  const flyTo = useCallback((target: View, animate = true) => {
+  const stopAnimation = useCallback(() => {
     if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+  }, []);
+
+  const flyTo = useCallback((target: View, animate = true) => {
+    stopAnimation();
     if (!animate || typeof requestAnimationFrame === 'undefined') {
       view.current = target;
       apply();
@@ -93,14 +97,15 @@ export function useMapViewport(bounds: { width: number; height: number } | null)
       frame.current = t < 1 ? requestAnimationFrame(step) : null;
     };
     frame.current = requestAnimationFrame(step);
-  }, [apply]);
+  }, [apply, stopAnimation]);
 
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
+    stopAnimation();
     const current = view.current;
     const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, current.k * factor));
     view.current = { k, x: cx - (cx - current.x) * (k / current.k), y: cy - (cy - current.y) * (k / current.k) };
     apply();
-  }, [apply]);
+  }, [apply, stopAnimation]);
 
   const size = () => ({ width: canvasRef.current?.clientWidth ?? 0, height: canvasRef.current?.clientHeight ?? 0 });
 
@@ -122,60 +127,25 @@ export function useMapViewport(bounds: { width: number; height: number } | null)
       flyTo({ k: view.current.k, x: width / 2 - x * view.current.k, y: height / 2 - y * view.current.k });
     },
     panBy: (dx: number, dy: number) => {
+      stopAnimation();
       view.current = { ...view.current, x: view.current.x + dx, y: view.current.y + dy };
       apply();
     },
     dragged: () => moved.current,
     refresh: apply,
-  }), [apply, flyTo, zoomAt]);
+  }), [apply, flyTo, zoomAt, stopAnimation]);
 
-  // Wheel zooms around the cursor; it must be non-passive to stop the page scrolling.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      zoomAt(Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0022)), event.clientX - rect.left, event.clientY - rect.top);
-    };
-    let drag: { x: number; y: number; vx: number; vy: number; id: number } | null = null;
-    const onDown = (event: PointerEvent) => {
-      if (event.button !== 0 || (event.target as Element).closest('.type-map-minimap, .type-map-hud')) return;
-      moved.current = false;
-      drag = { x: event.clientX, y: event.clientY, vx: view.current.x, vy: view.current.y, id: event.pointerId };
-    };
-    const onMove = (event: PointerEvent) => {
-      if (!drag || event.pointerId !== drag.id) return;
-      const dx = event.clientX - drag.x;
-      const dy = event.clientY - drag.y;
-      if (!moved.current && Math.abs(dx) + Math.abs(dy) <= 3) return;
-      if (!moved.current) {
-        moved.current = true;
-        canvas.setPointerCapture(event.pointerId);
-        canvas.setAttribute('data-dragging', 'true');
-      }
-      view.current = { ...view.current, x: drag.vx + dx, y: drag.vy + dy };
-      apply();
-    };
-    const onUp = () => {
-      drag = null;
-      canvas.removeAttribute('data-dragging');
-      // Let the click that ends a drag see `dragged()`, then reset.
-      setTimeout(() => { moved.current = false; }, 0);
-    };
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('pointerdown', onDown);
-    canvas.addEventListener('pointermove', onMove);
-    canvas.addEventListener('pointerup', onUp);
-    canvas.addEventListener('pointercancel', onUp);
-    return () => {
-      canvas.removeEventListener('wheel', onWheel);
-      canvas.removeEventListener('pointerdown', onDown);
-      canvas.removeEventListener('pointermove', onMove);
-      canvas.removeEventListener('pointerup', onUp);
-      canvas.removeEventListener('pointercancel', onUp);
-    };
-  }, [apply, zoomAt]);
+    return bindMapGestures(canvas, {
+      getView: () => view.current,
+      setView: (next) => { view.current = next; apply(); },
+      setDragged: (value) => { moved.current = value; },
+      stopAnimation,
+      zoomAt,
+    });
+  }, [apply, stopAnimation, zoomAt]);
 
   useEffect(() => () => {
     if (frame.current !== null) cancelAnimationFrame(frame.current);

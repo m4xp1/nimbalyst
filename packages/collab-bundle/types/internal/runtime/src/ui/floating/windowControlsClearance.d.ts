@@ -64,6 +64,9 @@ export interface WindowControlsClearanceData {
  *
  * Place it *after* `shift()` (it corrects what shift clamps) and *before*
  * `size()`, so a height constraint can subtract the push via
- * `middlewareData.windowControlsClearance.pushed`.
+ * `middlewareData.windowControlsClearance.pushed`. That only works for
+ * top-anchored placements: with a bottom-anchored one (`*-end`, `top`) y
+ * depends on height, so subtracting the last push loops. Reserve a fixed band
+ * instead, as the project rail's add menu does.
  */
 export declare function windowControlsClearance(resolveZones?: () => WindowControlsZone[]): Middleware;

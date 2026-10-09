@@ -18,51 +18,6 @@ struct IndexSyncResponse: Codable, @unchecked Sendable {
     let since: Int?
 }
 
-/// A session entry as received from the server (encrypted fields).
-struct ServerSessionEntry: Codable {
-    let sessionId: String
-    let encryptedProjectId: String
-    let projectIdIv: String
-    let encryptedTitle: String?
-    let titleIv: String?
-    let provider: String?
-    let model: String?
-    let mode: String?
-    /// Structural type: "session", "workstream", or "blitz"
-    let sessionType: String?
-    /// Parent session ID for workstream/worktree hierarchy
-    let parentSessionId: String?
-    /// Agent role marker (e.g. "meta-agent"); gates meta-agent powers on desktop
-    let agentRole: String?
-    /// Session ID of the meta-agent that spawned this sub-agent (child link)
-    let createdBySessionId: String?
-    /// Worktree ID for git worktree association
-    let worktreeId: String?
-    /// Stable ID of the desktop or headless host that owns execution
-    let hostDeviceId: String?
-    /// Whether this session is archived
-    let isArchived: Bool?
-    /// Whether this session is pinned
-    let isPinned: Bool?
-    /// Session ID this was branched/forked from
-    let branchedFromSessionId: String?
-    /// Message sequence number where the branch occurred
-    let branchPointMessageId: Int?
-    /// Timestamp when the branch was created
-    let branchedAt: Int?
-    let messageCount: Int?
-    let lastMessageAt: Int?
-    let createdAt: Int
-    let updatedAt: Int
-    let pendingExecution: PendingExecution?
-    let isExecuting: Bool?
-    let queuedPromptCount: Int?
-    let encryptedQueuedPrompts: [EncryptedQueuedPrompt]?
-    let hasPendingPrompt: Bool?
-    let encryptedClientMetadata: String?
-    let clientMetadataIv: String?
-    let lastReadAt: Int?
-}
 
 struct PendingExecution: Codable {
     let messageId: String

@@ -461,6 +461,12 @@ describe('buildClaudeCliSpawnConfig', () => {
 });
 
 describe('resolveClaudeCliModelArg', () => {
+  it('passes custom gateway models verbatim and never leaks a provider prefix', () => {
+    expect(resolveClaudeCliModelArg('claude-code-cli:custom/Fast')).toBe('Fast');
+    expect(resolveClaudeCliModelArg('claude-code:custom/Smart')).toBe('Smart');
+    expect(resolveClaudeCliModelArg('claude-code-cli:NotAVariant')).toBeUndefined();
+  });
+
   it('resolves explicit 5.5 versions while preserving pinned 5 versions', () => {
     expect(resolveClaudeCliModelArg('claude-code-cli:opus-5-5')).toBe('claude-opus-5-5');
     expect(resolveClaudeCliModelArg('claude-code-cli:opus-5')).toBe('claude-opus-5');
@@ -470,7 +476,8 @@ describe('resolveClaudeCliModelArg', () => {
   it('strips the provider prefix and translates -1m to the CLI `[1m]` form (NIM-809)', () => {
     expect(resolveClaudeCliModelArg('claude-code-cli:opus-1m')).toBe('claude-opus-5-5[1m]');
     expect(resolveClaudeCliModelArg('claude-code-cli:sonnet')).toBe('claude-sonnet-5-5');
-    expect(resolveClaudeCliModelArg('claude-code:haiku')).toBe('haiku');
+    expect(resolveClaudeCliModelArg('claude-code:haiku')).toBe('claude-haiku-5-5');
+    expect(resolveClaudeCliModelArg('claude-code:haiku-4-5')).toBe('claude-haiku-4-5-20251001');
   });
 
   it('preserves pinned opus versions without requesting extended context', () => {

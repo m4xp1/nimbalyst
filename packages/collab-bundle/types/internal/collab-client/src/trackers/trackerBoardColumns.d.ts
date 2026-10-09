@@ -25,6 +25,7 @@ export interface TrackerBoardColumn {
      * display, rather than a label reconstructed from whatever survived.
      */
     ref?: TrackerRelationshipValue;
+    fieldValue?: unknown;
 }
 /** The axis the board actually lays out; `none` is a status board. */
 export declare function resolveBoardAxis(groupBy: TrackerGroupBy): TrackerGroupingAxis;

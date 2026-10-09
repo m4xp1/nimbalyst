@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 /**
- * `tracker_define_type({ predicates, labels })` merges by id. It used to
+ * `tracker_define_type({ predicates })` merges by id. It used to
  * replace the whole predicate registry, so two agents extending the vocabulary
  * at once erased each other's verbs.
  */
@@ -22,13 +22,16 @@ vi.mock('electron', async () => ({
 
 vi.mock('../../../services/TrackerSchemaService', () => ({
   applyWorkspacePredicateRegistryInProcess: vi.fn(),
-  applyWorkspaceLabelRegistryInProcess: vi.fn(),
 }));
 
 import type { PredicateDefinition } from '@nimbalyst/tracker-schema';
-import { applyLabelRegistryArgs, applyPredicateRegistryArgs } from '../trackerVocabularyArgs';
+import { applyPredicateRegistryArgs } from '../trackerVocabularyArgs';
 import { readWorkspacePredicateRegistry } from '../../../services/tracker/trackerPredicateRegistryFile';
-import { readWorkspaceLabelRegistry } from '../../../services/tracker/trackerLabelRegistryFile';
+import {
+  readWorkspaceLabelRegistry,
+  workspaceLabelRegistryPath,
+  writeWorkspaceLabelRegistry,
+} from '../../../services/tracker/trackerLabelRegistryFile';
 
 const verb = (id: string): PredicateDefinition => ({
   id, label: id, subjectKinds: ['*'], valueShape: 'entity', direction: 'directed',
@@ -50,36 +53,36 @@ describe('tracker_define_type vocabulary arguments', () => {
     expect(readWorkspacePredicateRegistry(workspacePath)?.map(p => p.id)).toEqual(['in-market']);
   });
 
-  it('merges labels by id, checks them against predicates, and gates a removed label property', async () => {
-    await applyLabelRegistryArgs(workspacePath, {
-      labels: { labels: [{ id: 'capability', label: 'Capability', properties: ['owner'] }], properties: [{ id: 'owner', label: 'Owner', type: 'string' }] },
-    }, [verb('implemented-in')]);
-    const added = await applyLabelRegistryArgs(workspacePath, {
-      labels: { labels: [{ id: 'feature', label: 'Feature', broader: ['capability'], properties: ['implemented-in'] }] },
-    }, [verb('implemented-in')]);
-    expect('error' in added).toBe(false);
-    expect(readWorkspaceLabelRegistry(workspacePath)?.labels.map(l => l.id)).toEqual(['capability', 'feature']);
-
-    const clash = await applyLabelRegistryArgs(workspacePath, {
-      labels: { properties: [{ id: 'implemented-in', label: 'Clash', type: 'string' }] },
-    }, [verb('implemented-in')]);
-    expect('error' in clash && JSON.stringify(clash.error)).toContain('LABEL_PROPERTY_ID_CONFLICT');
-
-    const shrink = { labels: { labels: [{ id: 'capability', label: 'Capability', properties: [] }] } };
-    expect('error' in await applyLabelRegistryArgs(workspacePath, shrink, [verb('implemented-in')])).toBe(true);
-    await applyLabelRegistryArgs(workspacePath, { ...shrink, confirmDestructive: true }, [verb('implemented-in')]);
-    expect(readWorkspaceLabelRegistry(workspacePath)?.labels[0].properties).toEqual([]);
-  });
-
   it('persists presentation-only edits without asking for confirmation', async () => {
     await applyPredicateRegistryArgs(workspacePath, { predicates: [verb('made-by')] });
     await applyPredicateRegistryArgs(workspacePath, { predicates: [{ ...verb('made-by'), label: 'is made by' }] });
     expect(readWorkspacePredicateRegistry(workspacePath)?.[0].label).toBe('is made by');
+  });
 
-    await applyLabelRegistryArgs(workspacePath, { labels: { labels: [{ id: 'feature', label: 'Feature' }] } }, []);
-    const renamed = { id: 'feature', label: 'Product feature', description: 'Shipped behavior', role: 'page', template: '## Why', factBox: [] };
-    const result = await applyLabelRegistryArgs(workspacePath, { labels: { labels: [renamed] } }, []);
-    expect('error' in result).toBe(false);
-    expect(readWorkspaceLabelRegistry(workspacePath)?.labels).toEqual([renamed]);
+  it('keeps an earlier label registry with qualifiers and claim properties readable and unchanged on save', async () => {
+    const yaml = [
+      'labels:',
+      '  - id: feature',
+      '    label: Feature',
+      '    properties: [flag, implemented-in]',
+      'properties:',
+      '  - id: flag',
+      '    label: Feature flag',
+      '    type: string',
+      '    qualifiers:',
+      '      rollout: { type: number, label: Rollout % }',
+      'claimProperties:',
+      '  implemented-in: { range: [feature] }',
+      '',
+    ].join('\n');
+    fs.mkdirSync(path.join(workspacePath, '.nimbalyst'), { recursive: true });
+    fs.writeFileSync(workspaceLabelRegistryPath(workspacePath), yaml);
+
+    const loaded = readWorkspaceLabelRegistry(workspacePath);
+    expect(loaded?.properties[0].qualifiers).toEqual({ rollout: { type: 'number', label: 'Rollout %' } });
+    expect(loaded?.claimProperties).toEqual({ 'implemented-in': { range: ['feature'] } });
+
+    await writeWorkspaceLabelRegistry(workspacePath, loaded!);
+    expect(readWorkspaceLabelRegistry(workspacePath)).toEqual(loaded);
   });
 });

@@ -29,10 +29,12 @@ import {
   TIMELINE_CREATED_FIELD,
   type TrackerTimelineBar,
   type TrackerTimelineDates,
+  type TrackerTimelineFields,
 } from '@nimbalyst/collab-client/trackers';
 
 export interface TrackerTimelineViewProps {
   items: TrackerRecord[];
+  fields?: TrackerTimelineFields;
   /** Grouping axis from the saved view; one row per bucket. */
   groupBy?: TrackerGroupBy;
   /** Within-row order from the saved view, used as the chronological tiebreak. */
@@ -89,6 +91,7 @@ interface HoveredBar {
 
 export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
   items,
+  fields,
   groupBy = 'none',
   ordering = MANUAL_TRACKER_ORDERING,
   onItemSelect,
@@ -97,8 +100,8 @@ export const TrackerTimelineView: React.FC<TrackerTimelineViewProps> = ({
   resolveRelationshipLabel,
 }) => {
   const timeline = useMemo(
-    () => buildTrackerTimeline(items, groupBy, ordering, resolveRelationshipLabel),
-    [items, groupBy, ordering, resolveRelationshipLabel],
+    () => buildTrackerTimeline(items, groupBy, ordering, resolveRelationshipLabel, fields),
+    [items, groupBy, ordering, resolveRelationshipLabel, fields],
   );
 
   const [hovered, setHovered] = useState<HoveredBar | null>(null);

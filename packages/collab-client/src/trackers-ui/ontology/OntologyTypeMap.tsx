@@ -1,8 +1,8 @@
 /**
  * The type map: every label a project uses, grouped into domain zones, with
  * one line per pair of types that links, a pill per relationship, and an
- * inspector beside it. Pan by dragging, zoom with the wheel (around the
- * cursor), the buttons or `+`/`-`/`0`, arrows to pan, Escape to deselect.
+ * inspector beside it. Pan by dragging or scrolling, zoom with a pinch (around the
+ * cursor), Ctrl+wheel, the buttons or `+`/`-`/`0`, arrows to pan, Escape to deselect.
  * Zooming in shows every relationship, then each type's properties.
  *
  * The host builds the model (`buildTypeMap`) and navigates; the layout is
@@ -23,14 +23,16 @@ import './typeMap/typeMap.css';
 
 export interface OntologyTypeMapProps {
   model: TypeMapModel;
-  /** Opens a label's type page (its table). */
-  onOpenLabel: (id: string) => void;
+  /** Opens a label's type page (its table); `newTab` when Cmd/Ctrl was held. */
+  onOpenLabel: (id: string, options?: { newTab: boolean }) => void;
   /** Opens a page by item id. */
   onOpenPage?: (id: string) => void;
   /** Opens the pages that carry no label; omitted hides the entry. */
   onOpenUnlabeled?: () => void;
   /** Files proposal requests; null or omitted (the public wiki, viewers) hides those actions. */
   writer?: OntologyInspectorWriter | null;
+  /** False drops the inspector: the map takes the width and a click on a type opens it. */
+  inspector?: boolean;
 }
 
 /** The type and relationship ids a selection lights: itself and its neighbourhood. */
@@ -48,7 +50,7 @@ export function litIds(selection: MapSelection, relationships: readonly TypeMapR
   return lit;
 }
 
-export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabeled, writer = null }: OntologyTypeMapProps) {
+export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabeled, writer = null, inspector = true }: OntologyTypeMapProps) {
   const [showEmpty, setShowEmpty] = useState(true);
   const [showUnused, setShowUnused] = useState(true);
   const [selection, setSelection] = useState<MapSelection>(null);
@@ -116,9 +118,14 @@ export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabele
     center(target, target.kind === 'type' ? 1.45 : undefined);
   }, [center]);
   const { dragged } = viewport;
-  const select = useCallback((target: MapSelection) => {
-    if (!dragged()) setSelection(target);
-  }, [dragged]);
+  const select = useCallback((target: MapSelection, event?: { metaKey: boolean; ctrlKey: boolean }) => {
+    if (dragged()) return;
+    if (!inspector && target?.kind === 'type') {
+      onOpenLabel(target.id, { newTab: Boolean(event && (event.metaKey || event.ctrlKey)) });
+      return;
+    }
+    setSelection(target);
+  }, [dragged, inspector, onOpenLabel]);
 
   const lit = useMemo(() => litIds(hover ?? selection, relationships), [hover, selection, relationships]);
   const statements = relationships.reduce((sum, relationship) => sum + relationship.statements, 0);
@@ -160,13 +167,13 @@ export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabele
           <button type="button" title="Fit the map (0)" onClick={() => viewport.fit()}>Fit</button>
         </div>
       </div>
-      <div className="type-map-work">
+      <div className={`type-map-work${inspector ? '' : ' type-map-work-full'}`}>
         <div
           className="type-map-canvas"
           ref={viewport.canvasRef}
           tabIndex={0}
           role="application"
-          aria-label="Type map. Drag to pan, scroll to zoom."
+          aria-label="Type map. Drag or scroll to pan. Pinch or Control-scroll to zoom."
           onClick={() => { if (!viewport.dragged()) setSelection(null); }}
         >
           <svg className="type-map-svg" ref={viewport.svgRef} data-zoom="fit">
@@ -186,9 +193,9 @@ export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabele
             </g>
           </svg>
           <TypeMapMinimap layout={layout} types={typeById} zoneTone={zoneTone} viewRef={viewport.miniViewRef} onJump={viewport.centerOn} onShown={viewport.refresh} />
-          <div className="type-map-hint">Scroll to zoom · drag to pan · click a type or a relationship · zoom in for properties</div>
+          <div className="type-map-hint">{`Drag or scroll to pan · pinch or Ctrl+scroll to zoom · ${inspector ? 'click a type or a relationship' : 'click a type to open it'} · zoom in for properties`}</div>
         </div>
-        <TypeMapInspector
+        {inspector && <TypeMapInspector
           model={model}
           typeById={typeById}
           relationships={relationships}
@@ -200,7 +207,7 @@ export function OntologyTypeMap({ model, onOpenLabel, onOpenPage, onOpenUnlabele
           onOpenUnlabeled={onOpenUnlabeled}
           onOpenPage={onOpenPage}
           writer={writer}
-        />
+        />}
       </div>
     </div>
   );

@@ -53,10 +53,15 @@ import {
 } from "./tools/canvasWorkingSetToolHandlers";
 import {
   handleCreateSharedDoc,
+  handleImportFileToPages,
   handleCreateSharedFolder,
   handleMoveSharedItem,
   handleRenameSharedItem,
   handleDeleteSharedItem,
+  handleListPages,
+  handleSearchPages,
+  handleSetPageType,
+  handleSetPageFields,
   getCollabIndexToolSchemas,
 } from "./tools/collabIndexToolHandlers";
 import {
@@ -561,6 +566,9 @@ function createSharedMcpServer(
         case "createSharedFolder":
           return handleCreateSharedFolder(args, workspacePath);
 
+        case "importFileToPages":
+          return handleImportFileToPages(args, workspacePath);
+
         case "moveSharedItem":
           return handleMoveSharedItem(args, workspacePath);
 
@@ -569,6 +577,18 @@ function createSharedMcpServer(
 
         case "deleteSharedItem":
           return handleDeleteSharedItem(args, workspacePath);
+
+        case "listPages":
+          return handleListPages(args, workspacePath);
+
+        case "searchPages":
+          return handleSearchPages(args, workspacePath);
+
+        case "setPageType":
+          return handleSetPageType(args, workspacePath);
+
+        case "setPageFields":
+          return handleSetPageFields(args, workspacePath);
 
         case "findOrgMembers":
           return handleFindOrgMembers(args, workspacePath);

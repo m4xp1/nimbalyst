@@ -10,7 +10,6 @@ import com.nimbalyst.app.pairing.PairingStore
 import com.nimbalyst.app.analytics.AnalyticsManager
 import com.nimbalyst.app.sync.SyncManager
 import com.nimbalyst.app.sync.WebSocketClient
-import com.nimbalyst.app.transcript.TranscriptWebViewPool
 import android.util.Log
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -58,7 +57,9 @@ class NimbalystApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AnalyticsManager.initialize(this)
-        TranscriptWebViewPool.warmup(this)
+        // No WebView warmup here: push-only starts (FCM) never show a transcript,
+        // and a missing or updating WebView provider would crash every start.
+        // MainActivity warms the pool once the first frame is up.
         // Label every sync WebSocket connection with this build's version so the
         // server can attribute connect/disconnect telemetry to platform + version.
         WebSocketClient.appVersion = runCatching {

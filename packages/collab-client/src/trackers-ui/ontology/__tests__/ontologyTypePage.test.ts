@@ -116,8 +116,8 @@ const MAP_REGISTRY: LabelRegistry = {
 };
 
 const MAP_PREDICATES = [
-  { id: 'in-market', label: 'is in market', inverseLabel: 'includes', subjectKinds: ['entity'], valueShape: 'entity', direction: 'directed', qualifiers: { primary: { type: 'boolean' } } },
-  { id: 'competes-with', label: 'competes with', inverseLabel: 'competes with', subjectKinds: ['entity'], valueShape: 'entity', direction: 'symmetric', qualifiers: { threat: { type: 'select', options: ['low', 'high'], label: 'Threat' } } },
+  { id: 'in-market', label: 'is in market', inverseLabel: 'includes', subjectKinds: ['entity'], valueShape: 'entity', direction: 'directed' },
+  { id: 'competes-with', label: 'competes with', inverseLabel: 'competes with', subjectKinds: ['entity'], valueShape: 'entity', direction: 'symmetric' },
   { id: 'requires', label: 'requires', subjectKinds: ['entity'], valueShape: 'entity', direction: 'directed' },
 ] as never;
 
@@ -172,11 +172,8 @@ test('the type map counts asserted statements per predicate and label pair and c
   const inMarket = byId.get('in-market|product|market')!;
   expect(inMarket).toMatchObject({ verb: 'in market', inverse: 'includes', subjects: 3, objects: 1, topTargets: [{ id: 'M', count: 3 }] });
   expect(inMarket.expectation).toMatchObject({ min: 1, met: 3, total: 4, missing: [{ id: 'C', title: 'C' }] });
-  // A JSON-string qualifier reads like an object one; unset values count as "not set".
-  expect(inMarket.qualifiers).toEqual([{ id: 'primary', label: 'primary', type: 'boolean', set: 2, breakdown: [{ value: 'no', count: 1 }, { value: 'yes', count: 1 }, { value: 'not set', count: 1 }] }]);
   const competes = byId.get('competes-with|product|product')!;
   expect(competes).toMatchObject({ symmetric: true, subjects: 2, objects: 2 });
-  expect(competes.qualifiers[0]!.breakdown).toEqual([{ value: 'high', count: 1 }, { value: 'not set', count: 1 }]);
   expect(competes.list.map((statement) => [statement.subjectTitle, statement.objectTitle, statement.detail])).toEqual([['A', 'B', 'high'], ['D', 'C', '']]);
   expect(byId.get('competes-with|product|organization')!.range).toEqual(['product', 'capability']);
   // Structure labels stay off the map; property coverage counts fields and value claims alike.

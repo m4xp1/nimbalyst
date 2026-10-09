@@ -228,6 +228,7 @@ export default defineConfig({
         'trackers-ui': resolve(import.meta.dirname, 'src/trackers-ui.ts'),
         'quick-open': resolve(import.meta.dirname, 'src/quick-open.ts'),
         inbox: resolve(import.meta.dirname, 'src/inbox.ts'),
+        pages: resolve(import.meta.dirname, 'src/pages.ts'),
       },
       formats: ['es'],
       cssFileName: 'styles',

@@ -17,7 +17,6 @@
     <string name="session_list_phase_active">Active</string>
     <string name="session_list_phase_planning">Planning</string>
     <string name="session_list_phase_done">Done</string>
-    <string name="session_list_section_meta_agent">Meta Agent</string>
     <string name="session_list_section_pinned">Pinned</string>
     <string name="session_list_period_today">Today</string>
     <string name="session_list_period_yesterday">Yesterday</string>
@@ -34,7 +33,6 @@
     <string name="session_list_untitled_session">Untitled Session</string>
     <string name="session_list_workstream">Workstream</string>
     <string name="session_list_worktree">Worktree</string>
-    <string name="session_list_meta_agent">Meta Agent</string>
     <string name="session_list_expand">Expand</string>
     <string name="session_list_collapse">Collapse</string>
     <string name="session_list_pinned_indicator">Pinned</string>

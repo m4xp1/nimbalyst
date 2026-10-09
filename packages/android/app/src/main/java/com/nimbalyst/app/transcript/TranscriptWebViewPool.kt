@@ -13,6 +13,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.annotation.VisibleForTesting
 import java.util.LinkedList
 import java.util.WeakHashMap
 
@@ -117,6 +118,7 @@ class TranscriptWebViewClient : WebViewClient() {
  * only by [resetForAccountChange].
  */
 object TranscriptWebViewPool {
+    private const val TAG = "TranscriptWebViewPool"
     private const val POOL_SIZE = 2
     private const val TRANSCRIPT_ASSET_URL = "file:///android_asset/transcript-dist/transcript.html"
     private val pool = LinkedList<WebView>()
@@ -147,13 +149,19 @@ object TranscriptWebViewPool {
         if (rewarm) warmup(context)
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    /**
+     * Constructs the platform WebView. Throws when the WebView provider is
+     * missing, disabled, or mid-update; replaceable so tests can simulate that.
+     */
+    @VisibleForTesting
+    internal var newWebView: (Context) -> WebView = { WebView(it) }
+
+    /** Fills the pool. Never throws: a missing WebView provider leaves it short and [take] reports null. */
     fun warmup(context: Context) {
         val appContext = context.applicationContext
         synchronized(pool) {
             while (pool.size < POOL_SIZE) {
-                val webView = createBaseWebView(appContext)
-                webView.loadUrl(TRANSCRIPT_ASSET_URL)
+                val webView = create(appContext) ?: return
                 pool.add(webView)
             }
         }
@@ -162,8 +170,9 @@ object TranscriptWebViewPool {
     /**
      * Take a pre-warmed WebView from the pool, or create a new one if empty.
      * Views whose renderer already died are destroyed rather than handed out.
+     * Null when the WebView provider is unavailable.
      */
-    fun take(context: Context): WebView {
+    fun take(context: Context): WebView? {
         synchronized(pool) {
             while (true) {
                 val webView = pool.pollFirst() ?: break
@@ -180,10 +189,17 @@ object TranscriptWebViewPool {
     /**
      * A fresh WebView loading the transcript, bypassing the pool. Used to
      * recover after a renderer death, when pooled views may be dead too.
+     * Null when the WebView provider is unavailable.
      */
-    fun create(context: Context): WebView {
-        return createBaseWebView(context.applicationContext).also {
-            it.loadUrl(TRANSCRIPT_ASSET_URL)
+    fun create(context: Context): WebView? {
+        return try {
+            createBaseWebView(context.applicationContext).also {
+                it.loadUrl(TRANSCRIPT_ASSET_URL)
+            }
+        } catch (error: Exception) {
+            // MissingWebViewPackageException and friends are RuntimeExceptions.
+            Log.e(TAG, "Could not create a transcript WebView", error)
+            null
         }
     }
 
@@ -251,7 +267,7 @@ object TranscriptWebViewPool {
     private fun createBaseWebView(context: Context): WebView {
         val relay = TranscriptBridgeRelay()
         val client = TranscriptWebViewClient()
-        return WebView(context).apply {
+        return newWebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT

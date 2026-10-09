@@ -11,15 +11,17 @@ struct DocumentListView: View {
 
     @State private var documents: [SyncedDocument] = []
     @State private var cancellable: AnyDatabaseCancellable?
-    @State private var searchText = ""
+    /// Owned by the sidebar, whose header search button drives both tabs.
+    @Binding private var searchText: String
     @State private var isLoading = true
     @State private var expandedPaths: Set<String> = []
     @State private var syncState: DocumentSyncState = .connecting
     @State private var observationError: String?
 
-    init(project: Project, selection: Binding<WorkspaceSelection?>) {
+    init(project: Project, selection: Binding<WorkspaceSelection?>, searchText: Binding<String>) {
         self.project = project
         _selection = selection
+        _searchText = searchText
     }
 
     private var filteredDocuments: [SyncedDocument] {
@@ -58,7 +60,6 @@ struct DocumentListView: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search files")
         .onAppear {
             loadExpandedPaths()
             startObserving()

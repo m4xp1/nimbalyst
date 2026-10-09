@@ -9,6 +9,11 @@
  * complete transformer set without having to instantiate an editor.
  */
 
+// Import order is transformer order. A page mark (`[sentence]{decided}`) that
+// opens with a link starts at the same offset as that link, and Lexical keeps
+// the first transformer on a tie, so marks and citations go first.
+import './builtin/PageMarkExtension';
+import './builtin/CitationExtension';
 import './builtin/AutoLinkExtension';
 import './builtin/AssetGcExtension';
 import './builtin/CollabAssetLinkExtension';
@@ -24,5 +29,6 @@ import './builtin/MarkdownCopyExtension';
 import './builtin/MarkdownPasteExtension';
 import './builtin/MermaidExtension';
 import './builtin/PageBreakExtension';
+import './builtin/QuadrantExtension';
 import './builtin/TabFocusExtension';
 import './builtin/TableMarkdownExtension';

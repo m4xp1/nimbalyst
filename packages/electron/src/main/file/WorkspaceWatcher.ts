@@ -12,6 +12,7 @@ import { readdirSync } from 'fs';
 import path from "path";
 import { createHash } from 'crypto';
 import { getProjectFileSyncService } from '../services/ProjectFileSyncService';
+import { isProjectSyncPath } from '../services/sync/projectSyncWikiRules';
 import { isSyncEnabled } from '../services/SyncManager';
 import { getReleaseChannel, getSessionSyncConfig, getWorkspaceRoots } from '../utils/store';
 import { anyWindowReferencesWorkspace } from '../window/windowState';
@@ -281,7 +282,7 @@ export async function startProjectFileSync(workspacePath: string): Promise<void>
   // Subscribe to file change events for .md files
   await workspaceEventBus.subscribe(workspacePath, subscriberId, {
     onChange: (filePath) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!isProjectSyncPath(filePath, workspacePath)) return;
       // Skip files that were just written by the sync service (echo suppression)
       if (service.isRecentlyWrittenFromRemote(filePath)) return;
       service.handleFileSaved(filePath, workspacePath, projectId).catch(err => {
@@ -289,14 +290,14 @@ export async function startProjectFileSync(workspacePath: string): Promise<void>
       });
     },
     onAdd: (filePath) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!isProjectSyncPath(filePath, workspacePath)) return;
       if (service.isRecentlyWrittenFromRemote(filePath)) return;
       service.handleFileSaved(filePath, workspacePath, projectId).catch(err => {
         logger.main.error('[ProjectFileSync] handleFileSaved (add) failed:', err);
       });
     },
     onUnlink: (filePath) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!isProjectSyncPath(filePath, workspacePath)) return;
       // Skip deletes the sync service itself just performed (remote delete echo)
       if (service.isRecentlyWrittenFromRemote(filePath)) return;
       service.handleFileDeletedByPath(filePath, workspacePath, projectId);
@@ -322,7 +323,7 @@ export async function startProjectFileSync(workspacePath: string): Promise<void>
  * still holds.
  */
 export function pushNewDocumentToSync(filePath: string, workspacePath: string): void {
-  if (!filePath.endsWith('.md')) return;
+  if (!isProjectSyncPath(filePath, workspacePath)) return;
   if (!projectSyncSubscriptions.has(workspacePath)) return;
 
   const projectId = hashProjectId(workspacePath);

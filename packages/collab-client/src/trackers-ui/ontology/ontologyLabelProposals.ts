@@ -17,7 +17,7 @@ import { ontologyRecordTitle, stringList, ontologyFieldValue, type OntologyRecor
 import type { ApplyOp, ChangePlan, PlanEnv, UndoOp } from './ontologyProposals';
 
 /**
- * The change shapes the knowledge-graph skill drafts (its "Ontology proposals"
+ * The change shapes the wiki update skill drafts (its "Ontology proposals"
  * table). Keep the two in step: a field renamed here is a change the agent's
  * proposals stop satisfying.
  */

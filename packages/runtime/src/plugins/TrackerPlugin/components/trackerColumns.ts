@@ -14,14 +14,7 @@ import { isDateOnlyValue, parseDate } from '../models/dateUtils';
 import { resolveDisplayIssueKey } from '../models/localIssueKey';
 import { resolveRoleFieldName, getFieldByRole, getItemPublicationState } from '../trackerRecordAccessors';
 import { resolveCellEditor, READONLY_STRUCTURAL_COLUMNS, type CellEditorKind } from './trackerCellEditors';
-import {
-  currentClaimValue,
-  isQualifiedFieldProperty,
-  type ClaimRecord,
-  type EffectivePropertyStorage,
-  type TrackerDataModelRegistry,
-} from '@nimbalyst/tracker-schema';
-import { labelPropertyToFieldDefinition } from './trackerLabelFields';
+import { isQualifiedFieldProperty } from '@nimbalyst/tracker-schema';
 
 // ============================================================================
 // Types
@@ -72,13 +65,6 @@ export interface TrackerColumnDef {
    * so the cell renderer needs no extra argument.
    */
   typeDisplay?: TypeColumnDisplay;
-  /**
-   * Only on columns from {@link resolveLabelColumns}: where the value lives.
-   * A `claim` column has no stored value -- the row layer reads the current
-   * claim (`currentClaimValue`) -- and a `qualified` field column stores
-   * `{ value, qualifiers }`, which a plain cell write would flatten.
-   */
-  labelProperty?: { storage: EffectivePropertyStorage; qualified: boolean; viaLabel: string };
 }
 
 /** Per-type column configuration (persisted) */
@@ -217,6 +203,9 @@ export function resolveColumnsForType(type: string): TrackerColumnDef[] {
       fieldToRole.set(fieldName, role as TrackerSchemaRole);
     }
   }
+  // An item's title is its `title` field unless a role says otherwise, so a
+  // type that declares no roles still gets a Title column.
+  if (!model.roles?.title && !fieldToRole.has('title')) fieldToRole.set('title', 'title');
 
   // Structural columns always present
   const columns: TrackerColumnDef[] = [...STRUCTURAL_COLUMNS];
@@ -303,59 +292,6 @@ export function getDefaultColumnConfig(type: string): TypeColumnConfig {
   }
 
   return { visibleColumns, columnWidths: {}, typeColumnDisplay: DEFAULT_TYPE_COLUMN_DISPLAY };
-}
-
-/**
- * Columns a view filtered to one label offers: the label's own properties,
- * then its ancestors', each once (`tableColumns`). An item's other labels never
- * widen the set, so the columns stay put as items are relabeled. Properties
- * whose storage cannot be resolved are left out. None are visible by default.
- */
-export function resolveLabelColumns(
-  labelId: string,
-  registry: TrackerDataModelRegistry = globalRegistry,
-): TrackerColumnDef[] {
-  const columns: TrackerColumnDef[] = [];
-  for (const property of registry.tableColumns(labelId)) {
-    if (property.storage === 'unknown') continue;
-    const labelProperty = {
-      storage: property.storage,
-      qualified: !!property.definition && isQualifiedFieldProperty(property.definition),
-      viaLabel: property.viaLabel,
-    };
-    if (property.storage === 'field' && property.definition) {
-      const field = labelPropertyToFieldDefinition(property.definition, property.viaLabel);
-      const editor = labelProperty.qualified ? { kind: 'readonly' as const } : resolveCellEditor(field);
-      columns.push({
-        id: property.id,
-        label: property.definition.label,
-        width: inferWidth(field),
-        sortable: true,
-        render: inferRenderType(field),
-        defaultVisible: false,
-        builtin: false,
-        editable: editor.kind !== 'readonly',
-        edit: editor.kind,
-        labelProperty,
-      });
-      continue;
-    }
-    columns.push({
-      id: property.id,
-      label: property.storage === 'claim'
-        ? registry.getPredicate(property.id)?.label ?? property.id
-        : property.id.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim(),
-      width: 140,
-      sortable: true,
-      render: 'text',
-      defaultVisible: false,
-      builtin: false,
-      editable: false,
-      edit: 'readonly',
-      labelProperty,
-    });
-  }
-  return columns;
 }
 
 // Keep the old name exported for backward compat
@@ -570,34 +506,14 @@ export function getCellValue(record: TrackerRecord, columnId: string): any {
 }
 
 /**
- * A field-stored label property that declares qualifiers stores
- * `{ value, qualifiers }`; a cell shows (and sorts by) the value alone.
+ * A field-stored label property that declares qualifiers (earlier knowledge
+ * graph data) stores `{ value, qualifiers }`; a cell shows (and sorts by) the
+ * value alone.
  */
 function unwrapQualifiedCellValue(columnId: string, stored: unknown): unknown {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored) || !('value' in stored)) return stored;
   const property = globalRegistry.getLabelRegistry().properties.find(candidate => candidate.id === columnId);
   return property && isQualifiedFieldProperty(property) ? (stored as { value: unknown }).value : stored;
-}
-
-/** Shown in a claim column on a surface that has no claims to read. */
-export const CLAIM_CELL_PLACEHOLDER = '-';
-
-/**
- * Cell value for a column from {@link resolveLabelColumns}. A claim column has
- * no stored value: it reads the current claim through `claimsAbout` when the
- * surface can supply claims, and shows {@link CLAIM_CELL_PLACEHOLDER}
- * otherwise. Every other column reads like {@link getCellValue}.
- */
-export function getLabelColumnCellValue(
-  record: TrackerRecord,
-  column: TrackerColumnDef,
-  claimsAbout?: (subjectId: string) => readonly ClaimRecord[],
-): unknown {
-  if (column.labelProperty?.storage !== 'claim') return getCellValue(record, column.id);
-  if (!claimsAbout) return CLAIM_CELL_PLACEHOLDER;
-  const subjectIds = record.issueKey ? [record.id, record.issueKey] : [record.id];
-  const current = currentClaimValue(claimsAbout(record.id), subjectIds, column.id);
-  return current?.value ?? current?.objectId ?? CLAIM_CELL_PLACEHOLDER;
 }
 
 /**
@@ -613,6 +529,8 @@ export function getFieldForColumn(type: string, columnId: string): FieldDefiniti
  * Get initials from a display name (for avatar rendering).
  */
 export function getInitials(name: string): string {
+  // Synced identities can arrive without a display name.
+  if (!name?.trim()) return '?';
   const parts = name.trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   return name.substring(0, 2).toUpperCase();

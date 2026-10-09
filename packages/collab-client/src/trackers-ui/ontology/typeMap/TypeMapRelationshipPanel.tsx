@@ -109,9 +109,6 @@ export function TypeMapRelationshipPanel({ model, relationship, typeById, zoneTo
     }
   };
 
-  const booleans = relationship.qualifiers.filter((qualifier) => qualifier.type === 'boolean' && qualifier.set > 0);
-  const selects = relationship.qualifiers.filter((qualifier) => qualifier.type === 'select' && qualifier.set > 0);
-
   return (
     <div className="type-map-relationship-panel" data-relationship-id={relationship.id}>
       <div className="type-map-sentence">
@@ -149,25 +146,6 @@ export function TypeMapRelationshipPanel({ model, relationship, typeById, zoneTo
         </Section>
       )}
 
-      {relationship.qualifiers.length > 0 && (
-        <Section title="Details each statement can carry">
-          <div className="type-map-qualifiers">
-            {relationship.qualifiers.map((qualifier) => (
-              <span key={qualifier.id} className="type-map-tag" title={`${qualifier.set} of ${relationship.statements} statements set it`}>
-                {qualifier.label}{relationship.statements > 0 && <span className="type-map-count"> {qualifier.set}</span>}
-              </span>
-            ))}
-          </div>
-          {booleans.map((qualifier) => (
-            <p key={qualifier.id}>{`${qualifier.breakdown.find((entry) => entry.value === 'yes')?.count ?? 0} of ${relationship.statements} marked ${lower(qualifier.label)}.`}</p>
-          ))}
-        </Section>
-      )}
-      {selects.map((qualifier) => (
-        <Section key={qualifier.id} title={`By ${lower(qualifier.label)}`}>
-          {qualifier.breakdown.map((entry) => <BarRow key={entry.value} label={entry.value} value={entry.count} of={relationship.statements} text={String(entry.count)} />)}
-        </Section>
-      ))}
       {relationship.topTargets.length > 1 && (
         <Section title={`Most linked ${lower(toPlural)}`}>
           {relationship.topTargets.map((target) => (

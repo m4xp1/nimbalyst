@@ -32,18 +32,8 @@ export interface TypeMapStatement {
   subjectTitle: string;
   objectId: string;
   objectTitle: string;
-  /** Short qualifier text, e.g. "high, AI app builder". */
+  /** Short text from the claim's own qualifiers, e.g. "high, AI app builder". */
   detail: string;
-}
-
-export interface QualifierSummary {
-  id: string;
-  label: string;
-  type: string;
-  /** Statements that carry a value for it. */
-  set: number;
-  /** Per value for `select` and `boolean` qualifiers, most common first; "not set" last. */
-  breakdown: Array<{ value: string; count: number }>;
 }
 
 export interface TypeMapExpectation {
@@ -71,7 +61,6 @@ export interface TypeMapRelationship {
   /** The range the vocabulary declares for the predicate; empty when none. */
   range: string[];
   topTargets: Array<{ id: string; title: string; count: number }>;
-  qualifiers: QualifierSummary[];
   expectation: TypeMapExpectation | null;
   /** Every statement, ordered by subject then object title. */
   list: TypeMapStatement[];
@@ -111,7 +100,6 @@ interface Bucket {
   from: string;
   to: string;
   statements: TypeMapStatement[];
-  qualifierValues: Array<Record<string, unknown>>;
   declared: boolean;
   inRange: boolean;
 }
@@ -157,11 +145,10 @@ export function buildRelationships<T extends OntologyRecordLike>(
         const key = `${predicate}|${from}|${to}`;
         let bucket = buckets.get(key);
         if (!bucket) {
-          bucket = { predicate, from, to, statements: [], qualifierValues: [], declared: declaredOn(from).has(predicate), inRange };
+          bucket = { predicate, from, to, statements: [], declared: declaredOn(from).has(predicate), inRange };
           buckets.set(key, bucket);
         }
         bucket.statements.push(statement);
-        bucket.qualifierValues.push(qualifiers);
       }
     }
   };
@@ -196,7 +183,7 @@ export function buildRelationships<T extends OntologyRecordLike>(
   const out: TypeMapRelationship[] = [];
   for (const bucket of buckets.values()) {
     const status: RelationshipStatus = !bucket.inRange ? 'range-violation' : bucket.declared ? 'declared-used' : 'off-label';
-    out.push(finish(bucket.predicate, bucket.from, bucket.to, status, bucket.statements, bucket.qualifierValues));
+    out.push(finish(bucket.predicate, bucket.from, bucket.to, status, bucket.statements));
   }
   // What the vocabulary declares and nobody uses yet.
   const present = new Set(index.registry.labels.map((label) => label.id).filter((id) => !skip.has(id)));
@@ -205,13 +192,13 @@ export function buildRelationships<T extends OntologyRecordLike>(
     for (const property of label.properties ?? []) {
       for (const target of propertyRange(registry, property)) {
         if (!present.has(target) || buckets.has(`${property}|${label.id}|${target}`)) continue;
-        out.push(finish(property, label.id, target, 'declared-unused', [], []));
+        out.push(finish(property, label.id, target, 'declared-unused', []));
       }
     }
   }
   return out.sort((a, b) => b.statements - a.statements || a.from.localeCompare(b.from) || a.predicate.localeCompare(b.predicate) || a.to.localeCompare(b.to));
 
-  function finish(predicate: string, from: string, to: string, status: RelationshipStatus, list: TypeMapStatement[], qualifierValues: Array<Record<string, unknown>>): TypeMapRelationship {
+  function finish(predicate: string, from: string, to: string, status: RelationshipStatus, list: TypeMapStatement[]): TypeMapRelationship {
     const definition = predicates.get(predicate);
     const targets = new Map<string, { id: string; title: string; count: number }>();
     for (const statement of list) {
@@ -241,30 +228,10 @@ export function buildRelationships<T extends OntologyRecordLike>(
       objects: targets.size,
       range: propertyRange(registry, predicate),
       topTargets: [...targets.values()].sort((a, b) => b.count - a.count || a.title.localeCompare(b.title)).slice(0, 5),
-      qualifiers: summarizeQualifiers(definition, qualifierValues),
       expectation,
       list: [...list].sort((a, b) => a.subjectTitle.localeCompare(b.subjectTitle) || a.objectTitle.localeCompare(b.objectTitle)),
     };
   }
-}
-
-function summarizeQualifiers(definition: PredicateDefinition | undefined, values: ReadonlyArray<Record<string, unknown>>): QualifierSummary[] {
-  return Object.entries(definition?.qualifiers ?? {}).map(([id, qualifier]) => {
-    const counts = new Map<string, number>();
-    let set = 0;
-    for (const value of values) {
-      const raw = value[id];
-      const text = qualifierText(raw);
-      if (text) set += 1;
-      if (qualifier.type === 'select' || qualifier.type === 'boolean') {
-        const key = text || 'not set';
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-    }
-    const breakdown = [...counts].map(([value, count]) => ({ value, count }))
-      .sort((a, b) => Number(a.value === 'not set') - Number(b.value === 'not set') || b.count - a.count || a.value.localeCompare(b.value));
-    return { id, label: qualifier.label ?? id.replace(/([A-Z])/g, ' $1').toLowerCase(), type: qualifier.type, set, breakdown };
-  });
 }
 
 /** Property ids a label carries: its own and every broader label's. */

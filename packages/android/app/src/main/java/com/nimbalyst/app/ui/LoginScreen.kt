@@ -1,5 +1,6 @@
 package com.nimbalyst.app.ui
 
+import android.content.ActivityNotFoundException
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.background
@@ -166,9 +167,14 @@ fun LoginScreen(
                             .replace("ws://", "http://")
                             .trimEnd('/') + "/auth/login/google"
                         AnalyticsManager.capture("mobile_login_started", mapOf("method" to "google"))
-                        CustomTabsIntent.Builder()
-                            .build()
-                            .launchUrl(context, Uri.parse(loginUrl))
+                        try {
+                            CustomTabsIntent.Builder()
+                                .build()
+                                .launchUrl(context, Uri.parse(loginUrl))
+                        } catch (_: ActivityNotFoundException) {
+                            // Custom Tabs falls back to any browser; this fires only when there is none.
+                            errorMessage = context.getString(R.string.login_no_browser)
+                        }
                     },
                     enabled = !isSending
                 )

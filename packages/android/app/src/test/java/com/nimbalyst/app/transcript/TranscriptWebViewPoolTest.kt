@@ -4,6 +4,7 @@ import android.webkit.WebView
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
@@ -22,12 +23,25 @@ class TranscriptWebViewPoolTest {
     fun setUp() = TranscriptWebViewPool.resetForAccountChange(context, rewarm = false)
 
     @After
-    fun tearDown() = TranscriptWebViewPool.resetForAccountChange(context, rewarm = false)
+    fun tearDown() {
+        TranscriptWebViewPool.newWebView = { WebView(it) }
+        TranscriptWebViewPool.resetForAccountChange(context, rewarm = false)
+    }
+
+    @Test
+    fun `a missing WebView provider leaves the pool empty instead of crashing`() {
+        TranscriptWebViewPool.newWebView = { throw RuntimeException("No WebView provider") }
+
+        TranscriptWebViewPool.warmup(context)
+
+        assertNull(TranscriptWebViewPool.take(context))
+        assertNull(TranscriptWebViewPool.create(context))
+    }
 
     @Test
     fun `leaving a session returns the same WebView next time with its session cache intact`() {
         TranscriptWebViewPool.warmup(context)
-        val first = TranscriptWebViewPool.take(context)
+        val first = TranscriptWebViewPool.take(context)!!
 
         TranscriptWebViewPool.recycle(first)
 
@@ -41,7 +55,7 @@ class TranscriptWebViewPoolTest {
 
     @Test
     fun `transcript WebViews cannot read files or content providers`() {
-        val settings = TranscriptWebViewPool.take(context).settings
+        val settings = TranscriptWebViewPool.take(context)!!.settings
 
         assertFalse(settings.allowFileAccess)
         assertFalse(settings.allowContentAccess)
@@ -52,7 +66,7 @@ class TranscriptWebViewPoolTest {
     @Test
     fun `an account change retires every view, including one in use`() {
         TranscriptWebViewPool.warmup(context)
-        val inUse: WebView = TranscriptWebViewPool.take(context)
+        val inUse: WebView = TranscriptWebViewPool.take(context)!!
 
         TranscriptWebViewPool.resetForAccountChange(context, rewarm = false)
         TranscriptWebViewPool.recycle(inUse)

@@ -43,11 +43,12 @@ public enum ModelLabel {
         "opus-5": "5",
         "sonnet": "5.5",
         "sonnet-5": "5",
-        "haiku": "4.5",
+        "haiku": "5.5",
         "opus-4-8": "4.8",
         "opus-4-7": "4.7",
         "opus-4-6": "4.6",
         "sonnet-4-6": "4.6",
+        "haiku-4-5": "4.5",
     ]
 
     private static func claudeCodeLabel(_ modelId: String?, providerFallback: String = "Claude Agent") -> String? {
@@ -120,6 +121,7 @@ public enum ModelLabel {
         "claude-fable-5": "Fable 5",
         "claude-sonnet-5-5": "Sonnet 5.5",
         "claude-sonnet-5": "Sonnet 5",
+        "claude-haiku-5-5": "Haiku 5.5",
         "claude-opus-5": "Opus 5",
         "claude-opus-4-8": "Opus 4.8",
         "claude-opus-4-7": "Opus 4.7",

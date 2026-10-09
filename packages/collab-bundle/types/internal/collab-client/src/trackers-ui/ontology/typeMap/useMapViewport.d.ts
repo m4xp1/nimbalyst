@@ -1,3 +1,4 @@
+export { MIN_ZOOM, MAX_ZOOM } from './mapGestures';
 export interface View {
     k: number;
     x: number;
@@ -9,8 +10,6 @@ export interface Box {
     w: number;
     h: number;
 }
-export declare const MIN_ZOOM = 0.2;
-export declare const MAX_ZOOM = 3;
 /** Below 0.3 nothing is readable; below 1 only major pills; 1.3 and up, types list their properties. */
 export declare function zoomTier(k: number): 'tiny' | 'fit' | 'mid' | 'near';
 export declare function fitView(bounds: {

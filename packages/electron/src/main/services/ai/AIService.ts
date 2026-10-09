@@ -94,6 +94,7 @@ import { publishQueuedPromptsToSync } from './queuedPromptSyncPublisher';
 import { onWorkspaceWindowAvailable } from '../../window/workspaceWindowAvailability';
 import { dispatchQueuedPromptToClaudeCli } from './claudeCliQueueDispatch';
 import { publishQueuedPromptClaim } from './queuedPromptClaimEvents';
+import { canDispatchIntoDrain, isLeadTurnPending } from './drainFollowUp';
 import { ensureClaudeCliSession } from './claudeCliLauncherSingleton';
 import {
   resolveProviderWorkflowCatalog,
@@ -286,6 +287,13 @@ export class AIService {
       attachments,
       documentContext: queuedDocumentContext,
     });
+    // A Claude Code turn that has answered but is draining a background task
+    // takes this prompt on its live query now (drainFollowUp.ts). Covers
+    // send_prompt, mentions and extension sessions, which queue through here.
+    const liveWorkspacePath = getSessionStateManager().getSessionState(sessionId)?.workspacePath;
+    if (liveWorkspacePath && canDispatchIntoDrain(sessionId)) {
+      this.requestQueueDrive(sessionId, liveWorkspacePath, 'drain-follow-up');
+    }
     return { id: created.id, prompt: created.prompt, createdAt: created.createdAt };
   }
 
@@ -432,6 +440,7 @@ export class AIService {
           const liveState = getSessionStateManager().getSessionState(id);
           return !!liveState && (liveState.status === 'running' || liveState.isStreaming);
         },
+        canDispatchIntoDrain,
         resolveWindow: (path, allowAutoOpen) =>
           this.queueWindowResolver.resolve(path, { allowAutoOpen }),
         failAllPending: async (id, errorMessage) => {
@@ -918,6 +927,8 @@ export class AIService {
       logError: (message, error) => logger.main.error(message, error),
       logInfo: (message) => logger.main.info(message),
       resolveLiveWindow: findWindowByWorkspace,
+      canBypassChainGuard: () => canDispatchIntoDrain(sessionId),
+      isLeadTurnPending: () => isLeadTurnPending(sessionId),
       onAfterSettled: async () => {
         try {
           const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');

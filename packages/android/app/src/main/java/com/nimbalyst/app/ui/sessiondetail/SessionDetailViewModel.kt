@@ -95,6 +95,13 @@ class SessionDetailViewModel(
     val delivery = PromptDeliveryTracker()
     val deliveryWarning: StateFlow<Boolean> = delivery.warning
 
+    /** Sends outlive this ViewModel: leaving mid-send must not cancel it or lose the text. */
+    private val submission = PromptSubmission(
+        scope = app.applicationScope,
+        compose = compose,
+        writeDraft = { syncManager.updateDraftInput(sessionId, it) }
+    )
+
     private var draftDebounceJob: Job? = null
     private var pendingDraft: String? = null
     private var deliveryTimeoutJob: Job? = null
@@ -199,7 +206,8 @@ class SessionDetailViewModel(
 
     /**
      * Send or queue a prompt. The composer is cleared immediately; on failure
-     * the text and attachments come back. Never resends on its own.
+     * the text and attachments come back, even if the user has left the
+     * session. Never resends on its own.
      */
     fun submit() {
         val promptText = compose.text.trim()
@@ -212,17 +220,16 @@ class SessionDetailViewModel(
         compose.lastSubmitAt = System.currentTimeMillis()
         compose.setText("")
         setAttachments(emptyList())
-        viewModelScope.launch { syncManager.updateDraftInput(sessionId, "") }
-        send(promptText, sending)
+        send(promptText, sending, clearDraft = true)
     }
 
     /** A prompt submitted from inside the transcript; the composer is untouched unless the send fails. */
     fun sendTranscriptPrompt(text: String) {
         val promptText = text.trim()
-        if (promptText.isNotEmpty()) send(promptText, emptyList())
+        if (promptText.isNotEmpty()) send(promptText, emptyList(), clearDraft = false)
     }
 
-    private fun send(promptText: String, sending: List<ComposeAttachment>) {
+    private fun send(promptText: String, sending: List<ComposeAttachment>, clearDraft: Boolean) {
         val now = System.currentTimeMillis()
 
         val requestId = delivery.begin(
@@ -232,34 +239,47 @@ class SessionDetailViewModel(
             now = now,
             pendingExecution = session.value?.pendingExecution
         )
-        viewModelScope.launch {
-            val result = syncManager.sendPrompt(
-                sessionId = sessionId,
-                text = promptText,
-                attachments = sending.map {
-                    PendingAttachment(bitmap = it.bitmap, filename = it.stored.filename, id = it.stored.id)
-                }
-            )
-            result.onSuccess {
-                AnalyticsManager.capture(
-                    "mobile_ai_message_sent",
-                    mapOf("hasAttachments" to sending.isNotEmpty(), "attachmentCount" to sending.size)
-                )
-                withContext(Dispatchers.IO) { sending.forEach { AttachmentStore.delete(it.stored) } }
-                if (delivery.sent(requestId)) {
-                    deliveryTimeoutJob?.cancel()
-                    deliveryTimeoutJob = viewModelScope.launch {
-                        delay(DELIVERY_TIMEOUT_MS)
-                        delivery.expire(requestId)
+        submission.start(
+            promptText = promptText,
+            attachments = sending.map { it.stored },
+            clearDraft = clearDraft,
+            send = {
+                syncManager.sendPrompt(
+                    sessionId = sessionId,
+                    text = promptText,
+                    attachments = sending.map {
+                        PendingAttachment(bitmap = it.bitmap, filename = it.stored.filename, id = it.stored.id)
                     }
+                )
+            },
+            beforeRestore = {
+                draftDebounceJob?.cancel()
+                draftDebounceJob = null
+                pendingDraft = null
+            },
+            onResult = { result ->
+                result.onSuccess {
+                    AnalyticsManager.capture(
+                        "mobile_ai_message_sent",
+                        mapOf("hasAttachments" to sending.isNotEmpty(), "attachmentCount" to sending.size)
+                    )
+                    withContext(Dispatchers.IO) { sending.forEach { AttachmentStore.delete(it.stored) } }
+                    if (delivery.sent(requestId)) {
+                        deliveryTimeoutJob?.cancel()
+                        deliveryTimeoutJob = viewModelScope.launch {
+                            delay(DELIVERY_TIMEOUT_MS)
+                            delivery.expire(requestId)
+                        }
+                    }
+                }.onFailure { error ->
+                    delivery.failed(requestId)
+                    // The submission already put the text and files back in the compose state.
+                    _attachments.update { sending + it.filterNot { current -> current in sending } }
+                    // Blank selects the generic message; null would hide the dialog.
+                    _sendError.value = error.message.orEmpty()
                 }
-            }.onFailure { error ->
-                delivery.failed(requestId)
-                restoreFailedSend(promptText, sending)
-                // Blank selects the generic message; null would hide the dialog.
-                _sendError.value = error.message.orEmpty()
             }
-        }
+        )
     }
 
     fun sendInteractiveResponse(message: TranscriptBridgeMessage) {
@@ -364,15 +384,6 @@ class SessionDetailViewModel(
         // Attachments added while loading are kept after the restored ones.
         val restoredIds = loaded.mapTo(HashSet()) { it.stored.id }
         setAttachments(loaded + _attachments.value.filterNot { it.stored.id in restoredIds })
-    }
-
-    private fun restoreFailedSend(promptText: String, sent: List<ComposeAttachment>) {
-        val restored = compose.restoreFailedSend(promptText, System.currentTimeMillis())
-        draftDebounceJob?.cancel()
-        draftDebounceJob = null
-        pendingDraft = null
-        viewModelScope.launch { syncManager.updateDraftInput(sessionId, restored) }
-        setAttachments(sent + _attachments.value)
     }
 
     private fun appendAttachments(added: List<ComposeAttachment>) {

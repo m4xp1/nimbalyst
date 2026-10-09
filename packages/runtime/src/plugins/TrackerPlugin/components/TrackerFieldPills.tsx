@@ -36,6 +36,7 @@ import {
 import type { RelationshipCandidate } from './RelationshipFieldEditor';
 import type { CitationInspectorHost } from './CitationInspector';
 import { CollectionPickerPopover } from './CollectionPickerPopover';
+import { TrackerFieldChoiceList, teamMemberChoices, type TrackerFieldChoice } from './TrackerFieldChoiceList';
 import { isCollectionRelationshipField } from '../models/trackerCollections';
 import { UserAvatar } from './UserAvatar';
 import { isTrackerFieldEmpty, shouldLabelTrackerField, trackerFieldDisplayLabel } from './trackerFieldLayout';
@@ -81,11 +82,6 @@ export interface TrackerFieldPillsProps {
    * exists to prevent.
    */
   carriedFieldNames?: ReadonlySet<string>;
-  /**
-   * Extra hover text per field name, appended to the chip's title. Qualified
-   * label properties use it to show their qualifiers.
-   */
-  fieldHints?: Readonly<Record<string, string>>;
   /** Extra class on the chip row for surface-specific layout. */
   className?: string;
   /**
@@ -108,8 +104,6 @@ export interface TrackerFieldPillProps {
   onSave: (fieldName: string, value: unknown) => void | Promise<void>;
   /** See `TrackerFieldPillsProps.carriedFieldNames`. */
   carried?: boolean;
-  /** See `TrackerFieldPillsProps.fieldHints`. */
-  hint?: string;
   testIdBase?: string;
 }
 
@@ -227,7 +221,6 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
   onCreateCollection,
   onSave,
   carried = false,
-  hint,
   testIdBase = DEFAULT_TEST_ID_BASE,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -327,34 +320,24 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
     void onSave(field.name, nextValue);
   }, [field.name, onSave]);
 
-  const directChoices = useMemo(() => {
+  const directChoices = useMemo((): TrackerFieldChoice[] => {
     if (field.type === 'select') {
       return (field.options ?? []).map((option) => ({
         value: option.value,
         label: option.label,
         icon: option.icon,
         color: option.color,
-        avatarIdentity: undefined as string | undefined,
       }));
     }
-    if (field.type === 'user') {
-      return members.map((member) => ({
-        value: member.email,
-        label: member.name ?? member.email,
-        icon: 'person',
-        color: undefined,
-        avatarIdentity: member.name ?? member.email,
-      }));
-    }
+    if (field.type === 'user') return teamMemberChoices(members);
     return [];
   }, [field.options, field.type, members]);
 
-  const baseTitle = !editable
+  const pillTitle = !editable
     ? `${label} is read-only`
     : empty
       ? `Set ${label}`
       : `${label}: ${displayValue}`;
-  const pillTitle = hint ? `${baseTitle}\n${hint}` : baseTitle;
 
   return (
     <>
@@ -428,52 +411,13 @@ export const TrackerFieldPill: React.FC<TrackerFieldPillProps> = ({
                 testIdBase={`${testIdBase}-collection-picker`}
               />
             ) : directChoiceField ? (
-              <div
-                className="tracker-field-choice-list"
-                data-testid={`${testIdBase}-choices-${field.name}`}
-              >
-                {!field.required && (
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={empty}
-                    className={empty
-                      ? 'tracker-field-choice tracker-field-choice-selected'
-                      : 'tracker-field-choice'}
-                    onClick={() => handleDirectChange('')}
-                  >
-                    <MaterialSymbol icon="remove" size={15} />
-                    <span className="tracker-field-choice-label">None</span>
-                  </button>
-                )}
-                {directChoices.map((choice) => {
-                  const selected = choice.value === localValue;
-                  return (
-                    <button
-                      key={choice.value}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className={selected
-                        ? 'tracker-field-choice tracker-field-choice-selected'
-                        : 'tracker-field-choice'}
-                      onClick={() => handleDirectChange(choice.value)}
-                    >
-                      {choice.avatarIdentity ? (
-                        <UserAvatar identity={choice.avatarIdentity} size={16} />
-                      ) : (
-                        <MaterialSymbol
-                          icon={choice.icon ?? 'circle'}
-                          size={15}
-                          style={choice.color ? { color: choice.color } : undefined}
-                        />
-                      )}
-                      <span className="tracker-field-choice-label">{choice.label}</span>
-                      {selected && <MaterialSymbol icon="check" size={15} />}
-                    </button>
-                  );
-                })}
-              </div>
+              <TrackerFieldChoiceList
+                choices={directChoices}
+                value={localValue}
+                allowNone={!field.required}
+                onPick={handleDirectChange}
+                testId={`${testIdBase}-choices-${field.name}`}
+              />
             ) : (
               <TrackerFieldEditor
                 field={field}
@@ -505,7 +449,6 @@ export const TrackerFieldPills: React.FC<TrackerFieldPillsProps> = ({
   onOpenItem,
   onCreateCollection,
   carriedFieldNames,
-  fieldHints,
   className,
   testIdBase = DEFAULT_TEST_ID_BASE,
 }) => {
@@ -530,7 +473,6 @@ export const TrackerFieldPills: React.FC<TrackerFieldPillsProps> = ({
           onCreateCollection={onCreateCollection}
           onSave={onSave}
           carried={carriedFieldNames?.has(field.name) ?? false}
-          hint={fieldHints?.[field.name]}
           testIdBase={testIdBase}
         />
       ))}

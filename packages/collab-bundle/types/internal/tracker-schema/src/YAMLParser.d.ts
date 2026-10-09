@@ -29,7 +29,7 @@ export declare function parseTrackerTypeYAML(yamlString: string): TrackerDataMod
 /**
  * Serialize a TrackerDataModel to YAML string
  */
-export declare function serializeTrackerYAML(model: TrackerDataModel): string;
+export declare function serializeTrackerYAML(model: TrackerDataModel | DerivedTrackerTypeDeclaration): string;
 /**
  * Validate a YAML string without fully parsing
  */
@@ -46,11 +46,16 @@ export declare function validateTrackerYAML(yamlString: string): {
  * that has no room yet.
  *
  * Returns issues rather than throwing, and returns every issue: a registry is
- * authored by hand and a reader who is told about one bad qualifier at a time
- * edits the file once per mistake.
+ * authored by hand and a reader who is told about one bad field at a time
+ * edits the file once per mistake. A `qualifiers` key left from an earlier
+ * registry is an unknown-field warning, not a failure.
  */
 export declare function parsePredicateRegistryYAML(yamlString: string): PredicateRegistryValidation;
-/** Serialize a registry to the `.nimbalyst/predicates.yaml` shape. */
+/**
+ * Serialize a registry to the `.nimbalyst/predicates.yaml` shape. Relations
+ * carry no qualifiers, so a retired `qualifiers` block an older registry still
+ * holds is dropped here rather than written back.
+ */
 export declare function serializePredicateRegistryYAML(predicates: readonly PredicateDefinition[]): string;
 /**
  * Parse the local copy of the label registry (`.nimbalyst/labels.yaml`). An

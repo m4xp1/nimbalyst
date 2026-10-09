@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
@@ -14,6 +15,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.Gson
+import com.nimbalyst.app.R
 import com.nimbalyst.app.transcript.TranscriptExternalLinks
 import java.net.URI
 
@@ -108,14 +110,31 @@ class EditorBridgeRelay {
  * A WebView locked to the bundled editor, with the transcript's restrictions:
  * no file or content access beyond the APK assets, no navigation off
  * `editor-dist/`, external links in a Custom Tab. [onFailure] reports a load
- * error or a renderer death (returning true keeps the app alive).
+ * error or a renderer death (returning true keeps the app alive). Returns null,
+ * after reporting through [onFailure], when the WebView provider is missing,
+ * disabled, or mid-update.
  */
-@SuppressLint("SetJavaScriptEnabled")
 internal fun createDocumentEditorWebView(
     context: Context,
     relay: EditorBridgeRelay,
+    newWebView: (Context) -> WebView = { WebView(it) },
     onFailure: (String) -> Unit,
-): WebView = WebView(context).apply {
+): WebView? {
+    val webView = try {
+        newWebView(context)
+    } catch (error: Exception) {
+        Log.e("DocumentEditorWebView", "Could not create the editor WebView", error)
+        onFailure(context.getString(R.string.webview_unavailable))
+        return null
+    }
+    return webView.configureForEditor(relay, onFailure)
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+private fun WebView.configureForEditor(
+    relay: EditorBridgeRelay,
+    onFailure: (String) -> Unit,
+): WebView = apply {
     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     setBackgroundColor(android.graphics.Color.rgb(0x1A, 0x1A, 0x1A))
     webChromeClient = WebChromeClient()

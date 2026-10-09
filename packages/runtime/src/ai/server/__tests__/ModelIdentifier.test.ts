@@ -326,4 +326,22 @@ describe('ModelIdentifier', () => {
       expect(ModelIdentifier.getDefaultModelId('lmstudio')).toBe('lmstudio:local-model');
     });
   });
+
+  describe('custom gateway models', () => {
+    it('round-trips a custom id with its case intact and never treats it as a built-in', () => {
+      const id = ModelIdentifier.parse('claude-code:custom/Opus-1m');
+      expect(id.combined).toBe('claude-code:custom/Opus-1m');
+      expect(id.isCustomClaudeModel).toBe(true);
+      expect(id.customClaudeModel).toBe('Opus-1m');
+      expect(id.isExtendedContext).toBe(false);
+      expect(id.baseVariant).toBe('custom/Opus-1m');
+      expect(ModelIdentifier.parse('claude-code-cli:custom/Fast').customClaudeModel).toBe('Fast');
+    });
+
+    it('still rejects unknown non-custom Claude variants', () => {
+      expect(ModelIdentifier.tryParse('claude-code:Fast')).toBeNull();
+      expect(ModelIdentifier.tryParse('claude-code:custom/')).toBeNull();
+      expect(ModelIdentifier.parse('claude-code:opus').customClaudeModel).toBeNull();
+    });
+  });
 });

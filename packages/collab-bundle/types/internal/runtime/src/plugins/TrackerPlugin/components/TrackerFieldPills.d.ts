@@ -50,11 +50,6 @@ export interface TrackerFieldPillsProps {
      * exists to prevent.
      */
     carriedFieldNames?: ReadonlySet<string>;
-    /**
-     * Extra hover text per field name, appended to the chip's title. Qualified
-     * label properties use it to show their qualifiers.
-     */
-    fieldHints?: Readonly<Record<string, string>>;
     /** Extra class on the chip row for surface-specific layout. */
     className?: string;
     /**
@@ -76,8 +71,6 @@ export interface TrackerFieldPillProps {
     onSave: (fieldName: string, value: unknown) => void | Promise<void>;
     /** See `TrackerFieldPillsProps.carriedFieldNames`. */
     carried?: boolean;
-    /** See `TrackerFieldPillsProps.fieldHints`. */
-    hint?: string;
     testIdBase?: string;
 }
 /** Header naming the field an open popover edits. */

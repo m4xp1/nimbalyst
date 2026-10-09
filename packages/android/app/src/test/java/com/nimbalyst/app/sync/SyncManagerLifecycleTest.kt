@@ -83,7 +83,7 @@ class SyncManagerLifecycleTest {
             socketFactory = factory,
             tokenRefresher = TokenRefresher { credentials ->
                 refreshCount++
-                credentials.copy(authJwt = "jwt-${refreshCount + 1}")
+                TokenRefresh.Refreshed(credentials.copy(authJwt = "jwt-${refreshCount + 1}"))
             }
         )
     }
@@ -278,6 +278,45 @@ class SyncManagerLifecycleTest {
     }
 
     @Test
+    fun `the refresh timer stops in the background, and a return to the foreground refreshes at once`() {
+        connectIndex()
+        assertTrue(manager.isJwtRefreshScheduled)
+
+        manager.setAppInForeground(false)
+        assertFalse(manager.isJwtRefreshScheduled)
+        // A reconnect while backgrounded does not restart it.
+        indexSockets().last().fail(401)
+        assertFalse(manager.isJwtRefreshScheduled)
+
+        val before = refreshCount
+        manager.setAppInForeground(true)
+        assertEquals(before + 1, refreshCount)
+        assertTrue(manager.isJwtRefreshScheduled)
+    }
+
+    @Test
+    fun `refreshes that fail for lack of a network never sign the user out`() = runBlocking {
+        var now = 0L
+        // Nothing listens on the discard port: every refresh is a connection failure.
+        val offlineStore = FakeCredentials(store.credentials!!.copy(serverUrl = "http://127.0.0.1:9"))
+        val offline = SyncManager(
+            context = ApplicationProvider.getApplicationContext(),
+            repository = repository,
+            credentialStore = offlineStore,
+            notificationManager = NotificationManager(ApplicationProvider.getApplicationContext()),
+            scope = scope,
+            socketFactory = factory,
+            tokenRefresher = HttpTokenRefresher(com.google.gson.Gson()),
+            authClock = { now }
+        )
+
+        repeat(AuthHealthTracker.SIGN_OUT_THRESHOLD + 1) { now += 5 * 60_000; offline.refreshJwt() }
+
+        assertEquals(AuthHealth.Ok, offline.authHealth.value)
+        assertEquals("jwt-1", offlineStore.credentials!!.authJwt)
+    }
+
+    @Test
     fun `five failed refreshes sign the user out, keeping the pairing`() = runBlocking {
         var now = 0L
         val failing = SyncManager(
@@ -287,7 +326,7 @@ class SyncManagerLifecycleTest {
             notificationManager = NotificationManager(ApplicationProvider.getApplicationContext()),
             scope = scope,
             socketFactory = factory,
-            tokenRefresher = TokenRefresher { null },
+            tokenRefresher = TokenRefresher { TokenRefresh.Rejected },
             authClock = { now }
         )
         failing.connect()

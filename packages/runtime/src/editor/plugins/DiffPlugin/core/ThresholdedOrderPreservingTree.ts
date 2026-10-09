@@ -1,5 +1,6 @@
 import type {CanonicalTreeNode} from './canonicalTree';
 import {LcsPattern} from './textDistance';
+import {isDiffDebug} from './diffDebug';
 
 type Path = number[];
 
@@ -434,7 +435,7 @@ function childMatchCost(
         if (contextSim >= 0.8) {
             c = 0;  // Perfect match - no cost
 
-            if (process?.env?.DIFF_DEBUG === '1') {
+            if (isDiffDebug()) {
                 console.log(`[TOPT] Empty node EXACT match [${i}]->[${j}]: contextSim=${contextSim.toFixed(3)}, cost=0.000 (strong context)`);
             }
         } else {
@@ -445,7 +446,7 @@ function childMatchCost(
             c = c + contextPenalty;
 
             // Debug logging for empty node matching
-            if (process?.env?.DIFF_DEBUG === '1') {
+            if (isDiffDebug()) {
                 console.log(`[TOPT] Empty node pairing [${i}]->[${j}]: contextSim=${contextSim.toFixed(3)}, baseCost=${(c - contextPenalty).toFixed(3)}, penalty=${contextPenalty.toFixed(3)}, finalCost=${c.toFixed(3)}`);
             }
         }
@@ -457,7 +458,7 @@ function childMatchCost(
     if (norm <= opts.pairAlignThreshold) return c; // only allow "match" when similar enough
 
     // Debug: log blocked matches for empty nodes
-    if (process?.env?.DIFF_DEBUG === '1' && bothEmpty) {
+    if (isDiffDebug() && bothEmpty) {
         console.log(`[TOPT] BLOCKED empty node pairing [${i}]->[${j}]: norm=${norm.toFixed(3)} > threshold=${opts.pairAlignThreshold}, cost=${c.toFixed(3)}, base=${base.toFixed(3)}`);
     }
     return Infinity;
@@ -494,7 +495,7 @@ function alignChildren(a: CanonicalTreeNode, b: CanonicalTreeNode, opts: DiffOpt
             PC[i - 1][j - 1] = 0;
             dp[i][j] = dp[i - 1][j - 1];
             continue;
-        } else if (process?.env?.DIFF_DEBUG === '1' && isEmpty && ai.text === bj.text) {
+        } else if (isDiffDebug() && isEmpty && ai.text === bj.text) {
             console.log(`[TOPT] NOT forcing exact match for empty node [${pre + i - 1}]->[${pre + j - 1}] (preserving contextual cost)`);
         }
 

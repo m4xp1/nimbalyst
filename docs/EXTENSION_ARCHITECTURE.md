@@ -720,7 +720,7 @@ When working on extensions in `packages/extensions/`:
 - Use `mcp__nimbalyst-extension-dev__extension_reload` to rebuild and reload extensions
 - Use `mcp__nimbalyst-extension-dev__extension_get_logs` to check for errors
 - Use `mcp__nimbalyst-extension-dev__extension_get_status` to verify extension state
-- **Never use manual `npm run build`** - always use the MCP tools for extension builds
+- **Never run a manual `pnpm run build` or `npm run build`** - always use the MCP tools for extension builds
 
 ## Marketplace Screenshots
 

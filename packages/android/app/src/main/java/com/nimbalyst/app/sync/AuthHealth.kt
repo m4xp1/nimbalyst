@@ -38,7 +38,7 @@ internal class AuthHealthTracker(private val clock: () -> Long = System::current
         _health.value = AuthHealth.Ok
     }
 
-    /** Records a failed refresh and returns the resulting health. */
+    /** Records a refresh the auth server rejected and returns the resulting health. Never call it for a network failure. */
     @Synchronized
     fun recordFailure(): AuthHealth {
         if (_health.value is AuthHealth.SignedOut) return _health.value

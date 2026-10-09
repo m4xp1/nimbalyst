@@ -121,6 +121,23 @@ html, body {
   line-height: 1.6;
 }
 
+/* The shared theme draws list markers inside the text box, so a wrapped bullet's
+   second line starts under the marker. On a narrow screen most bullets wrap; hang
+   the marker in the item's left margin instead so continuation lines align with the
+   text. Checklist items set list-style-type none and are unaffected. */
+.mobile-editor .nim-ul,
+.mobile-editor .nim-ol1,
+.mobile-editor .nim-ol2,
+.mobile-editor .nim-ol3,
+.mobile-editor .nim-ol4,
+.mobile-editor .nim-ol5 {
+  list-style-position: outside;
+}
+
+.mobile-editor .nim-list-item {
+  margin-right: 0;
+}
+
 /* Hide plugins that don't work on mobile */
 .mobile-editor .draggable-block-menu {
   display: none;

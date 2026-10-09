@@ -84,6 +84,22 @@ class NimbalystMigrationTest {
     }
 
     @Test
+    fun `v4 sessions keep their draft and start with no known metadata blob`() = runBlocking {
+        createFromSchema(version = 4) { db ->
+            db.execSQL("INSERT INTO projects (id, name, sessionCount, sortOrder, isProvisional) VALUES ('/p', 'p', 1, 0, 0)")
+            db.execSQL(
+                "INSERT INTO sessions (id, projectId, isArchived, isPinned, isExecuting, hasQueuedPrompts, " +
+                    "createdAt, updatedAt, lastSyncedSeq, draftInput) VALUES ('s1', '/p', 0, 0, 0, 0, 1, 2, 0, 'draft')"
+            )
+        }
+
+        val session = NimbalystDatabase.getInstance(context).sessionDao().getById("s1")!!
+        assertEquals("draft", session.draftInput)
+        // Unknown until the next index sync: a draft waits rather than guessing the blob.
+        assertNull(session.clientMetadataJson)
+    }
+
+    @Test
     fun `every schema version up to the current one is committed`() {
         val current = NimbalystDatabase.VERSION
         for (version in 1..current) {

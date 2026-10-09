@@ -12,7 +12,8 @@ final class ModelLabelTests: XCTestCase {
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:fable"), "Fable 5.1")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:opus"), "Opus 5.5")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:sonnet"), "Sonnet 5.5")
-        XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:haiku"), "Haiku 4.5")
+        XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:haiku"), "Haiku 5.5")
+        XCTAssertEqual(ModelLabel.shortLabel(provider: "claude-code", model: "claude-code:haiku-4-5"), "Haiku 4.5")
     }
 
     func testClaudeCodeExtendedContextVariants() {
@@ -94,6 +95,7 @@ final class ModelLabelTests: XCTestCase {
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-fable-5"), "Fable 5")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-opus-5"), "Opus 5")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-sonnet-5-5"), "Sonnet 5.5")
+        XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-haiku-5-5"), "Haiku 5.5")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-sonnet-5"), "Sonnet 5")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-opus-4-7"), "Opus 4.7")
         XCTAssertEqual(ModelLabel.shortLabel(provider: "claude", model: "claude:claude-sonnet-4-6"), "Sonnet 4.6")

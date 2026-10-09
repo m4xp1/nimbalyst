@@ -13,6 +13,8 @@ import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.os.HandlerCompat
+import com.nimbalyst.app.R
 
 /** Callbacks the composable refreshes on every recomposition. */
 internal data class TranscriptCallbacks(
@@ -34,7 +36,8 @@ internal class TranscriptHost(
     private val controller: TranscriptController?,
 ) : TranscriptWebViewClient.Host {
 
-    var webView: WebView by mutableStateOf(TranscriptWebViewPool.take(context))
+    /** Null when the WebView provider is unavailable, or between a renderer death and its replacement. */
+    var webView: WebView? by mutableStateOf(TranscriptWebViewPool.take(context))
         private set
 
     /** Non-null when the transcript failed to load; the composable shows it with Retry. */
@@ -55,7 +58,7 @@ internal class TranscriptHost(
     private val loadTimeout = Runnable { onLoadTimeout() }
 
     init {
-        attach(webView)
+        webView?.let(::attach) ?: showWebViewUnavailable()
     }
 
     fun submit(snapshot: TranscriptSnapshot) {
@@ -75,7 +78,7 @@ internal class TranscriptHost(
         error = null
         crashBudget.reset()
         val current = webView
-        if (TranscriptWebViewPool.getClient(current)?.rendererGone == true) {
+        if (current == null || TranscriptWebViewPool.getClient(current)?.rendererGone == true) {
             replaceWebView(TranscriptWebViewPool.create(context))
         } else {
             resetBridge()
@@ -96,14 +99,14 @@ internal class TranscriptHost(
             appendLine("Session: ${snapshot?.sessionId ?: "none"} (${snapshot?.messages?.size ?: 0} messages)")
             appendLine("Bridge ready: ${sync.bridgeReady}, confirmed: ${sync.confirmedSessionId ?: "none"}")
             appendLine("Recent renderer crashes: ${crashBudget.recentCrashes}")
-            append("WebView: ${WebView.getCurrentWebViewPackage()?.versionName ?: "unknown"}")
+            append("WebView: ${runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull() ?: "unknown"}")
         }
     }
 
     fun dispose() {
         disposed = true
         handler.removeCallbacksAndMessages(null)
-        detach(webView)
+        webView?.let(::detach)
         controller?.webView = null
         controller?.isReady = false
     }
@@ -127,18 +130,29 @@ internal class TranscriptHost(
         TranscriptWebViewPool.getClient(view)?.host = null
     }
 
-    /** Swap in [next]; the old view is released (and destroyed if dead) by the AndroidView's onRelease. */
-    private fun replaceWebView(next: WebView) {
-        detach(webView)
+    /**
+     * Swap in [next]; the old view is released (and destroyed if dead) by the
+     * AndroidView's onRelease. A null [next] leaves no view on screen.
+     */
+    private fun replaceWebView(next: WebView?) {
+        webView?.let(::detach)
         resetBridge()
         webView = next
-        attach(next)
+        if (next != null) attach(next) else showWebViewUnavailable()
+    }
+
+    private fun showWebViewUnavailable() {
+        handler.removeCallbacks(loadTimeout)
+        controller?.webView = null
+        controller?.isReady = false
+        error = context.getString(R.string.webview_unavailable)
     }
 
     private fun resetBridge() {
         sync.onBridgeLost()
         controller?.isReady = false
         probeGeneration++
+        handler.removeCallbacksAndMessages(PROBE_TOKEN)
     }
 
     override fun onPageFinished(view: WebView) {
@@ -155,6 +169,11 @@ internal class TranscriptHost(
             return
         }
         resetBridge()
+        // Drop the dead view now: the AndroidView's onRelease destroys it, and
+        // nothing evaluates script on it while the replacement waits.
+        detach(view)
+        webView = null
+        controller?.webView = null
         // A successful loadSession does not reset this budget: the bundle
         // acknowledges before it renders, so render-time crashes would loop.
         if (!crashBudget.recordCrash(SystemClock.elapsedRealtime())) {
@@ -165,7 +184,8 @@ internal class TranscriptHost(
         }
         Log.w(TAG, "Reloading transcript after renderer loss (${crashBudget.recentCrashes} recent)")
         handler.postDelayed({
-            if (!disposed && TranscriptWebViewPool.getClient(webView)?.rendererGone == true) {
+            // Retry may already have replaced it.
+            if (!disposed && webView == null) {
                 replaceWebView(TranscriptWebViewPool.create(context))
             }
         }, RENDER_RELOAD_DELAY_MS)
@@ -211,18 +231,22 @@ internal class TranscriptHost(
         probe(view, generation, attempt = 0)
     }
 
+    private fun isStaleProbe(view: WebView, generation: Int): Boolean =
+        disposed || view !== webView || generation != probeGeneration || sync.bridgeReady
+
     private fun probe(view: WebView, generation: Int, attempt: Int) {
+        // Checked before evaluating too: a probe queued before a renderer
+        // death must not touch the dead view.
+        if (isStaleProbe(view, generation)) return
         view.evaluateJavascript("typeof window.nimbalyst") { result ->
-            if (disposed || view !== webView || generation != probeGeneration || sync.bridgeReady) {
-                return@evaluateJavascript
-            }
+            if (isStaleProbe(view, generation)) return@evaluateJavascript
             if (TranscriptBridge.parseJsResult(result)?.asString == "object") {
                 onBridgeReady()
                 return@evaluateJavascript
             }
             if (attempt < MAX_PROBE_ATTEMPTS) {
                 val delayMs = minOf((100 * Math.pow(1.5, attempt.toDouble())).toLong(), 2_000L)
-                handler.postDelayed({ probe(view, generation, attempt + 1) }, delayMs)
+                HandlerCompat.postDelayed(handler, { probe(view, generation, attempt + 1) }, PROBE_TOKEN, delayMs)
             }
             // Out of attempts: the "ready" post or the load timeout takes over.
         }
@@ -249,7 +273,7 @@ internal class TranscriptHost(
     }
 
     private fun sendLoad(command: TranscriptCommand.Load) {
-        val view = webView
+        val view = webView ?: return
         val snapshot = command.snapshot
         val payload = TranscriptPayloadBuilder.buildSessionPayload(
             sessionId = snapshot.sessionId,
@@ -288,7 +312,7 @@ internal class TranscriptHost(
     }
 
     private fun sendMutation(command: TranscriptCommand, call: String) {
-        val view = webView
+        val view = webView ?: return
         val script = "(function(){var n=window.nimbalyst;return n?n.$call:null;})()"
         view.evaluateJavascript(script) { result ->
             if (disposed || view !== webView) return@evaluateJavascript
@@ -327,5 +351,6 @@ internal class TranscriptHost(
         const val LOAD_TIMEOUT_MS = 10_000L
         const val EMPTY_LOAD_GRACE_MS = 250L
         const val MAX_PROBE_ATTEMPTS = 10
+        val PROBE_TOKEN = Any()
     }
 }

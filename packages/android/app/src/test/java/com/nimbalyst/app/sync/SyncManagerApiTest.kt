@@ -14,7 +14,9 @@ import com.nimbalyst.app.pairing.PairingCredentials
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -74,7 +76,7 @@ class SyncManagerApiTest {
             notificationManager = NotificationManager(context),
             scope = scope,
             socketFactory = factory,
-            tokenRefresher = TokenRefresher { it }
+            tokenRefresher = TokenRefresher { TokenRefresh.Refreshed(it) }
         )
         manager.connect()
         index = factory.sockets.last().also { it.open() }
@@ -176,7 +178,7 @@ class SyncManagerApiTest {
 
     @Test
     fun `controls go to the session host, and archive and reparent are written locally and published`() = runBlocking<Unit> {
-        broadcast(entry("s1") { addProperty("hostDeviceId", "desk-1") })
+        broadcast(entry("s1") { addProperty("hostDeviceId", "desk-1"); addProperty("createdBySessionId", "desktop-manager") })
 
         manager.cancelSession("s1").getOrThrow()
         val cancel = sent("sessionControl").single().getAsJsonObject("message")
@@ -195,6 +197,13 @@ class SyncManagerApiTest {
         val move = sent("indexUpdate").last().getAsJsonObject("session")
         assertEquals("ws-1", move.get("parentSessionId").asString)
         assertNull("a move must not overwrite the message count", move.get("messageCount"))
+        assertFalse(move.has("createdBySessionId"))
+        manager.updateSessionParent("s1", null).getOrThrow()
+        assertNull(repository.getSession("s1")!!.parentSessionId)
+        assertEquals("desktop-manager", repository.getSession("s1")!!.createdBySessionId)
+        val clear = sent("indexUpdate").last().getAsJsonObject("session")
+        assertTrue(clear.get("parentSessionId").isJsonNull)
+        assertFalse(clear.has("createdBySessionId"))
 
         val worktreeId = manager.createWorktree("/p").getOrThrow()
         assertEquals(worktreeId, sent("createWorktreeRequest").single().getAsJsonObject("request").get("requestId").asString)
@@ -303,9 +312,98 @@ class SyncManagerApiTest {
         return index
     }
 
+    private fun JsonObject.clientMetadata(json: String) {
+        val encrypted = crypto.encrypt(json)
+        addProperty("encryptedClientMetadata", encrypted.encrypted)
+        addProperty("clientMetadataIv", encrypted.iv)
+    }
+
+    private fun draftBlobs(): List<JsonObject> = sent("indexClientMetadataPatch").map { it.getAsJsonObject("patch") }
+        .filter { it.has("encryptedClientMetadata") }
+        .map { JsonParser.parseString(crypto.decrypt(it.get("encryptedClientMetadata").asString, it.get("clientMetadataIv").asString)).asJsonObject }
+
+    private suspend fun waitFor(condition: () -> Boolean) = withTimeout(10_000) { while (!condition()) delay(10) }
+
+    private fun sentPrompts() = sent("indexUpdate").filter { it.getAsJsonObject("session").has("encryptedQueuedPrompts") }
+
+    @Test
+    fun `a prompt counts as sent only once the room confirms it, and a drop before that hands it back`() = runBlocking<Unit> {
+        broadcast(entry("s1"))
+
+        // OkHttp accepted the frame, then the socket died before the pong.
+        val dropped = async(Dispatchers.Default) { manager.sendPrompt("s1", "lost") }
+        waitFor { sentPrompts().isNotEmpty() }
+        index.fail()
+        assertTrue(withTimeout(10_000) { dropped.await() }.isFailure)
+        assertTrue(repository.observeQueuedPromptsForSession("s1").first().isEmpty())
+
+        manager.connectIfConfigured()
+        index = factory.sockets.last().also { it.open() }
+        withTimeout(10_000) { manager.awaitIngestionIdle() }
+        val confirmed = async(Dispatchers.Default) { manager.sendPrompt("s1", "kept") }
+        waitFor { sentPrompts().isNotEmpty() }
+        withTimeout(10_000) {
+            while (!confirmed.isCompleted) { deliver("pong") {}; delay(10) }
+        }
+        assertTrue(confirmed.await().isSuccess)
+        assertEquals(listOf("kept"), repository.observeQueuedPromptsForSession("s1").first().map { it.promptTextDecrypted })
+    }
+
+    @Test
+    fun `an image that cannot be prepared fails the prompt, and cancelling a send is not reported as a failure`() = runBlocking<Unit> {
+        broadcast(entry("s1"))
+        var frames = 0
+        val never = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val sender = PromptSender(
+            repository, SessionIndexUpdates(com.google.gson.Gson()), { crypto }, { true },
+            sendIndex = { frames++; never.await() },
+            compress = { null }
+        )
+        val photo = com.nimbalyst.app.attachments.PendingAttachment(
+            android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+        )
+        assertTrue(sender.send("s1", "look", listOf(photo)).isFailure)
+        assertEquals("nothing is sent without the image", 0, frames)
+
+        var result: Result<String>? = null
+        val job = launch(Dispatchers.Default) { result = sender.send("s1", "hi", emptyList()) }
+        waitFor { frames == 1 }
+        job.cancel()
+        job.join()
+        assertNull("a cancelled send must not come back as a failure to restore", result)
+    }
+
+    /** NIM-7281 follow-up: the server replaces the metadata blob whole, so a draft built on a guess erases the desktop's fields. */
+    @Test
+    fun `a draft is written into the desktop's last blob, which survives a restart, and waits while none is known`() = runBlocking<Unit> {
+        broadcast(entry("s1") { clientMetadata("""{"hasBeenNamed":true,"phase":"planning","futureField":7}""") })
+        // A cold start: nothing held in memory survives.
+        manager.disconnect()
+        manager.connect()
+        index = factory.sockets.last().also { it.open() }
+        withTimeout(10_000) { manager.awaitIngestionIdle() }
+
+        manager.updateDraftInput("s1", "hi")
+        val published = draftBlobs().single()
+        assertTrue(published.get("hasBeenNamed").asBoolean)
+        assertEquals(7, published.get("futureField").asInt)
+        assertEquals("hi", published.get("draftInput").asString)
+
+        // Nothing known about s2's blob: the draft is kept locally, not published over a guess.
+        broadcast(entry("s2"))
+        manager.updateDraftInput("s2", "wait")
+        assertEquals(1, draftBlobs().size)
+        assertEquals("wait", repository.getSession("s2")!!.draftInput)
+
+        broadcast(entry("s2") { clientMetadata("""{"hasBeenNamed":true}""") })
+        waitFor { draftBlobs().size == 2 }
+        assertEquals("wait", draftBlobs().last().get("draftInput").asString)
+        assertTrue(draftBlobs().last().get("hasBeenNamed").asBoolean)
+    }
+
     @Test
     fun `edits made while offline are saved locally and republished once, from the row, after reconnect`() = runBlocking<Unit> {
-        broadcast(entry("s1") { addProperty("hostDeviceId", "desk-1") })
+        broadcast(entry("s1") { addProperty("hostDeviceId", "desk-1"); clientMetadata("""{"phase":"planning"}""") })
         index.fail(401)
 
         manager.updateDraftInput("s1", "first")
@@ -313,6 +411,8 @@ class SyncManagerApiTest {
         assertEquals("second", repository.getSession("s1")!!.draftInput)
         assertTrue(manager.setSessionArchived("s1", true).isFailure)
         assertTrue(manager.updateSessionParent("s1", "ws-1").isFailure)
+        assertTrue(manager.updateSessionParent("s1", null).isFailure)
+        assertNull(repository.getSession("s1")!!.parentSessionId)
         manager.markSessionRead("s1", 700L)
         // An interactive answer is never replayed: by reconnect the desktop has moved on.
         assertTrue(manager.sendSessionControlMessage("s1", "prompt_response").isFailure)
@@ -331,9 +431,17 @@ class SyncManagerApiTest {
         val controls = sent("sessionControl").map { it.getAsJsonObject("message") }
         assertEquals(listOf("archive"), controls.map { it.get("messageType").asString })
         assertTrue(controls.single().getAsJsonObject("payload").get("isArchived").asBoolean)
-        assertEquals("ws-1", sent("indexUpdate").single().getAsJsonObject("session").get("parentSessionId").asString)
+        val clear = sent("indexUpdate").single().getAsJsonObject("session")
+        assertTrue(clear.get("parentSessionId").isJsonNull)
+        assertFalse(clear.has("createdBySessionId"))
 
-        // Nothing is left parked: the next reconnect publishes none of it again.
+        // Once the room has answered every ping, delivery is proven and nothing is
+        // left parked: the next reconnect publishes none of it again.
+        var answered = 0
+        while (answered < sent("ping").size) {
+            deliver("pong") {}
+            answered++
+        }
         reconnectIndex()
         assertTrue(sent("indexClientMetadataPatch").isEmpty() && sent("sessionControl").isEmpty())
     }

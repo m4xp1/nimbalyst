@@ -26,7 +26,8 @@ export interface TypeMapCanvasProps {
   /** Ids (`type:x`, `rel:x`) in the hovered or selected neighbourhood. */
   lit: ReadonlySet<string>;
   selection: MapSelection;
-  onSelect: (selection: MapSelection) => void;
+  /** The click comes along so a type can open in a new tab on Cmd/Ctrl. */
+  onSelect: (selection: MapSelection, event?: { metaKey: boolean; ctrlKey: boolean }) => void;
   onHover: (selection: MapSelection) => void;
 }
 
@@ -121,7 +122,7 @@ export const TypeMapCanvas = memo(function TypeMapCanvas({ layout, types, pairs,
               data-selected={isSelected('type', id) ? 'true' : 'false'}
               data-tone={zoneTone.get(type.zone) ?? 0}
               transform={`translate(${box.x},${box.y})`}
-              onClick={(event) => { event.stopPropagation(); onSelect({ kind: 'type', id }); }}
+              onClick={(event) => { event.stopPropagation(); onSelect({ kind: 'type', id }, event); }}
               onMouseEnter={() => onHover({ kind: 'type', id })}
               onMouseLeave={() => onHover(null)}
             >

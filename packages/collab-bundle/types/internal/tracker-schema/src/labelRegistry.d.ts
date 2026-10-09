@@ -35,7 +35,7 @@
  * Everything here is pure: plain objects in, plain objects out. Desktop, the
  * browser store, and the collab server all import it.
  */
-import { type PredicateIssue, type PredicateQualifierDefinition } from './predicateRegistry.js';
+import { type LabelPropertyQualifierDefinition, type LabelQualifierErrorCode } from './labelPropertyQualifiers.js';
 /** `structure` pages (areas, home) and `market-node` pages render specially in the wiki. */
 export type LabelRole = 'page' | 'structure' | 'market-node';
 export declare const LABEL_ROLES: readonly LabelRole[];
@@ -80,10 +80,10 @@ export interface FieldPropertyDefinition {
     /** For `select` / `multiselect`. */
     options?: LabelPropertyOption[];
     /**
-     * Same declaration shape as predicate qualifiers. When present the value is
-     * stored as `{ value, qualifiers }`; otherwise it is stored bare.
+     * See `./labelPropertyQualifiers.ts`. When present the value is stored as
+     * `{ value, qualifiers }`; otherwise it is stored bare.
      */
-    qualifiers?: Record<string, PredicateQualifierDefinition>;
+    qualifiers?: Record<string, LabelPropertyQualifierDefinition>;
     /** Offered as a search facet. */
     facet?: boolean;
     description?: string;
@@ -116,7 +116,7 @@ export declare function isLabelRegistryEmpty(registry: LabelRegistry): boolean;
 export declare const DEFAULT_LABEL_BASE_FIELD_NAMES: readonly string[];
 export type LabelErrorCode = 'LABEL_REGISTRY_NOT_AN_OBJECT' | 'LABEL_NOT_AN_OBJECT' | 'LABEL_MISSING_FIELD' | 'LABEL_INVALID_FIELD' | 'LABEL_UNKNOWN_FIELD' | 'LABEL_DUPLICATE_ID' | 'LABEL_BROADER_UNKNOWN' | 'LABEL_CYCLE' | 'LABEL_PROPERTY_ID_CONFLICT' | 'LABEL_PROPERTY_BASE_FIELD' | 'LABEL_UNKNOWN_PROPERTY' | 'LABEL_EXPECTS_UNKNOWN_PROPERTY' | 'LABEL_RANGE_UNKNOWN' | 'LABEL_CLAIM_PROPERTY_UNKNOWN_PREDICATE' | 'LABEL_REF_INVALID' | 'LABEL_UNKNOWN' | 'LABEL_PROPERTY_INVALID_VALUE' | 'LABEL_PROPERTY_UNKNOWN_OPTION' | 'LABEL_PROPERTY_EXPECTS_QUALIFIED_VALUE';
 export interface LabelIssue {
-    code: LabelErrorCode | PredicateIssue['code'];
+    code: LabelErrorCode | LabelQualifierErrorCode;
     path: string;
     message: string;
 }

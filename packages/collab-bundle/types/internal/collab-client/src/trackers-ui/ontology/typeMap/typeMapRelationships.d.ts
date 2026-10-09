@@ -23,20 +23,8 @@ export interface TypeMapStatement {
     subjectTitle: string;
     objectId: string;
     objectTitle: string;
-    /** Short qualifier text, e.g. "high, AI app builder". */
+    /** Short text from the claim's own qualifiers, e.g. "high, AI app builder". */
     detail: string;
-}
-export interface QualifierSummary {
-    id: string;
-    label: string;
-    type: string;
-    /** Statements that carry a value for it. */
-    set: number;
-    /** Per value for `select` and `boolean` qualifiers, most common first; "not set" last. */
-    breakdown: Array<{
-        value: string;
-        count: number;
-    }>;
 }
 export interface TypeMapExpectation {
     min: number;
@@ -69,7 +57,6 @@ export interface TypeMapRelationship {
         title: string;
         count: number;
     }>;
-    qualifiers: QualifierSummary[];
     expectation: TypeMapExpectation | null;
     /** Every statement, ordered by subject then object title. */
     list: TypeMapStatement[];

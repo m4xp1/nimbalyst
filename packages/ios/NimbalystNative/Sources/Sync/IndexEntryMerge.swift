@@ -168,7 +168,8 @@ enum IndexEntryDecryptor {
 
     /// Merge a decrypted entry onto the row currently in the database.
     ///
-    /// Every optional field falls back to the existing value rather than
+    /// Hierarchy fields preserve explicit nulls from the authoritative desktop.
+    /// Other optional fields fall back to the existing value rather than
     /// overwriting with nil: older server rows omit columns, and overwriting
     /// wipes the session's identity (a missing `model` would blank the badge in
     /// the session list). `updatedAt` is taken from the entry -- it is the sort
@@ -188,9 +189,9 @@ enum IndexEntryDecryptor {
             model: entry.model ?? existing?.model,
             mode: entry.mode ?? existing?.mode,
             sessionType: entry.sessionType ?? existing?.sessionType,
-            parentSessionId: entry.parentSessionId ?? existing?.parentSessionId,
+            parentSessionId: entry.parentSessionIdPresent ? entry.parentSessionId : (entry.parentSessionId ?? existing?.parentSessionId),
             agentRole: entry.agentRole ?? existing?.agentRole,
-            createdBySessionId: entry.createdBySessionId ?? existing?.createdBySessionId,
+            createdBySessionId: entry.createdBySessionIdPresent ? entry.createdBySessionId : (entry.createdBySessionId ?? existing?.createdBySessionId),
             phase: clientMeta?.phase ?? existing?.phase,
             tagsJson: decrypted.tagsJson ?? existing?.tagsJson,
             worktreeId: entry.worktreeId ?? existing?.worktreeId,

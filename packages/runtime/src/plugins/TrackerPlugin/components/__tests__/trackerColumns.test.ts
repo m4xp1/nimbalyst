@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   applyTypeColumnDisplay,
+  getInitials,
   getCellValue,
   getDefaultColumnConfig,
   getEffectiveUpdatedDate,
@@ -10,13 +11,11 @@ import {
   getTypeLabel,
   resolveColumnFieldName,
   resolveColumnsForType,
-  getLabelColumnCellValue,
-  resolveLabelColumns,
   resolveTypeColumnDisplay,
 } from '../trackerColumns';
 import { resolveTrackerOrderingValue } from '../../models/trackerOrdering';
 import { globalRegistry } from '../../models';
-import { TrackerDataModelRegistry, emptyLabelRegistry, type ClaimRecord, type TrackerDataModel } from '@nimbalyst/tracker-schema';
+import { emptyLabelRegistry, type TrackerDataModel } from '@nimbalyst/tracker-schema';
 import type { TrackerRecord } from '../../../../core/TrackerRecord';
 
 describe('trackerColumns', () => {
@@ -269,6 +268,13 @@ describe('type column identity and display', () => {
     globalRegistry.register(declaresNoIcon);
   });
 
+  it('shows a Title column for a custom type that declares no roles', () => {
+    globalRegistry.register({ ...declaresIcon, type: 'gadget', idPrefix: 'GAD', roles: undefined });
+
+    expect(resolveColumnsForType('gadget').find(column => column.id === 'title')?.role).toBe('title');
+    expect(getDefaultColumnConfig('gadget').visibleColumns).toContain('title');
+  });
+
   it('resolves a custom type icon from its own schema', () => {
     expect(getTypeIcon('incidentReview')).toBe('siren');
   });
@@ -308,42 +314,7 @@ describe('type column identity and display', () => {
   });
 });
 
-describe('label instance-table columns', () => {
-  it('offers the label\'s own properties, then its ancestors\', never a sibling label\'s', () => {
-    const registry = new TrackerDataModelRegistry();
-    registry.setPredicates([
-      { id: 'part-of-subsystem', label: 'Part of subsystem', subjectKinds: ['*'], valueShape: 'entity', direction: 'directed' },
-    ]);
-    registry.setLabels({
-      labels: [
-        { id: 'capability', label: 'Capability', properties: ['surface', 'website'] },
-        { id: 'feature', label: 'Feature', broader: ['capability'], properties: ['flag', 'part-of-subsystem', 'surface', 'mystery'] },
-        { id: 'requirement', label: 'Requirement', properties: ['priority-band'] },
-      ],
-      properties: [
-        { id: 'surface', label: 'Surface', type: 'select', options: ['desktop', 'web'] },
-        { id: 'flag', label: 'Feature flag', type: 'string', qualifiers: { rollout: { type: 'number' } } },
-        { id: 'priority-band', label: 'Band', type: 'string' },
-      ],
-      claimProperties: {},
-    });
-
-    const columns = resolveLabelColumns('feature', registry);
-    expect(columns.map((column) => [column.id, column.label, column.labelProperty?.storage])).toEqual([
-      ['flag', 'Feature flag', 'field'],
-      ['part-of-subsystem', 'Part of subsystem', 'claim'],
-      ['surface', 'Surface', 'field'],
-      ['website', 'Website', 'base-field'],
-    ]);
-    const byId = new Map(columns.map((column) => [column.id, column]));
-    // A plain select is editable in place; a qualified value or a claim is not.
-    expect(byId.get('surface')).toMatchObject({ editable: true, render: 'badge', defaultVisible: false });
-    expect(byId.get('flag')).toMatchObject({ editable: false, labelProperty: { qualified: true } });
-    expect(byId.get('part-of-subsystem')).toMatchObject({ editable: false, edit: 'readonly' });
-  });
-});
-
-describe('label column cell values', () => {
+describe('legacy qualified label values', () => {
   const record = (fields: Record<string, unknown>) => ({
     id: 'ent-1', primaryType: 'entity', typeTags: ['entity'], source: 'native', archived: false,
     syncStatus: 'local', system: { workspace: '/ws', createdAt: '', updatedAt: '' }, fields,
@@ -363,15 +334,12 @@ describe('label column cell values', () => {
       globalRegistry.setLabels(emptyLabelRegistry());
     }
   });
+});
 
-  it('reads a claim column through the current claim, or a placeholder without claims', () => {
-    const column = { id: 'annual-revenue', labelProperty: { storage: 'claim' as const, qualified: false, viaLabel: 'organization' } } as Parameters<typeof getLabelColumnCellValue>[1];
-    const claim: ClaimRecord = {
-      id: 'clm-1', subjectId: 'ent-1', predicate: 'annual-revenue', objectId: null, valueText: '$10M',
-      qualifiers: { asOf: '2026-08-01' }, status: 'asserted', archived: false, updatedAt: 0,
-    };
-    expect(getLabelColumnCellValue(record({}), column)).toBe('-');
-    expect(getLabelColumnCellValue(record({}), column, () => [claim])).toBe('$10M');
-    expect(getLabelColumnCellValue(record({}), column, () => [])).toBe('-');
+describe('getInitials', () => {
+  it('tolerates an identity with no display name instead of crashing the avatar', () => {
+    expect(getInitials(undefined as unknown as string)).toBe('?');
+    expect(getInitials('   ')).toBe('?');
+    expect(getInitials('Ada Lovelace')).toBe('AL');
   });
 });

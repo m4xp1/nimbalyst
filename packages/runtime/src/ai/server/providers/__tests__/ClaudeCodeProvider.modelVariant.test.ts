@@ -23,8 +23,10 @@ describe('resolveClaudeCodeModelVariant', () => {
       expect(resolveClaudeCodeModelVariant('claude-code:opus', DEFAULT_MODEL)).toBe('claude-opus-5-5');
     });
 
-    it('resolves haiku variant', () => {
-      expect(resolveClaudeCodeModelVariant('claude-code:haiku', DEFAULT_MODEL)).toBe('haiku');
+    it('resolves haiku to Haiku 5.5 and keeps haiku-4-5 pinned', () => {
+      expect(resolveClaudeCodeModelVariant('claude-code:haiku', DEFAULT_MODEL)).toBe('claude-haiku-5-5');
+      expect(resolveClaudeCodeModelVariant('claude-code:haiku-5-5', DEFAULT_MODEL)).toBe('claude-haiku-5-5');
+      expect(resolveClaudeCodeModelVariant('claude-code:haiku-4-5', DEFAULT_MODEL)).toBe('claude-haiku-4-5-20251001');
     });
 
     it('resolves fable to the pinned Fable 5.1 model id', () => {
@@ -65,9 +67,9 @@ describe('resolveClaudeCodeModelVariant', () => {
       expect(result).toBe('claude-opus-5-5[1m]');
     });
 
-    it('haiku-1m resolves to haiku[1m]', () => {
+    it('haiku-1m resolves to claude-haiku-5-5[1m]', () => {
       const result = resolveClaudeCodeModelVariant('claude-code:haiku-1m', DEFAULT_MODEL);
-      expect(result).toBe('haiku[1m]');
+      expect(result).toBe('claude-haiku-5-5[1m]');
     });
 
     it('opus-5-1m preserves the previous generation with [1m]', () => {
@@ -83,7 +85,7 @@ describe('resolveClaudeCodeModelVariant', () => {
 
   describe('SDK compatibility', () => {
     it('standard variants are valid SDK model values', () => {
-      const validSdkValues = ['claude-sonnet-5-5', 'claude-opus-5-5', 'haiku'];
+      const validSdkValues = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'];
       for (const variant of ['sonnet', 'opus', 'haiku']) {
         const result = resolveClaudeCodeModelVariant(`claude-code:${variant}`, DEFAULT_MODEL);
         expect(validSdkValues).toContain(result);

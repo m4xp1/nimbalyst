@@ -53,5 +53,6 @@ export function composeTrackerSchemaSyncHooks(
       }
       await typeDefs.markRejected?.(type, code);
     },
+    onSettled: typeDefs.onSettled,
   };
 }

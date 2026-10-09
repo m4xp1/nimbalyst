@@ -20,7 +20,9 @@
 export * from './TrackerDataModel.js';
 export * from './citationLocator.js';
 export * from './predicateRegistry.js';
+export * from './predicateRelations.js';
 export * from './labelRegistry.js';
+export * from './labelPropertyQualifiers.js';
 export { validateLabelRegistry, type LabelRegistryValidation, type LabelRegistryValidationContext, } from './labelRegistryAuthoring.js';
 export * from './claimValues.js';
 export { normalizeTrackerSharingModel, parseTrackerTypeYAML, parseTrackerYAML } from './YAMLParser.js';
@@ -29,3 +31,4 @@ export * from './trackerTypeIdentity.js';
 export * from './trackerTypeInheritance.js';
 export * from './trackerStatusCategory.js';
 export * from './trackerCoreContext.js';
+export * from './singleValuedField.js';

@@ -23,6 +23,10 @@ vi.mock('@nimbalyst/runtime/sync', () => ({
   createSyncedSessionStore: (store: unknown) => store, createMessageSyncHandler: vi.fn(),
 }));
 vi.mock('../sync/projectConfigSync', () => ({ createProjectConfigSync: () => ({ refresh: h.refresh, stop: vi.fn() }) }));
+// Sync startup also resumes durable hierarchy publication; this fixture has no pending sessions.
+vi.mock('@nimbalyst/runtime/storage/repositories/AISessionsRepository', () => ({
+  AISessionsRepository: { getStore: () => ({ listPendingHierarchyIntents: async () => [] }) },
+}));
 vi.mock('../sync/projectConfigSources', () => ({ projectConfigSources: {} }));
 vi.mock('../../utils/store', () => ({
   getSessionSyncConfig: () => ({ enabled: true }), setSessionSyncConfig: vi.fn(),

@@ -32,6 +32,41 @@ class SessionIndexUpdatesTest {
     private fun entryOf(json: String): JsonObject = JsonParser.parseString(json).asJsonObject.getAsJsonObject("session")
 
     @Test
+    fun `canonical null hierarchy clears cached edges while omitted patches preserve them`() {
+        val cached = session.copy(parentSessionId = "optimistic-parent", createdBySessionId = "old-manager")
+        val payload = gson.toJsonTree(ServerSessionEntry(sessionId = session.id,
+            encryptedProjectId = crypto.encryptProjectId(session.projectId),
+            projectIdIv = CryptoManager.projectIdIvBase64, createdAt = 1, updatedAt = 3)).asJsonObject
+        val decoder = SessionEntryDecoder(gson)
+        val omitted = decoder.decodeSession(gson.fromJson(payload, ServerSessionEntry::class.java), crypto, existing = cached)!!.session
+        assertEquals("optimistic-parent", omitted.parentSessionId)
+        assertEquals("old-manager", omitted.createdBySessionId)
+        payload.add("parentSessionId", com.google.gson.JsonNull.INSTANCE)
+        payload.add("createdBySessionId", com.google.gson.JsonNull.INSTANCE)
+        val decoded = gson.fromJson(payload, ServerSessionEntry::class.java)
+        val detached = decoder.decodeSession(decoded, crypto, existing = cached)!!.session
+        assertNull(detached.parentSessionId)
+        assertNull(detached.createdBySessionId)
+        val encoded = gson.toJsonTree(decoded).asJsonObject
+        assertTrue(encoded.get("parentSessionId")?.isJsonNull == true)
+        assertTrue(encoded.get("createdBySessionId")?.isJsonNull == true)
+        assertFalse(encoded.has("parentSessionIdPresent"))
+        assertFalse(encoded.has("createdBySessionIdPresent"))
+    }
+
+    @Test
+    fun `parent moves include explicit null for clears but never assign a manager`() {
+        val cached = session.copy(parentSessionId = "old-parent", createdBySessionId = "desktop-manager")
+        val moved = entryOf(updates.parent(cached, "new-parent", crypto))
+        assertEquals("new-parent", moved.get("parentSessionId").asString)
+        assertFalse(moved.has("createdBySessionId"))
+        val cleared = entryOf(updates.parent(cached, null, crypto))
+        assertTrue(cleared.has("parentSessionId"))
+        assertTrue(cleared.get("parentSessionId")?.isJsonNull == true)
+        assertFalse(cleared.has("createdBySessionId"))
+    }
+
+    @Test
     fun `a prompt never sends the phone's cached execution state`() {
         val prompt = EncryptedQueuedPrompt(id = "p1", encryptedPrompt = "e", iv = "i", timestamp = 10L, source = "keyboard")
 
@@ -119,7 +154,7 @@ class SessionIndexUpdatesTest {
                 session = session,
                 draft = "text",
                 draftUpdatedAt = 20L,
-                remoteClientMetadata = null,
+                remoteClientMetadata = JsonObject(),
                 crypto = crypto
             ).json
         )

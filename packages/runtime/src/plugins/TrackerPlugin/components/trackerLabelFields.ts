@@ -3,19 +3,18 @@
  *
  * An item's fields are its type's fields plus the properties its labels bring
  * (`effectiveProperties`, see `labelRegistry.ts`). This turns those properties
- * into the three things a field surface needs:
+ * into what a field surface needs:
  *
  *  - FIELD-stored properties become synthetic `FieldDefinition`s, so the chip
  *    row, the detail pane and the status bar edit them with the editors every
  *    other field uses. They appear empty the moment a label is added.
- *  - CLAIM-stored properties are listed separately: their value is the current
- *    claim (`claimValues.ts`), read-only here.
  *  - Properties whose storage cannot be resolved are listed so a surface can
  *    flag them rather than drop them.
  *
+ * Claim-stored properties from the earlier knowledge graph are not shown.
  * A field property that declares qualifiers stores `{ value, qualifiers }`;
  * {@link unwrapLabelFieldValue} and {@link wrapLabelFieldValue} let a chip edit
- * the bare value without losing the qualifiers beside it.
+ * the bare value without dropping the qualifiers already stored beside it.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -44,13 +43,11 @@ export interface LabelFieldDefinition extends FieldDefinition {
 export interface TrackerLabelFieldLayout {
   /** Field-stored properties the type does not already declare, in resolution order. */
   fields: LabelFieldDefinition[];
-  /** Claim-stored properties, in resolution order. */
-  claims: EffectiveProperty[];
   /** Properties that are neither a field property, a predicate, nor a type field. */
   unknown: EffectiveProperty[];
 }
 
-const EMPTY_LAYOUT: TrackerLabelFieldLayout = { fields: [], claims: [], unknown: [] };
+const EMPTY_LAYOUT: TrackerLabelFieldLayout = { fields: [], unknown: [] };
 
 export function isLabelFieldDefinition(field: FieldDefinition): field is LabelFieldDefinition {
   return 'labelProperty' in field;
@@ -97,15 +94,13 @@ export function resolveTrackerLabelFields(
   // `feature` must not bring the feature label's properties.
   if (!values || !registry.acceptsLabels(trackerType) || itemOwnLabels(values).length === 0) return EMPTY_LAYOUT;
   const declared = new Set((registry.get(trackerType)?.fields ?? []).map(field => field.name));
-  const layout: TrackerLabelFieldLayout = { fields: [], claims: [], unknown: [] };
+  const layout: TrackerLabelFieldLayout = { fields: [], unknown: [] };
   for (const property of registry.effectiveProperties(values)) {
     // A type field wins: the value already has a home and an editor.
     if (declared.has(property.id) || property.storage === 'base-field') continue;
     if (property.storage === 'field' && property.definition) {
       layout.fields.push(labelPropertyToFieldDefinition(property.definition, property.viaLabel));
-    } else if (property.storage === 'claim') {
-      layout.claims.push(property);
-    } else {
+    } else if (property.storage !== 'claim') {
       layout.unknown.push(property);
     }
   }
@@ -123,7 +118,7 @@ export function unwrapLabelFieldValue(field: FieldDefinition, stored: unknown): 
 }
 
 /** The qualifiers stored beside a qualified value; empty when there are none. */
-export function labelFieldQualifiers(stored: unknown): Record<string, unknown> {
+function labelFieldQualifiers(stored: unknown): Record<string, unknown> {
   return isPlainObject(stored) && isPlainObject(stored.qualifiers) ? stored.qualifiers : {};
 }
 
@@ -136,15 +131,6 @@ export function wrapLabelFieldValue(field: FieldDefinition, next: unknown, store
   if (!isLabelFieldDefinition(field) || !isQualifiedFieldProperty(field.labelProperty)) return next;
   if (next === undefined || next === null || next === '') return null;
   return { value: next, qualifiers: labelFieldQualifiers(stored) };
-}
-
-/** One-line qualifier summary for a hover title, e.g. `asOf: 2026-01-01; source: filing`. */
-export function labelFieldQualifierHint(field: FieldDefinition, stored: unknown): string | undefined {
-  if (!isLabelFieldDefinition(field) || !isQualifiedFieldProperty(field.labelProperty)) return undefined;
-  const entries = Object.entries(labelFieldQualifiers(stored))
-    .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .map(([name, value]) => `${field.labelProperty.qualifiers?.[name]?.label ?? name}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`);
-  return entries.length > 0 ? entries.join('; ') : undefined;
 }
 
 /**
@@ -161,19 +147,6 @@ export function unwrapLabelFieldValues(
   const out = { ...values };
   for (const field of qualified) out[field.name] = unwrapLabelFieldValue(field, values[field.name]);
   return out;
-}
-
-/** Hover hints for every qualified field that has qualifiers set. */
-export function labelFieldHints(
-  fields: readonly FieldDefinition[],
-  values: Record<string, unknown>,
-): Record<string, string> | undefined {
-  let hints: Record<string, string> | undefined;
-  for (const field of fields) {
-    const hint = labelFieldQualifierHint(field, values[field.name]);
-    if (hint) (hints ??= {})[field.name] = hint;
-  }
-  return hints;
 }
 
 /**

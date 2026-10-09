@@ -183,7 +183,7 @@ export interface ProposalRequestDraft {
 }
 /**
  * What the Improve button writes: a `proposed` proposal with no changes and a
- * request naming the health check and the pages, which the knowledge skill's
+ * request naming the health check and the pages, which the wiki update skill's
  * agent workflow picks up and fills in.
  */
 export declare function proposalRequestFor<T extends OntologyRecordLike>(item: HealthItem<T>): ProposalRequestDraft;

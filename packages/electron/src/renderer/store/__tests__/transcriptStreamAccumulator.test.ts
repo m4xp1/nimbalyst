@@ -95,6 +95,29 @@ function createHarness(dbMessages: TranscriptViewMessage[] = []): Harness {
 }
 
 describe('TranscriptStreamAccumulator', () => {
+  it('does not retain events for a session this window has not loaded', () => {
+    // Every window receives every session's events; one that never opened the
+    // session used to keep all of them (base64 tool results included) forever.
+    let tracked = false;
+    const harness = createHarness([makeDbMessage(1, 'user_message', 'hi')]);
+    const acc = new TranscriptStreamAccumulator({
+      emit: (output) => { harness.emitCount++; harness.lastEmit = output; },
+      readDbMessages: () => harness.dbMessages,
+      schedule: (cb) => { harness.pendingFrame.push(cb); },
+      isSessionTracked: () => tracked,
+    });
+
+    acc.apply(makeAssistantEvent(2, 'x'.repeat(1000)));
+    expect(acc.retainedEventCount(SESSION_ID)).toBe(0);
+    expect(acc.hasPendingFlush(SESSION_ID)).toBe(false);
+
+    tracked = true;
+    acc.apply(makeAssistantEvent(3, 'loaded'));
+    harness.tickFrame();
+    expect(acc.retainedEventCount(SESSION_ID)).toBe(1);
+    expect(harness.lastEmit?.messages.map(m => m.text)).toEqual(['hi', 'loaded']);
+  });
+
   it('replaces an evicted runtime generation while preserving legitimate repeated messages and canonical order', async () => {
     const raw: RawMessage[] = [
       {
@@ -457,24 +480,27 @@ describe('TranscriptStreamAccumulator', () => {
     });
   });
 
-  describe('in-place patch fast path', () => {
-    it('reuses the same view message object across pure-text updates within a frame', () => {
+  describe('text patch fast path', () => {
+    it('publishes a new object for the patched message only, so memoized rows see the text', () => {
       const h = createHarness();
+      h.acc.apply(makeUserEvent(9, 'prompt'));
       const seed = makeAssistantEvent(10, 'a');
       h.acc.apply(seed);
       h.tickFrame();
-      const firstMessage = h.lastEmit?.messages.find((m) => m.id === 10);
+      const firstArray = h.lastEmit!.messages;
+      const [firstUser, firstMessage] = firstArray;
       expect(firstMessage?.text).toBe('a');
 
-      // Ten incremental text updates. After the next flush, the view
-      // message identity should be preserved (in-place patch path).
       for (let i = 0; i < 10; i++) {
         h.acc.apply({ ...seed, searchableText: 'a'.repeat(i + 2) });
       }
       h.tickFrame();
-      const patchedMessage = h.lastEmit?.messages.find((m) => m.id === 10);
-      expect(patchedMessage?.text).toBe('a'.repeat(11));
-      expect(patchedMessage).toBe(firstMessage);
+      const [user, patchedMessage] = h.lastEmit!.messages;
+      expect(patchedMessage.text).toBe('a'.repeat(11));
+      expect(patchedMessage).not.toBe(firstMessage);
+      expect(firstMessage.text).toBe('a');
+      expect(h.lastEmit!.messages).not.toBe(firstArray);
+      expect(user).toBe(firstUser);
     });
   });
 
