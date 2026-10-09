@@ -16,10 +16,10 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  npm_config_fetch_retries: '5'
-  npm_config_fetch_retry_mintimeout: '20000'
-  npm_config_fetch_retry_maxtimeout: '120000'
-  npm_config_fetch_timeout: '300000'
+  pnpm_config_fetch_retries: '5'
+  pnpm_config_fetch_retry_mintimeout: '20000'
+  pnpm_config_fetch_retry_maxtimeout: '120000'
+  pnpm_config_fetch_timeout: '300000'
 
 jobs:
   build:
@@ -55,41 +55,41 @@ jobs:
           }
           "Source: $(git rev-parse HEAD); Electron: $version; platform: Windows x64"
 
+      - name: Setup pinned pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node.js 24
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: '**/package-lock.json'
-
-      - name: Use npm 11
-        run: npm install --global npm@11
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install locked dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build workspace dependencies
-        run: npm run build:workspace-deps
+        run: pnpm run build:workspace-deps
 
       - name: Build runtime assets
         env:
           NODE_ENV: production
-        run: npm run build --workspace=@nimbalyst/runtime
+        run: pnpm --filter @nimbalyst/runtime run build
 
       - name: Build Node package
-        run: npm run build --workspace=@nimbalyst/node
+        run: pnpm --filter @nimbalyst/node run build
 
       - name: Build memory engine declarations
-        run: npm run build --prefix packages/extensions/nimbalyst-memory/engine
+        run: pnpm --dir packages/extensions/nimbalyst-memory/engine run build
 
       - name: Typecheck all workspaces
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Test fork features
         run: >-
-          npx vitest run
+          pnpm exec vitest run
           packages/electron/src/main/services/__tests__/autoUpdater.channelPolicy.test.ts
           packages/electron/src/main/services/__tests__/SemanticCatalogService.sessions.test.ts
           packages/electron/src/main/services/__tests__/SemanticCatalogService.readiness.test.ts
@@ -106,13 +106,13 @@ jobs:
         run: node --test packages/electron/build/__tests__/forkVersion.test.cjs
 
       - name: Verify native modules in the pinned Electron runtime
-        run: npm run verify:native-runtime --workspace=@nimbalyst/electron
+        run: pnpm --filter @nimbalyst/electron run verify:native-runtime
 
       - name: Build Windows x64 installer
         env:
           NODE_ENV: production
         working-directory: packages/electron
-        run: npm run build:win -- --publish never --config.publish.owner=m4xp1 --config.publish.repo=nimbalyst
+        run: pnpm run build:win --publish never --config.publish.owner=m4xp1 --config.publish.repo=nimbalyst
 
       - name: Verify installer and record SHA-256
         run: |
@@ -194,16 +194,14 @@ jobs:
           @"
           Nimbalyst $tag for Windows x64, built from the release branch of m4xp1/nimbalyst.
 
-          Based on upstream v0.79.1. Fork version: $version; Windows revision: $revision.
-          - Additional text sources now has two clear paragraphs for supported formats and built-in sources.
-          - Disabling AI session indexing removes all saved Memory session records, cancels stale backfills, and reconciles persisted data on startup.
-          - Upstream nearest-candidate semantic retrieval is restored; the fork cosine floor is removed.
-          - Russian Snowball 3.1.1 adds morphology-only BM25 matches after exact keyword matches, for both search and recall.
-          - Stored vectors, document text and database schema stay unchanged; technical tokens retain exact matching.
-          - Keyword provenance is available as keywordMatch: exact or stem; hybrid ranking still combines semantic and keyword signals.
-          - Existing CONTENT editing, path menus, source autosave and text-format support are retained.
+          Based on upstream v0.80.6 (749eca9a4014871d649e66d70ec49487735562aa). Fork version: $version; Windows revision: $revision.
+          - Updated upstream main, merged it into features, and combined upstream v0.80.6 and features in release without squash.
+          - Includes upstream nested session trees, updated Claude model/action support, wiki improvements and runtime/security fixes.
+          - Retains editable file-backed tracker CONTENT without duplicate headers, folder path menus and the project-root context menu.
+          - Retains additional UTF-8 text sources with autosaved rules, Unicode/Russian Snowball keyword matching, saved-index status and correct session cleanup.
+          - Semantic retrieval follows upstream nearest-candidate/RRF behavior.
+          - Uses the upstream pnpm 12.9.1 lockfile and Electron 43.7.0.
           - Official upstream notifications remain enabled; automatic download/install are disabled.
-
           Source commit: $env:GITHUB_SHA
           Installer: Nimbalyst-Windows-x64.exe
           Authenticode: unsigned (no Nimbalyst/DigiCert signing credentials used).
