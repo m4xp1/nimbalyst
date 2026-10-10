@@ -566,8 +566,9 @@ export function flattenTree(options: FlattenTreeOptions): FlatTreeNode[] {
         parentPath,
         hasChildren: isDir && (item.children?.length ?? 0) > 0,
         isExpanded,
-        isActive: pathKey === activePath,
-        isSelected: item.path === selectedFolder,
+        // Explicit tree selection supersedes the background editor's active path.
+        isActive: pathKey === activePath && (selectedPathKeys.size === 0 || selectedPathKeys.has(pathKey)),
+        isSelected: item.path === selectedFolder && (selectedPathKeys.size === 0 || selectedPathKeys.has(pathKey)),
         isMultiSelected: selectedPathKeys.has(pathKey),
         isDragOver: dragState?.dropTargetPath === item.path,
         isSpecialDirectory: isDir && SPECIAL_DIRECTORIES.includes(item.name),

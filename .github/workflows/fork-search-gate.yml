@@ -1,0 +1,52 @@
+name: Fork Russian search gate
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  search:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENAI_API_KEY: ''
+      ANTHROPIC_API_KEY: ''
+      OFFICIAL_BUILD: 'false'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install locked application dependencies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace dependencies and Memory
+        run: |
+          pnpm run build:workspace-deps
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace dependency build failed' }
+          pnpm --dir packages/extensions/nimbalyst-memory/engine run build
+          if ($LASTEXITCODE -ne 0) { throw 'Memory build failed' }
+      - name: Mandatory lexical and hybrid regression tests
+        run: pnpm run test:fork-search
+      - name: Build isolated Electron application
+        run: pnpm --filter @nimbalyst/electron run build
+      - name: Verify native runtime
+        run: pnpm --filter @nimbalyst/electron run verify:native-runtime
+      - name: Mandatory built-app search across all six panes
+        run: pnpm --dir packages/electron exec playwright test --config playwright.search.config.ts
+      - name: Preserve failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fork-search-diagnostics
+          path: |
+            e2e_test_output/search-results
+            e2e_test_output/search-report
+          if-no-files-found: ignore
+          retention-days: 7

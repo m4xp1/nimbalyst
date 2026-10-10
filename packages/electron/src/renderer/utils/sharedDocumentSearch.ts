@@ -1,3 +1,4 @@
+import { filterSearchText } from '@nimbalyst/runtime/utils/searchText';
 import type {
   SharedDocument,
   SharedFolder,
@@ -25,7 +26,7 @@ export function searchSharedDocuments(
 ): SharedDocumentSearchResult[] {
   const normalizedQuery = query.trim().toLowerCase();
 
-  return documents
+  const eligible = documents
     .filter((document) => !document.decryptFailed)
     .map((document) => {
       const displayPath = getSharedDocumentDisplayPath(document, folders);
@@ -35,10 +36,6 @@ export function searchSharedDocuments(
         displayPath,
       };
     })
-    .filter(({ displayName, displayPath }) => {
-      if (!normalizedQuery) return true;
-      return displayName.toLowerCase().includes(normalizedQuery)
-        || displayPath.toLowerCase().includes(normalizedQuery);
-    })
     .sort((a, b) => (b.document.updatedAt ?? 0) - (a.document.updatedAt ?? 0));
+  return filterSearchText(eligible, normalizedQuery, r => [r.displayName, r.displayPath, r.displayName.replace(/\.[^.]+$/, '')]);
 }

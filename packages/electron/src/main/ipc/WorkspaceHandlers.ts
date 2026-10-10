@@ -1,3 +1,4 @@
+import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
 import { join, basename, dirname, extname } from 'path';
@@ -344,7 +345,7 @@ export function registerWorkspaceHandlers() {
                 '-i',
                 '--json',
                 ...RIPGREP_EXCLUDE_ARGS_ARRAY,
-                trimmedQuery,
+                fileContentPattern(trimmedQuery),
                 // ripgrep takes N search roots directly, so a multi-root
                 // workspace is one invocation, not one per root.
                 ...getWorkspaceRoots(workspacePath)
@@ -370,6 +371,8 @@ export function registerWorkspaceHandlers() {
                     try {
                         const item = JSON.parse(line);
                         if (item.type === 'match') {
+                            const match = decodeRipgrepMatch(item.data, trimmedQuery);
+                            if (!match) continue;
                             const filePath = item.data.path.text;
                             if (!contentMatches.has(filePath)) {
                                 contentMatches.set(filePath, {
@@ -379,12 +382,7 @@ export function registerWorkspaceHandlers() {
                                 });
                             }
 
-                            contentMatches.get(filePath).matches.push({
-                                line: item.data.line_number,
-                                text: item.data.lines.text.trim(),
-                                start: item.data.submatches[0]?.start || 0,
-                                end: item.data.submatches[0]?.end || item.data.lines.text.length
-                            });
+                            contentMatches.get(filePath).matches.push(match);
                         }
                     } catch (e) {
                         // Skip invalid JSON lines
@@ -392,7 +390,10 @@ export function registerWorkspaceHandlers() {
                 }
             }
 
-            return Array.from(contentMatches.values()).slice(0, 50);
+            return Array.from(contentMatches.values()).sort((a, b) => {
+                const exact = (r: any) => r.matches.some((m: any) => m.keywordMatch !== 'stem');
+                return Number(exact(b)) - Number(exact(a));
+            }).slice(0, 50);
         } catch (error) {
             console.error('Error searching file content:', error);
             return [];

@@ -6,7 +6,7 @@ import { FileTreeRow } from './FileTreeRow';
 import { FileContextMenu } from './FileContextMenu';
 import type { NewFileType, ExtensionFileType } from './NewFileMenu';
 import { handleTreeKeyDown, type TreeActions } from '../utils/treeKeyboardHandler';
-import { fileTreePathsEqual, selectedPathsContainFile } from '../utils/fileTreePath';
+import { fileTreePathsEqual } from '../utils/fileTreePath';
 import {
   expandedDirsAtom,
   revealRequestAtom,
@@ -76,6 +76,12 @@ export function FlatFileTree({
   const [dragState, setDragState] = useAtom(dragStateAtom);
   const setSelectedFolder = useSetAtom(selectedFolderPathAtom);
   const [focusedIndex, setFocusedIndex] = useAtom(focusedIndexAtom);
+  // Track the identity, not an index that can point to a different row after expansion.
+  const focusedPathRef = useRef<string | null>(null);
+  const focusRow = useCallback((index: number | null) => {
+    focusedPathRef.current = index == null ? null : store.get(visibleNodesAtom)[index]?.path ?? null;
+    setFocusedIndex(index);
+  }, [setFocusedIndex]);
 
   // Inline rename state
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -219,8 +225,13 @@ export function FlatFileTree({
   useEffect(() => {
     if (!revealRequest) return;
 
-    const index = visibleNodes.findIndex(n => n.path === revealRequest.path);
+    const index = visibleNodes.findIndex(n => fileTreePathsEqual(n.path, revealRequest.path));
     if (index >= 0) {
+      const target = visibleNodes[index];
+      setSelectedPaths(new Set([target.path]));
+      setLastSelectedPath(target.path);
+      setSelectedFolder(target.type === 'directory' ? target.path : null);
+      focusRow(index);
       virtuosoRef.current?.scrollToIndex({
         index,
         behavior: 'smooth',
@@ -250,7 +261,7 @@ export function FlatFileTree({
     // First attempt for this reveal request
     revealRetryRef.current = { ts: revealRequest.ts, itemsAtRefresh: items.length, attempts: 1 };
     onRefreshFileTree?.();
-  }, [revealRequest, visibleNodes, items, onRefreshFileTree, setRevealRequest]);
+  }, [revealRequest, visibleNodes, items, onRefreshFileTree, setRevealRequest, setSelectedPaths, setLastSelectedPath, setSelectedFolder, focusRow]);
 
   // == Auto-scroll to active file when tab changes ==
   // Only scroll when the active file actually changes, NOT when visibleNodes
@@ -305,13 +316,20 @@ export function FlatFileTree({
     }
   }, [visibleNodes]);
 
-  // == Clear multi-selection when a file is opened from outside the tree ==
+  // Tab changes reset selection once. Selection changes themselves must not
+  // reopen the old tab's selection or discard deliberate Ctrl/Shift ranges.
+  const selectionFileRef = useRef<string | null>(null);
   useEffect(() => {
-    if (currentFilePath && selectedPaths.size > 0 && !selectedPathsContainFile(selectedPaths, currentFilePath)) {
-      setSelectedPaths(new Set<string>([currentFilePath]));
-      setLastSelectedPath(currentFilePath);
-    }
-  }, [currentFilePath, selectedPaths, setSelectedPaths, setLastSelectedPath]);
+    if (selectionFileRef.current === currentFilePath) return;
+    selectionFileRef.current = currentFilePath;
+    if (!currentFilePath) return;
+    setSelectedPaths(new Set([currentFilePath]));
+    setLastSelectedPath(currentFilePath);
+    setSelectedFolder(null);
+    focusedPathRef.current = currentFilePath;
+    const index = store.get(visibleNodesAtom).findIndex(n => fileTreePathsEqual(n.path, currentFilePath));
+    setFocusedIndex(index < 0 ? null : index);
+  }, [currentFilePath, setSelectedPaths, setLastSelectedPath, setSelectedFolder, setFocusedIndex]);
 
   // Keep UI handlers in the current render. Caching these mutually referencing
   // closures with different dependencies links old render scopes and retains
@@ -409,6 +427,7 @@ export function FlatFileTree({
   const handleContextMenu = (e: React.MouseEvent, node: FlatTreeNode) => {
     e.preventDefault();
     e.stopPropagation();
+    focusRow(node.index);
 
     if (!selectedPaths.has(node.path)) {
       setSelectedPaths(new Set<string>([node.path]));
@@ -760,27 +779,20 @@ export function FlatFileTree({
     // Otherwise it's already visible -- don't scroll at all
   }, [focusedIndex]);
 
-  // == Focus persistence: when visibleNodes recomputes, keep same path focused ==
-  const prevFocusedPathRef = useRef<string | null>(null);
+  // Preserve row identity across expansion, refresh and active-tab changes.
   useEffect(() => {
-    if (focusedIndex != null && visibleNodes[focusedIndex]) {
-      prevFocusedPathRef.current = visibleNodes[focusedIndex].path;
-    }
-  }, [focusedIndex, visibleNodes]);
+    if (!focusedPathRef.current) return;
+    const index = visibleNodes.findIndex(n => fileTreePathsEqual(n.path, focusedPathRef.current!));
+    setFocusedIndex(index < 0 ? null : index);
+  }, [visibleNodes, setFocusedIndex]);
 
-  useEffect(() => {
-    if (focusedIndex == null || !prevFocusedPathRef.current) return;
-    const currentNode = visibleNodes[focusedIndex];
-    if (currentNode && currentNode.path === prevFocusedPathRef.current) return;
-    // Path moved -- find its new index
-    const newIndex = visibleNodes.findIndex(n => n.path === prevFocusedPathRef.current);
-    if (newIndex >= 0 && newIndex !== focusedIndex) {
-      setFocusedIndex(newIndex);
-    } else if (newIndex === -1 && focusedIndex >= visibleNodes.length) {
-      // Clamp if out of bounds
-      setFocusedIndex(Math.max(0, visibleNodes.length - 1));
-    }
-  }, [visibleNodes, focusedIndex, setFocusedIndex]);
+  const selectFocusedRow = (index: number) => {
+    const node = visibleNodes[index];
+    if (!node) return;
+    setSelectedPaths(new Set([node.path]));
+    setLastSelectedPath(node.path);
+    setSelectedFolder(node.type === 'directory' ? node.path : null);
+  };
 
   // == Type-ahead find ==
   const handleTypeAhead = (char: string) => {
@@ -800,7 +812,9 @@ export function FlatFileTree({
     for (let i = 0; i < visibleNodes.length; i++) {
       const idx = (startIndex + i) % visibleNodes.length;
       if (visibleNodes[idx].name.toLowerCase().startsWith(query)) {
-        setFocusedIndex(idx);
+        keyboardFocusRef.current = true;
+        focusRow(idx);
+        selectFocusedRow(idx);
         return;
       }
     }
@@ -836,7 +850,8 @@ export function FlatFileTree({
     const actions: TreeActions = {
       setFocused: (idx) => {
         keyboardFocusRef.current = true;
-        setFocusedIndex(idx);
+        focusRow(idx);
+        if (idx != null && !e.shiftKey && !e.ctrlKey && !e.metaKey) selectFocusedRow(idx);
       },
       expand: (path) => {
         setExpandedDirs(prev => {
@@ -982,7 +997,7 @@ export function FlatFileTree({
         isDragSource={dragState?.sourcePaths.includes(node.path) ?? false}
         isCopyDrag={dragState?.isCopy ?? false}
         onClick={(e) => {
-          setFocusedIndex(index);
+          focusRow(index);
           handleRowClick(e, node);
         }}
         onContextMenu={(e) => handleContextMenu(e, node)}
@@ -1012,6 +1027,8 @@ export function FlatFileTree({
           event.stopPropagation();
           setSelectedPaths(new Set([root]));
           setLastSelectedPath(root);
+          setSelectedFolder(root);
+          focusRow(null);
           setContextMenu({ x: event.clientX, y: event.clientY, filePath: root,
             fileName: root.split(/[/\\]/).filter(Boolean).pop() || root,
             fileType: 'directory', isWorkspaceRoot: true });

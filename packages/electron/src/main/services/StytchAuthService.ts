@@ -183,6 +183,12 @@ const authCallbackListeners = new Map<string, AuthCallbackLoopbackController>();
 let authCallbackSuccessHandler: (() => void | Promise<void>) | null = null;
 
 let stytchConfig: StytchConfig | null = null;
+let authRestored = false;
+
+/** Credential restoration is synchronous; signed-out afterwards is a final state. */
+export function isAuthRestored(): boolean {
+  return authRestored;
+}
 
 // Event listeners for auth state changes
 type AuthStateListener = (state: StytchAuthState) => void;
@@ -439,6 +445,7 @@ function updateAuthState(update: Partial<StytchAuthState>): void {
  * IMPORTANT: Only pass the public token, never the secret key!
  */
 export function initializeStytchAuth(config: StytchConfig): void {
+  authRestored = false;
   stytchConfig = config;
 
   logger.main.info('[StytchAuthService] Initialized with project:', config.projectId);
@@ -563,6 +570,9 @@ export function initializeStytchAuth(config: StytchConfig): void {
       clearStytchCredentials();
     }
   }
+  authRestored = true;
+  // Wake pending workspace lookups even when no credentials were restored.
+  notifyAuthStateChange(true);
 }
 
 /**

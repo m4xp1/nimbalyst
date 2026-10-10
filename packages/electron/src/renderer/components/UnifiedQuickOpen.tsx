@@ -1,3 +1,5 @@
+import { SearchHighlight } from './UnifiedQuickOpen/SearchHighlight';
+import { filterSearchText, matchSearchText } from '@nimbalyst/runtime/utils/searchText';
 /**
  * UnifiedQuickOpen
  *
@@ -1203,7 +1205,7 @@ interface FileItem {
   name: string;
   type?: 'file' | 'directory';
   isRecent?: boolean;
-  matches?: Array<{ line: number; text: string; start: number; end: number }>;
+  matches?: Array<{ line: number; text: string; start: number; end: number; keywordMatch?: 'exact' | 'stem' }>;
   isFileNameMatch?: boolean;
   isContentMatch?: boolean;
   sharedDocument?: SharedDocument;
@@ -1275,8 +1277,10 @@ const FilesPane: React.FC<FilesPaneProps> = memo(({
 
   // Debounced file name search
   useEffect(() => {
+    let cancelled = false;
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     if (!query.trim() || sourceScope === 'shared') {
+      setIsSearching(false);
       setResults([]);
       return;
     }
@@ -1293,6 +1297,7 @@ const FilesPane: React.FC<FilesPaneProps> = memo(({
           query,
           extFilter ? { fileMask: extFilter } : undefined,
         );
+        if (cancelled) return;
         if (Array.isArray(fileNameResults)) {
           const processed: FileItem[] = fileNameResults.map((r: any) => ({
             source: 'local',
@@ -1334,10 +1339,11 @@ const FilesPane: React.FC<FilesPaneProps> = memo(({
           setResults([]);
         }
       } finally {
-        setIsSearching(false);
+        if (!cancelled) setIsSearching(false);
       }
     }, 150);
     return () => {
+      cancelled = true;
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
   }, [query, extFilter, sourceScope, workspacePath, recentFiles, posthog]);
@@ -1512,7 +1518,7 @@ const FilesPane: React.FC<FilesPaneProps> = memo(({
                 ) : file.type === 'directory' && (
                   <MaterialSymbol icon="folder" size={16} className="text-nim-faint shrink-0" />
                 )}
-                {file.type === 'directory' ? file.name + '/' : file.name}
+                <SearchHighlight text={file.type === 'directory' ? file.name + '/' : file.name} query={query} fuzzy />
                 {file.source === 'shared' && (
                   <span className="nim-badge-primary text-[10px]">Shared</span>
                 )}
@@ -1574,18 +1580,20 @@ const InFilesPane: React.FC<InFilesPaneProps> = memo(({
   // since the last run. This is the lazy bit: switching to In Files with a
   // stale query reruns at most once.
   useEffect(() => {
+    let cancelled = false;
     if (!isOpen || !isActive) return;
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     if (!query.trim()) {
+      setIsSearching(false);
       setResults([]);
       lastQueryRef.current = '';
       return;
     }
-    if (lastQueryRef.current === query) return;
+    const searchKey = JSON.stringify([workspacePath, query]);
+    if (lastQueryRef.current === searchKey) return;
 
     searchTimeoutRef.current = setTimeout(async () => {
       setIsSearching(true);
-      lastQueryRef.current = query;
       try {
         const api = (window as any).electronAPI;
         if (!api?.searchWorkspaceFileContent) {
@@ -1593,6 +1601,8 @@ const InFilesPane: React.FC<InFilesPaneProps> = memo(({
           return;
         }
         const contentResults = await api.searchWorkspaceFileContent(workspacePath, query);
+        if (cancelled) return;
+        lastQueryRef.current = searchKey;
         if (Array.isArray(contentResults)) {
           const processed: FileItem[] = contentResults.map((r: any) => ({
             source: 'local',
@@ -1602,7 +1612,10 @@ const InFilesPane: React.FC<InFilesPaneProps> = memo(({
             isContentMatch: true,
             isFileNameMatch: false,
           }));
-          processed.sort((a, b) => (b.matches?.length || 0) - (a.matches?.length || 0));
+          processed.sort((a, b) => {
+            const exact = (r: FileItem) => r.matches?.some(m => m.keywordMatch !== 'stem');
+            return Number(exact(b)) - Number(exact(a)) || (b.matches?.length || 0) - (a.matches?.length || 0);
+          });
           setResults(processed);
 
           try {
@@ -1630,10 +1643,11 @@ const InFilesPane: React.FC<InFilesPaneProps> = memo(({
           }
         }
       } finally {
-        setIsSearching(false);
+        if (!cancelled) setIsSearching(false);
       }
     }, 200);
     return () => {
+      cancelled = true;
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
   }, [isOpen, isActive, query, workspacePath, posthog]);
@@ -1873,7 +1887,11 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
   }, [visibleQuery, fileFilter]);
 
   // Run a full-text search over message contents for the current query.
+  const contentRequest = useRef({ id: 0, key: '' });
+  contentRequest.current.key = JSON.stringify([visibleQuery, workspacePath, isOpen, isActive, fileFilter]);
   const triggerContentSearch = useCallback(async () => {
+    const id = ++contentRequest.current.id, key = contentRequest.current.key;
+    const current = () => id === contentRequest.current.id && key === contentRequest.current.key;
     const q = visibleQuery.trim();
     if (!q || isFileSearchMode || fileFilter) return;
     setContentSearching(true);
@@ -1881,16 +1899,18 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
       const result = await window.electronAPI.invoke('sessions:search', workspacePath, q, {
         includeArchived: false,
       });
+      if (!current()) return;
       const sessions: SessionItem[] =
         result?.success && Array.isArray(result.sessions) ? result.sessions : [];
       setContentResults(sessions);
       setContentSearchedQuery(q);
       setSelectedIndex(0);
     } catch {
+      if (!current()) return;
       setContentResults([]);
       setContentSearchedQuery(q);
     } finally {
-      setContentSearching(false);
+      if (current()) setContentSearching(false);
     }
   }, [visibleQuery, isFileSearchMode, fileFilter, workspacePath]);
 
@@ -1905,6 +1925,7 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
   // Parent bumps contentClearNonce to drop back to title-filter mode.
   useEffect(() => {
     if (contentClearNonce > 0) {
+      contentRequest.current.id++;
       setContentResults(null);
       setContentSearchedQuery(null);
       setSelectedIndex(0);
@@ -1936,9 +1957,11 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
   // Load all sessions when opened
   useEffect(() => {
     if (!isOpen || !workspacePath) return;
+    let cancelled = false;
     window.electronAPI
       .invoke('sessions:list', workspacePath, { includeArchived: false })
       .then((result: { success: boolean; sessions: SessionItem[] }) => {
+        if (cancelled) return;
         if (result.success && Array.isArray(result.sessions)) {
           setAllSessions(result.sessions);
         } else {
@@ -1946,6 +1969,7 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
         }
       })
       .catch(() => setAllSessions([]));
+    return () => { cancelled = true; };
   }, [isOpen, workspacePath]);
 
   // File mention typeahead search (debounced) — only when in typeahead mode AND active
@@ -1988,10 +2012,7 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
     if (contentResults !== null) return contentResults;
     // Normal title search
     if (!visibleQuery.trim()) return allSessions;
-    const q = visibleQuery.toLowerCase();
-    return allSessions.filter((s) =>
-      (s.title || 'New conversation').toLowerCase().includes(q),
-    );
+    return filterSearchText(allSessions, visibleQuery, s => [s.title || 'New conversation']);
   }, [allSessions, visibleQuery, fileFilter, fileFilteredIds, isFileSearchMode, contentResults]);
 
   const handleFileTypeaheadSelect = useCallback(
@@ -2192,7 +2213,7 @@ const SessionsPane: React.FC<SessionsPaneProps> = memo(({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-nim flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap">
-                    {session.title || 'New conversation'}
+                    <SearchHighlight text={session.title || 'New conversation'} query={visibleQuery} />
                     {session.parentSessionId && (
                       <span className="shrink-0 text-[10px] py-0.5 px-1.5 rounded font-semibold bg-[var(--nim-primary)] text-white">
                         In Workstream
@@ -2303,9 +2324,11 @@ const extractPromptText = (content: string): string => {
   return content;
 };
 
-const truncatePrompt = (text: string, maxLength = 120): string => {
+const truncatePrompt = (text: string, maxLength = 120, query = ''): string => {
   const extracted = extractPromptText(text);
-  return extracted.length <= maxLength ? extracted : extracted.substring(0, maxLength) + '...';
+  const match = query ? matchSearchText(query, extracted) : null;
+  const start = match && match.start > maxLength - 30 ? Math.max(0, match.start - 30) : 0;
+  return (start ? '...' : '') + extracted.slice(start, start + maxLength) + (extracted.length > start + maxLength ? '...' : '');
 };
 
 interface PromptsPaneProps {
@@ -2353,23 +2376,21 @@ const PromptsPane: React.FC<PromptsPaneProps> = memo(({
 
   useEffect(() => {
     if (!isOpen || !workspacePath) return;
+    let cancelled = false;
     window.electronAPI.ai
       .listUserPrompts(workspacePath)
       .then((result: { success: boolean; prompts: PromptItem[] }) => {
-        if (result.success) setAllPrompts(result.prompts);
+        if (!cancelled && result.success) setAllPrompts(result.prompts);
       })
       .catch(() => {
         /* leave empty */
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
   }, [isOpen, workspacePath]);
 
   const displayPrompts = useMemo(() => {
-    const q = visibleQuery.trim().toLowerCase();
-    return allPrompts.filter((prompt) => {
-      if (actorScope !== 'all' && prompt.promptActor !== actorScope) return false;
-      return !q || extractPromptText(prompt.content).toLowerCase().includes(q);
-    });
+    return filterSearchText(allPrompts.filter(prompt => actorScope === 'all' || prompt.promptActor === actorScope), visibleQuery, prompt => [extractPromptText(prompt.content)]);
   }, [visibleQuery, actorScope, allPrompts]);
 
   useEffect(() => {
@@ -2489,7 +2510,7 @@ const PromptsPane: React.FC<PromptsPaneProps> = memo(({
             >
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-nim leading-snug mb-1 overflow-hidden text-ellipsis line-clamp-2">
-                  {truncatePrompt(prompt.content)}
+                  <SearchHighlight text={truncatePrompt(prompt.content, 120, visibleQuery)} query={visibleQuery} />
                 </div>
                 <div className="text-xs text-nim-faint flex items-center gap-2">
                   <span className="flex items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
@@ -2572,6 +2593,7 @@ const ProjectsPane: React.FC<ProjectsPaneProps> = memo(({
 
   useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
     (async () => {
       const [recentWorkspaces, openPaths] = await Promise.all([
         window.electronAPI.invoke('get-recent-workspaces') as Promise<RecentWorkspaceItem[]>,
@@ -2590,16 +2612,14 @@ const ProjectsPane: React.FC<ProjectsPaneProps> = memo(({
         if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
         return (b.lastOpened || 0) - (a.lastOpened || 0);
       });
-      setProjects(items);
+      if (!cancelled) setProjects(items);
     })();
-  }, [isOpen, currentWorkspacePath]);
+    return () => { cancelled = true; };
+  }, [isOpen, isActive, currentWorkspacePath]);
 
   const displayProjects = useMemo(() => {
     if (!visibleQuery.trim()) return projects;
-    const q = visibleQuery.toLowerCase();
-    return projects.filter(
-      (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
-    );
+    return filterSearchText(projects, visibleQuery, p => [p.name, p.path]);
   }, [visibleQuery, projects]);
 
   /**
@@ -2715,6 +2735,7 @@ const ProjectsPane: React.FC<ProjectsPaneProps> = memo(({
             <ProjectRow
               key={row.project.path}
               project={row.project}
+              query={visibleQuery}
               isSelected={index === selectedIndex}
               onSelect={() => handleSelect(row)}
               onHover={() => {
@@ -2731,10 +2752,11 @@ const ProjectsPane: React.FC<ProjectsPaneProps> = memo(({
 /** One recent-project row in the Projects pane. */
 const ProjectRow: React.FC<{
   project: ProjectItem;
+  query: string;
   isSelected: boolean;
   onSelect: () => void;
   onHover: () => void;
-}> = memo(({ project, isSelected, onSelect, onHover }) => {
+}> = memo(({ project, query, isSelected, onSelect, onHover }) => {
   return (
     <li
       className={`unified-quick-open-item flex items-center gap-3 py-2.5 px-4 cursor-pointer border-l-[3px] transition-all duration-100 ${
@@ -2750,7 +2772,7 @@ const ProjectRow: React.FC<{
       </div>
       <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-nim flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap">
-                  {project.name}
+                  <SearchHighlight text={project.name} query={query} />
                   {project.isCurrent && (
                     <span className="shrink-0 text-[10px] py-0.5 px-1.5 rounded font-semibold bg-[var(--nim-primary)] text-white">
                       Current
@@ -2763,7 +2785,7 @@ const ProjectRow: React.FC<{
                   )}
                 </div>
         <div className="text-xs text-nim-faint mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap direction-rtl text-left">
-          {project.path}
+          <SearchHighlight text={project.path} query={query} />
         </div>
       </div>
     </li>
@@ -2871,7 +2893,8 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
   // Debounced query → engine. Embedding the query is per-submit, not per
   // keystroke, so a short debounce keeps the dialog responsive.
   useEffect(() => {
-    if (!isOpen || !isActive) return;
+    const reqId = ++latestReq.current;
+    if (!isOpen || !isActive) { setIsLoading(false); return; }
     const q = visibleQuery.trim();
     if (!q) {
       setSemanticResults([]);
@@ -2879,7 +2902,6 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
       return;
     }
     setIsLoading(true);
-    const reqId = ++latestReq.current;
     const timer = setTimeout(() => {
       window.electronAPI.semanticSearch
         .query(workspacePath, q, 25, scopeSpec.sourceClasses)

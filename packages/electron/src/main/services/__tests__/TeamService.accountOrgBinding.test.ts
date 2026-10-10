@@ -42,19 +42,19 @@ const {
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/mock/user-data') },
   BrowserWindow: class {
-    static getAllWindows() { return [{ webContents: { send: windowSendMock } }]; }
+    static getAllWindows() { return [{ isDestroyed: () => false, webContents: { send: windowSendMock } }]; }
   },
   net: { fetch: fetchMock },
   safeStorage: { isEncryptionAvailable: vi.fn(() => false) },
   shell: { openExternal: vi.fn() },
 }));
 vi.mock('fs', () => ({
-  existsSync: vi.fn((filePath: string) => files.has(filePath)),
-  readFileSync: vi.fn((filePath: string) => files.get(filePath)),
+  existsSync: vi.fn((filePath: string) => files.has(filePath.replace(/\\/g, '/'))),
+  readFileSync: vi.fn((filePath: string) => files.get(filePath.replace(/\\/g, '/'))),
   writeFileSync: vi.fn((filePath: string, data: string | Buffer) => {
-    files.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(data));
+    files.set(filePath.replace(/\\/g, '/'), Buffer.isBuffer(data) ? data : Buffer.from(data));
   }),
-  unlinkSync: vi.fn((filePath: string) => files.delete(filePath)),
+  unlinkSync: vi.fn((filePath: string) => files.delete(filePath.replace(/\\/g, '/'))),
 }));
 vi.mock('../../utils/ipcRegistry', () => ({
   safeHandle: vi.fn((channel: string, handler: (...args: any[]) => any) => {

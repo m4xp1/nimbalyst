@@ -22,6 +22,7 @@ import { personalPageSupportsType } from '../services/personalPageTypes';
 import { isCollabUri } from '@nimbalyst/collab-protocol';
 import { getCollaborativeDocumentTypeCatalog } from '../services/CollaborativeDocumentTypeCatalog';
 import { askShareToTeam, shareFileToTeam } from '../services/shareToTeamFlow';
+import { copyToClipboard } from '@nimbalyst/runtime/utils/clipboard';
 
 interface CommonFileActionsProps {
   filePath: string;
@@ -44,6 +45,8 @@ interface CommonFileActionsProps {
    * Team" look broken on every folder. They get the folder promote instead.
    */
   isDirectory?: boolean;
+  /** Present only in menus with an owning workspace root. */
+  relativePath?: string | null;
 }
 
 export function CommonFileActions({
@@ -56,6 +59,7 @@ export function CommonFileActions({
   showIcons = true,
   useButtons = false,
   isDirectory = false,
+  relativePath,
 }: CommonFileActionsProps) {
   const actions = useFileActions(filePath, fileName);
   const hasTeam = useAtomValue(workspaceHasTeamAtom);
@@ -137,6 +141,16 @@ export function CommonFileActions({
         >
           {showIcons && <MaterialSymbol icon="content_copy" size={iconSize} />}
           <span>Copy Path</span>
+        </Item>
+      )}
+
+      {relativePath != null && !isCollabUri(filePath) && (
+        <Item className={menuItemClass} onClick={() => {
+          void copyToClipboard(relativePath).catch(error => console.error('Failed to copy relative path:', error));
+          onClose();
+        }}>
+          {showIcons && <MaterialSymbol icon="content_copy" size={iconSize} />}
+          <span>Copy Relative Path</span>
         </Item>
       )}
 

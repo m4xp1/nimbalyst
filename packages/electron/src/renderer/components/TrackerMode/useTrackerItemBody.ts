@@ -10,7 +10,7 @@
  * local) and the hosts' people chips need.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from 'react';
 import type { EditorConfig } from '@nimbalyst/runtime/editor';
 import { $convertFromEnhancedMarkdownString, getEditorTransformers } from '@nimbalyst/runtime/editor';
 import { $getRoot, $setSelection, type LexicalEditor } from 'lexical';
@@ -27,6 +27,8 @@ import { useCollabSyncCurtain } from '../../hooks/useCollabSyncCurtain';
 import { registerLiveTypedPageEditor } from '../../services/personalAgentEdit';
 import { useCollabBodyHistory } from '../HistoryDialog/useCollabBodyHistory';
 import { personalTypedPageHistoryKey } from '../../../shared/personalPageUri';
+import { subscribeTrackerTeam, trackerTeamSnapshot, invalidateTrackerTeam } from './trackerTeamResolution';
+import { errorNotificationService } from '../../services/ErrorNotificationService';
 
 /** How this item's body is edited -- see `resolveTrackerContentMode`. */
 export type TrackerContentMode = 'file-backed' | 'local-pglite' | 'collaborative';
@@ -40,69 +42,21 @@ export interface TrackerTeam {
    */
   teamOrgId: string | null | undefined;
   teamMembers: TeamMemberOption[];
+  teamError: string | null;
+  retryTeamLookup: () => void;
 }
 
-/** Back-off between re-asks while main reports the team lookup as incomplete. */
-const INCOMPLETE_TEAM_LOOKUP_RETRY_MS = [500, 1000, 2000, 4000, 8000] as const;
+const NO_WORKSPACE_TEAM = { teamOrgId: null, error: null } as const;
 
-/**
- * Detect whether this workspace has a team. The team check feeds the content
- * editor mode (collab vs local); the member list feeds the assignee picker.
- * NIM-638: these are split into two effects so a slow or hung
- * `team:list-members` doesn't strand `teamOrgId === undefined` and keep the
- * collab editor stuck on "Connecting..." forever -- the editor only needs the
- * orgId, not the members.
- */
+/** A card reuses the workspace's completed or in-flight lookup across mounts. */
 export function useTrackerTeam(workspacePath: string | undefined): TrackerTeam {
-  const [teamOrgId, setTeamOrgId] = useState<string | null | undefined>(undefined);
+  const snapshot = useSyncExternalStore(
+    useCallback((listener) => workspacePath ? subscribeTrackerTeam(workspacePath, listener) : () => {}, [workspacePath]),
+    useCallback(() => workspacePath ? trackerTeamSnapshot(workspacePath) : NO_WORKSPACE_TEAM, [workspacePath]),
+  );
+  const teamOrgId = snapshot.teamOrgId;
   const [teamMembers, setTeamMembers] = useState<TeamMemberOption[]>([]);
-
-  useEffect(() => {
-    if (!workspacePath) {
-      setTeamOrgId(null);
-      setTeamMembers([]);
-      return;
-    }
-    let cancelled = false;
-    setTeamOrgId(undefined);
-    setTeamMembers([]);
-    (async () => {
-      try {
-        // NIM-638: bound the team lookup with a client-side timeout. Without it,
-        // a hung `team:find-for-workspace` IPC leaves teamOrgId === undefined
-        // (pending) forever, so the content editor stays stuck on "Connecting...".
-        // On timeout, degrade to local mode (null) -- the body still paints from
-        // the cold cache instead of spinning indefinitely.
-        const TEAM_LOOKUP_TIMEOUT_MS = 12_000;
-        const lookup = () => Promise.race([
-          window.electronAPI.invoke('team:find-for-workspace', workspacePath),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('team:find-for-workspace timed out')), TEAM_LOOKUP_TIMEOUT_MS),
-          ),
-        ]);
-        let teamResult = await lookup();
-        // `complete: false` means main could not read the team directory yet
-        // (typically the first seconds after launch), so its null team is not
-        // "this workspace has no team". Answering null here opened a team item's
-        // body in local mode. Stay pending and ask again; give up to local mode
-        // only once the schedule runs out.
-        for (const delayMs of INCOMPLETE_TEAM_LOOKUP_RETRY_MS) {
-          if (cancelled || teamResult?.complete !== false) break;
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (cancelled) return;
-          teamResult = await lookup();
-        }
-        if (cancelled) return;
-        const orgId: string | null = teamResult?.success && teamResult.team?.orgId
-          ? teamResult.team.orgId
-          : null;
-        setTeamOrgId(orgId);
-      } catch {
-        if (!cancelled) setTeamOrgId(null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [workspacePath]);
+  const retryTeamLookup = useCallback(() => { if (workspacePath) invalidateTrackerTeam(workspacePath); }, [workspacePath]);
   // Members load on a separate effect keyed on the resolved orgId so a
   // slow members call cannot block the editor. The list-members IPC has
   // its own server-side timeout (see fetchTeamApi); on failure the
@@ -130,7 +84,7 @@ export function useTrackerTeam(workspacePath: string | undefined): TrackerTeam {
     return () => { cancelled = true; };
   }, [teamOrgId]);
 
-  return { teamOrgId, teamMembers };
+  return { teamOrgId, teamMembers, teamError: snapshot.error, retryTeamLookup };
 }
 
 export interface UseTrackerItemBodyOptions {
@@ -157,6 +111,8 @@ export interface TrackerItemBody {
   hasRichContent: boolean;
   contentMarkdown: string | null;
   contentLoaded: boolean;
+  contentError: string | null;
+  contentSaveError: string | null;
   /** Bumped when an external writer replaced the body; part of the local editor key. */
   externalContentEpoch: number;
   collabLoading: boolean;
@@ -192,6 +148,10 @@ export function useTrackerItemBody({
   // Rich content editor state
   const [contentMarkdown, setContentMarkdown] = useState<string | null>(null);
   const [contentLoaded, setContentLoaded] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
+  const [contentSaveError, setContentSaveError] = useState<string | null>(null);
+  const activeItemRef = useRef(item?.id);
+  activeItemRef.current = item?.id;
   // Bumped when an external writer (MCP, sync) changes the body content
   // out from under us, so the Lexical editor remounts with the new value.
   // Lexical only consumes `initialContent` at mount, so a key change is
@@ -216,6 +176,8 @@ export function useTrackerItemBody({
   // We intentionally do NOT re-fetch on updatedAt changes -- our own saves update updatedAt,
   // and refetching would destroy/remount the editor, causing text to vanish mid-typing.
   useEffect(() => {
+    setContentError(null);
+    setContentSaveError(null);
     if (!hasRichContent) {
       setContentLoaded(true);
       return;
@@ -224,13 +186,19 @@ export function useTrackerItemBody({
     let cancelled = false;
     setContentLoaded(false);
     setContentMarkdown(null);
+    contentSaveInFlightRef.current = false;
     loadedBaselineRef.current = null;
     getContentFnRef.current = null;
 
     window.electronAPI.documentService.getTrackerItemContent({ itemId: item!.id })
       .then((result) => {
         if (cancelled) return;
-        if (result.success && result.content != null) {
+        if (!result.success) {
+          setContentError(result.error || 'Could not load this content.');
+          setContentLoaded(true);
+          return;
+        }
+        if (result.content != null) {
           const markdown = typeof result.content === 'string'
             ? result.content
             : result.content?.markdown ?? '';
@@ -245,7 +213,7 @@ export function useTrackerItemBody({
       .catch((err) => {
         if (cancelled) return;
         console.error('[TrackerItemDetail] Failed to load content:', err);
-        setContentMarkdown('');
+        setContentError(err instanceof Error ? err.message : 'Could not load this content.');
         setContentLoaded(true);
       });
 
@@ -459,15 +427,20 @@ export function useTrackerItemBody({
       loadedBaselineRef.current = markdown;
       contentSaveInFlightRef.current = true;
       try {
-        await window.electronAPI.documentService.updateTrackerItemContent({
+        const result = await window.electronAPI.documentService.updateTrackerItemContent({
           itemId: item!.id,
           content: markdown,
         });
-        onContentSavedRef.current?.(markdown);
+        if (result?.success === false) throw new Error(result.error || 'Could not save this content.');
+        if (activeItemRef.current === item?.id) {
+          setContentSaveError(null);
+          onContentSavedRef.current?.(markdown);
+        }
       } catch (err) {
         console.error('[TrackerItemDetail] Failed to save content:', err);
+        if (activeItemRef.current === item?.id) setContentSaveError(err instanceof Error ? err.message : 'Could not save this content.');
       } finally {
-        contentSaveInFlightRef.current = false;
+        if (activeItemRef.current === item?.id) contentSaveInFlightRef.current = false;
       }
     }, 800);
   }, [item?.id]);
@@ -486,6 +459,7 @@ export function useTrackerItemBody({
     return () => {
       if (contentSaveTimerRef.current && getContentFnRef.current) {
         clearTimeout(contentSaveTimerRef.current);
+        contentSaveTimerRef.current = null;
         const markdown = getContentFnRef.current();
         if (isCollabMode) {
           const baseline = loadedBaselineRef.current;
@@ -499,14 +473,18 @@ export function useTrackerItemBody({
         window.electronAPI.documentService.updateTrackerItemContent({
           itemId: item!.id,
           content: markdown,
-        }).catch(() => {});
+        }).then((result) => {
+          if (result?.success === false) throw new Error(result.error || 'Could not save this content.');
+        }).catch((error) => {
+          errorNotificationService.showError('Content not saved', error instanceof Error ? error.message : String(error));
+        });
       }
     };
   }, [item?.id, contentMode]);
 
   /** Editor config for local PGLite mode (non-team native items only) */
   const localEditorConfig = useMemo((): EditorConfig | null => {
-    if (contentMode !== 'local-pglite' || !contentLoaded) return null;
+    if (contentMode !== 'local-pglite' || !contentLoaded || contentError) return null;
     return {
       isRichText: true,
       editable: true,
@@ -547,7 +525,7 @@ export function useTrackerItemBody({
         });
       },
     };
-  }, [itemId, contentMode, contentLoaded, contentMarkdown, forceFloatingToolbar, saveContent]);
+  }, [itemId, contentMode, contentLoaded, contentError, contentMarkdown, forceFloatingToolbar, saveContent]);
 
   /** Editor config for collaborative mode (team-synced native items) */
   const collabEditorConfig = useMemo((): EditorConfig | null => {
@@ -623,6 +601,8 @@ export function useTrackerItemBody({
     hasRichContent,
     contentMarkdown,
     contentLoaded,
+    contentError,
+    contentSaveError,
     externalContentEpoch,
     collabLoading,
     collabStatus,

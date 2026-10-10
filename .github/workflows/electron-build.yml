@@ -22,7 +22,11 @@ env:
   pnpm_config_fetch_timeout: '300000'
 
 jobs:
+  fork-search:
+    if: github.repository == 'm4xp1/nimbalyst'
+    uses: ./.github/workflows/fork-search-gate.yml
   build:
+    needs: fork-search
     name: Build and verify Windows x64
     if: github.repository == 'm4xp1/nimbalyst'
     runs-on: windows-latest
@@ -114,6 +118,23 @@ jobs:
         working-directory: packages/electron
         run: pnpm run build:win --publish never --config.publish.owner=m4xp1 --config.publish.repo=nimbalyst
 
+      - name: Verify packaged application search across all six panes
+        run: |
+          $env:NIMBALYST_E2E_APP_PATH = (Resolve-Path 'packages/electron/release/win-unpacked/Nimbalyst.exe').Path
+          pnpm --dir packages/electron exec playwright test --config playwright.search.config.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged application search gate failed' }
+
+      - name: Preserve packaged search failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: packaged-search-diagnostics
+          path: |
+            e2e_test_output/search-results
+            e2e_test_output/search-report
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Verify installer and record SHA-256
         run: |
           $package = Get-Content packages/electron/package.json -Raw | ConvertFrom-Json
@@ -192,22 +213,20 @@ jobs:
           $version = $package.version
           $revision = $package.build.buildVersion
           @"
-          Nimbalyst $tag for Windows x64, built from the release branch of m4xp1/nimbalyst.
+          Nimbalyst $tag for Windows x64, based on upstream v0.80.6.
 
-          Based on upstream v0.80.6 (749eca9a4014871d649e66d70ec49487735562aa). Fork version: $version; Windows revision: $revision.
-          - Updated upstream main, merged it into features, and combined upstream v0.80.6 and features in release without squash.
-          - Includes upstream nested session trees, updated Claude model/action support, wiki improvements and runtime/security fixes.
-          - Retains editable file-backed tracker CONTENT without duplicate headers, folder path menus and the project-root context menu.
-          - Retains additional UTF-8 text sources with autosaved rules, Unicode/Russian Snowball keyword matching, saved-index status and correct session cleanup.
-          - Semantic retrieval follows upstream nearest-candidate/RRF behavior.
-          - Uses the upstream pnpm 12.9.1 lockfile and Electron 43.7.0.
-          - Official upstream notifications remain enabled; automatic download/install are disabled.
-          Source commit: $env:GITHUB_SHA
-          Installer: Nimbalyst-Windows-x64.exe
-          Authenticode: unsigned (no Nimbalyst/DigiCert signing credentials used).
-          Checks: workspace typecheck, fork regression tests, Electron native runtime and packaging validation.
-          Other operating systems and Windows ARM64 are not built.
-          Use SHA256SUMS.txt to verify the download. Updates are installed manually for this unsigned fork.
+          - Russian normalization and additional word forms across Files, In Files, Sessions, Prompts, Projects and Memory, with correct highlights and exact-match priority in text search.
+          - Local database tracker content opens without the previous long team lookup retry.
+          - File-backed Wiki tracker pages support editing content and available attributes in the original file.
+          - Keyboard shortcuts work across layouts in application commands and editors.
+          - File tree selection and focus stay aligned; Copy Relative Path is available for files and folders.
+          - Coverage shows sessions in sky blue, distinct from custom sources.
+          - Memory semantic nearest-candidate/RRF behavior and the configured model remain unchanged.
+
+          App/About: $version; Windows FileVersion: $revision. Source commit: $env:GITHUB_SHA.
+          Only Windows x64 is built. The installer is unsigned and updates are installed manually.
+          Official upstream notifications remain enabled; automatic download and installation remain disabled.
+          Use SHA256SUMS.txt to verify Nimbalyst-Windows-x64.exe.
           "@ | Set-Content release-assets/RELEASE_NOTES.md -Encoding utf8
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {

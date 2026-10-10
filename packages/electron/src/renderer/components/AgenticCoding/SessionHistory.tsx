@@ -1,3 +1,4 @@
+import { filterSearchText } from '@nimbalyst/runtime/utils/searchText';
 import { createCommittedRankBuilder, createSessionOrder, getLiveSessionOrderTimestamp } from './sessionHistoryOrder';
 import {selectedMachineAtom} from '../../store/atoms/remoteMachines';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -650,8 +651,12 @@ const SessionHistoryComponent: React.FC = () => {
     }
   }, [refreshSessions]);
 
+  const contentSearchRequest = useRef({ id: 0, key: '' });
+  contentSearchRequest.current.key = JSON.stringify([workspacePath, searchQuery, showArchived, searchFilters, mode]);
   // Execute the actual search query
   const executeSearch = async (query: string, filters: SearchFilters = searchFilters) => {
+    const id = ++contentSearchRequest.current.id, key = contentSearchRequest.current.key;
+    const current = () => id === contentSearchRequest.current.id && key === contentSearchRequest.current.key;
     try {
       setIsSearching(true);
       setError(null);
@@ -662,6 +667,7 @@ const SessionHistoryComponent: React.FC = () => {
         direction: filters.direction,
       });
 
+      if (!current()) return;
       if (result.success && Array.isArray(result.sessions)) {
         let searchResults: SessionItem[] = result.sessions.map((s: any) => ({
           id: s.id,
@@ -689,10 +695,11 @@ const SessionHistoryComponent: React.FC = () => {
         setSessions(searchResults);
       }
     } catch (err) {
+      if (!current()) return;
       console.error('[SessionHistory] Failed to search sessions:', err);
       setError('Failed to search sessions');
     } finally {
-      setIsSearching(false);
+      if (current()) setIsSearching(false);
     }
   };
 
@@ -815,16 +822,13 @@ const SessionHistoryComponent: React.FC = () => {
 
     // Filter sessions by title (case-insensitive) AND tags (OR within tags).
     const filtered = sessionsToFilter.filter(session => {
-      if (hasTitleQuery && !(session.title ?? '').toLowerCase().includes(titleQuery)) {
-        return false;
-      }
       if (hasTagFilter) {
         const matchesAny = activeTags.some(t => matchesSessionListTag(session, t, sessionRegistry));
         if (!matchesAny) return false;
       }
       return true;
     });
-    setSessions(filtered.sort(compareSessionOrder));
+    setSessions(filterSearchText(filtered.sort(compareSessionOrder), titleQuery, session => [session.title ?? '']));
   }, [searchQuery, tagFilter.tags, allSessions, mode, compareSessionOrder, sessionRegistry, contentSearchTriggered]);
 
   useEffect(() => {

@@ -1,3 +1,4 @@
+import { FtsLexiconCache, needsRussianFtsProjection, russianFtsQueries } from '../utils/russianFtsSearch';
 import { sessionMetadataMergeSql } from './sessionMetadataMerge';
 /**
  * PGLite implementation of SessionStore interface from runtime package
@@ -40,12 +41,12 @@ type PGliteLike = {
       eventType?: 'user_message' | 'assistant_message' | null;
       cutoffDate?: Date | null;
     },
-  ): Promise<Array<{ session_id: string; rank: number }>>;
+  ): Promise<Array<{ session_id: string; rank: number; keywordMatch?: 'exact' | 'stem' }>>;
   searchSessionTitles?(
     workspaceId: string,
     query: string,
     opts?: { includeArchived?: boolean },
-  ): Promise<Array<{ session_id: string; rank: number }>>;
+  ): Promise<Array<{ session_id: string; rank: number; keywordMatch?: 'exact' | 'stem' }>>;
 };
 
 type EnsureReadyFn = () => Promise<void>;
@@ -472,6 +473,7 @@ export async function resolveProviderSessionId(
 }
 
 export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureReadyFn): SessionStore {
+  const lexiconCache = new FtsLexiconCache();
   // Store db reference for module-level functions
   moduleDb = db;
   moduleEnsureReady = ensureDbReady ?? null;
@@ -995,6 +997,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
 
       // Build a map of session ID -> best rank from both sources
       const sessionRanks = new Map<string, number>();
+      const sessionMatches = new Map<string, 'exact' | 'stem'>();
       const sessionRows = new Map<string, any>();
 
       if (db.searchTranscriptEventSessions) {
@@ -1021,6 +1024,9 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
           contentRanks.set(hit.session_id, bm25ToRank(hit.rank));
         }
 
+        for (const hit of [...titleHits, ...contentHits]) {
+          if (!sessionMatches.has(hit.session_id) || hit.keywordMatch !== 'stem') sessionMatches.set(hit.session_id, hit.keywordMatch ?? 'exact');
+        }
         const allIds = Array.from(new Set([...titleRanks.keys(), ...contentRanks.keys()]));
         const hydrated = await hydrateSessions(allIds);
         for (const row of hydrated) {
@@ -1031,6 +1037,21 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
           sessionRows.set(row.id, { ...row, rank });
         }
       } else {
+        let terms: { exact: string; stem: string | null } = { exact: searchTerms, stem: null };
+        const russian = needsRussianFtsProjection(searchTerms);
+        if (russian) {
+          // Project the lexemes of the existing English FTS index. It has no
+          // Russian morphology; the additional projection does not alter rows.
+          const { rows: words } = await db.query<{ word: string }>(
+            `SELECT word FROM ts_stat($1) ORDER BY word`,
+            [`SELECT to_tsvector('english', COALESCE(searchable_text, '')) FROM ai_agent_messages
+              UNION ALL SELECT to_tsvector('english', COALESCE(title, '')) FROM ai_sessions`]);
+          terms = russianFtsQueries(searchTerms, lexiconCache.update(words.map(w => w.word)), 'postgres');
+        }
+        const passes = [{ terms: terms.exact, kind: 'exact' as const }, ...(terms.stem ? [{ terms: terms.stem, kind: 'stem' as const }] : [])];
+        for (const pass of passes) {
+          const searchTerms = pass.terms;
+          const tsQueryFunction = russian ? 'to_tsquery' : 'plainto_tsquery';
         // PGLite path: inline to_tsvector / plainto_tsquery + ts_rank_cd.
         const titleQuery = db.query<any>(
         `SELECT
@@ -1052,7 +1073,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
           s.branched_from_session_id,
           s.branch_point_message_id,
           s.branched_at,
-          ts_rank_cd(to_tsvector('english', COALESCE(s.title, '')), plainto_tsquery('english', $2)) * 2 as rank,
+          ts_rank_cd(to_tsvector('english', COALESCE(s.title, '')), ${tsQueryFunction}('english', $2)) * 2 as rank,
           COALESCE(child_stats.child_count, 0) as child_count
         FROM ai_sessions s
         LEFT JOIN worktrees w ON s.worktree_id = w.id
@@ -1063,7 +1084,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
           GROUP BY parent_session_id
         ) child_stats ON child_stats.parent_session_id = s.id
         WHERE s.workspace_id = $1
-          AND to_tsvector('english', COALESCE(s.title, '')) @@ plainto_tsquery('english', $2)
+          AND to_tsvector('english', COALESCE(s.title, '')) @@ ${tsQueryFunction}('english', $2)
           ${archiveFilter}`,
         [workspaceId, searchTerms]
       );
@@ -1074,11 +1095,11 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
         // ai_agent_messages.searchable_text column directly. The legacy
         // ai_transcript_events index is being retired in Phase 4.
         let contentQuerySql = `SELECT DISTINCT t.session_id,
-            MAX(ts_rank_cd(to_tsvector('english', COALESCE(t.searchable_text, '')), plainto_tsquery('english', $1))) as rank
+            MAX(ts_rank_cd(to_tsvector('english', COALESCE(t.searchable_text, '')), ${tsQueryFunction}('english', $1))) as rank
           FROM ai_agent_messages t
           WHERE t.searchable_text IS NOT NULL
             AND t.message_kind IN ('user', 'assistant', 'system')
-            AND to_tsvector('english', COALESCE(t.searchable_text, '')) @@ plainto_tsquery('english', $1)`;
+            AND to_tsvector('english', COALESCE(t.searchable_text, '')) @@ ${tsQueryFunction}('english', $1)`;
 
         if (cutoffDate) {
           contentQueryParams.push(cutoffDate);
@@ -1099,6 +1120,8 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
 
       // Add title matches
       for (const row of titleResult.rows) {
+        if (pass.kind === 'stem' && sessionRows.has(row.id)) continue;
+        sessionMatches.set(row.id, pass.kind);
         sessionRanks.set(row.id, row.rank);
         sessionRows.set(row.id, row);
       }
@@ -1117,6 +1140,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
           contentResult.rows.map((r: any) => [r.session_id, Number(r.rank ?? 0)]),
         );
         for (const row of contentSessions) {
+          sessionMatches.set(row.id, pass.kind);
           const contentRank = contentRankMap.get(row.id) || 0;
           const existingRank = sessionRanks.get(row.id) || 0;
           sessionRanks.set(row.id, Math.max(existingRank, contentRank));
@@ -1128,17 +1152,20 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
 
       // Also update ranks for sessions found in both title and content
       for (const contentRow of contentResult.rows) {
-        if (sessionRows.has(contentRow.session_id)) {
+        if (sessionRows.has(contentRow.session_id) && !(pass.kind === 'stem' && sessionMatches.get(contentRow.session_id) === 'exact')) {
           const existingRank = sessionRanks.get(contentRow.session_id) || 0;
           sessionRanks.set(contentRow.session_id, Math.max(existingRank, contentRow.rank));
         }
       }
+        }
       } // end PGLite branch
 
       // Convert to array and sort by rank DESC, updated_at DESC
       const rows = Array.from(sessionRows.values())
         .map(row => ({ ...row, max_rank: sessionRanks.get(row.id) || row.rank }))
         .sort((a, b) => {
+          const tier = (id: string) => sessionMatches.get(id) === 'stem' ? 1 : 0;
+          if (tier(a.id) !== tier(b.id)) return tier(a.id) - tier(b.id);
           if (b.max_rank !== a.max_rank) return b.max_rank - a.max_rank;
           return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
         });
@@ -1150,6 +1177,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
         const childCount = parseInt(row.child_count) || 0;
         return {
           id: row.id,
+          keywordMatch: sessionMatches.get(row.id) ?? 'exact',
           provider: row.provider,
           model: row.model ?? undefined,
           sessionType: row.session_type || 'session',
