@@ -1,3 +1,5 @@
+import { matchSearchText } from '@nimbalyst/runtime/utils/searchText';
+import { FtsLexiconCache, needsRussianFtsProjection, russianFtsQueries } from '../../utils/russianFtsSearch';
 /**
  * SQLiteStoreAdapter
  *
@@ -71,7 +73,7 @@ export interface StoreDbAdapter {
       eventType?: 'user_message' | 'assistant_message' | null;
       cutoffDate?: Date | null;
     },
-  ): Promise<Array<{ session_id: string; rank: number }>>;
+  ): Promise<Array<{ session_id: string; rank: number; keywordMatch?: 'exact' | 'stem' }>>;
 
   searchTranscriptEvents?(
     query: string,
@@ -88,7 +90,7 @@ export interface StoreDbAdapter {
     workspaceId: string,
     query: string,
     opts?: { includeArchived?: boolean },
-  ): Promise<Array<{ session_id: string; rank: number }>>;
+  ): Promise<Array<{ session_id: string; rank: number; keywordMatch?: 'exact' | 'stem' }>>;
 }
 
 /**
@@ -99,6 +101,25 @@ export function createSQLiteStoreAdapter(
   db: AnySqlite,
   _opts: SQLiteStoreAdapterOptions = {},
 ): StoreDbAdapter {
+  const lexiconCache = new FtsLexiconCache();
+  let dictionaryReady = false;
+  const queriesFor = async (query: string): Promise<{ exact: string; stem: string | null }> => {
+    if (!needsRussianFtsProjection(query)) return { exact: query, stem: null };
+    if (!dictionaryReady) {
+      await db.query("CREATE VIRTUAL TABLE IF NOT EXISTS temp.quick_open_lexicon USING fts5vocab(main, ai_agent_messages_fts, 'row')");
+      dictionaryReady = true;
+    }
+    const { rows } = await db.query<{ term: string }>('SELECT term FROM temp.quick_open_lexicon ORDER BY term');
+    return russianFtsQueries(query, lexiconCache.update(rows.map(row => row.term)), 'sqlite');
+  };
+  const rankedSearch = async <T>(sql: string, binds: Record<string, unknown>, key: (row: T) => unknown): Promise<T[]> => {
+    const queries = await queriesFor(String(binds.q));
+    const exact = (await db.query<T>(sql, [{ ...binds, q: queries.exact }])).rows;
+    if (!queries.stem) return exact;
+    const ids = new Set(exact.map(key));
+    const stem = (await db.query<T>(sql, [{ ...binds, q: queries.stem }])).rows.filter(row => !ids.has(key(row)));
+    return [...exact.map(row => ({ ...row, keywordMatch: 'exact' as const })), ...stem.map(row => ({ ...row, keywordMatch: 'stem' as const }))].slice(0, Number(binds.lim));
+  };
   return {
     runTransaction: (statements) => db.runTransaction(statements),
     async query<T = unknown>(sql: string, params: unknown[] = []): Promise<{ rows: T[] }> {
@@ -163,8 +184,7 @@ export function createSQLiteStoreAdapter(
                    GROUP BY t.session_id
                    ORDER BY rank
                    LIMIT $lim`;
-      const { rows } = await db.query<{ session_id: string; rank: number }>(sql, [binds]);
-      return rows;
+      return rankedSearch<{ session_id: string; rank: number }>(sql, binds, row => row.session_id);
     },
 
     async searchTranscriptEvents(query, opts) {
@@ -195,32 +215,20 @@ export function createSQLiteStoreAdapter(
                    WHERE ${extra.length > 0 ? extra.join(' AND ') : '1=1'}
                    ORDER BY fts.rank
                    LIMIT $lim`;
-      const { rows } = await db.query<Record<string, unknown>>(sql, [binds]);
-      return rows;
+      return rankedSearch<Record<string, unknown>>(sql, binds, row => row.id);
     },
 
     async searchSessionTitles(workspaceId, query, opts) {
-      // ai_sessions doesn't have an FTS5 mirror in the current schema (the
-      // GIN(to_tsvector(title)) PG index doesn't have a direct SQLite
-      // counterpart since titles are short). We fall back to LIKE-based
-      // search; the PG implementation also LOWERs and rank_cd's by token
-      // overlap, so this is a behavioral diff: SQLite gives substring
-      // matches without ranking. Acceptable for short titles.
       const includeArchived = opts?.includeArchived ?? false;
-      const archiveClause = includeArchived
-        ? ''
-        : `AND (s.is_archived = 0 OR s.is_archived IS NULL)
-           AND (s.worktree_id IS NULL OR w.is_archived = 0 OR w.is_archived IS NULL)`;
-      const sql = `SELECT s.id AS session_id, 1.0 AS rank
-                   FROM ai_sessions AS s
-                   LEFT JOIN worktrees AS w ON s.worktree_id = w.id
-                   WHERE s.workspace_id = $wid
-                     AND LOWER(COALESCE(s.title, '')) LIKE $needle
-                     ${archiveClause}`;
-      const { rows } = await db.query<{ session_id: string; rank: number }>(sql, [
-        { wid: workspaceId, needle: `%${query.toLowerCase()}%` },
-      ]);
-      return rows;
+      const archiveClause = includeArchived ? '' : `AND (s.is_archived = 0 OR s.is_archived IS NULL)
+        AND (s.worktree_id IS NULL OR w.is_archived = 0 OR w.is_archived IS NULL)`;
+      const { rows } = await db.query<{ session_id: string; title: string }>(`SELECT s.id AS session_id, COALESCE(s.title, '') AS title
+        FROM ai_sessions s LEFT JOIN worktrees w ON s.worktree_id = w.id
+        WHERE s.workspace_id = $wid ${archiveClause}`, [{ wid: workspaceId }]);
+      return rows.flatMap(row => {
+        const match = matchSearchText(query, row.title);
+        return match ? [{ session_id: row.session_id, rank: 1, keywordMatch: match.keywordMatch }] : [];
+      }).sort((a, b) => Number(a.keywordMatch === 'stem') - Number(b.keywordMatch === 'stem'));
     },
   };
 }

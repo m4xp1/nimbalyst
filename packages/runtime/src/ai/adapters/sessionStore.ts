@@ -9,6 +9,8 @@ export type ChatSession = SessionData;
  * This is the single source of truth for session list/registry items.
  */
 export interface SessionMeta {
+  /** Optional provenance of a lexical search hit; absent on ordinary lists. */
+  keywordMatch?: 'exact' | 'stem';
   /** Provider log provenance for sessions followed or imported on this device. */
   externalSource?: 'claude-code' | 'openai-codex';
   externalLastActivityAt?: number;

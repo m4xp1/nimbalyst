@@ -1,3 +1,4 @@
+import { matchSearchText, projectSearchText, originalSearchIndices } from './searchText';
 /**
  * Fuzzy matching utilities with CamelCase and path support
  * Used for document search, file typeaheads, and similar features
@@ -6,6 +7,7 @@
 export interface FuzzyMatchResult {
   /** Whether the query matches the target */
   matches: boolean;
+  keywordMatch?: 'exact' | 'stem';
   /** Score from 0-1, higher is better match. 0 means no match */
   score: number;
   /** Indices of matched characters in the target string for highlighting */
@@ -23,6 +25,15 @@ export interface FuzzyMatchResult {
  * @returns Match result with score and indices
  */
 export function fuzzyMatch(query: string, target: string): FuzzyMatchResult {
+  const projection = projectSearchText(target, true);
+  const normalizedQuery = projectSearchText(query, true).text;
+  const exact = fuzzyMatchNormalized(normalizedQuery, projection.text);
+  if (exact.matches) return { ...exact, keywordMatch: 'exact', matchedIndices: originalSearchIndices(projection, exact.matchedIndices) };
+  const stem = matchSearchText(query, target);
+  return stem ? { matches: true, score: 0.01, keywordMatch: stem.keywordMatch, matchedIndices: stem.matchedIndices } : exact;
+}
+
+function fuzzyMatchNormalized(query: string, target: string): FuzzyMatchResult {
   if (!query || !target) {
     return { matches: !query, score: query ? 0 : 1, matchedIndices: [] };
   }
@@ -102,7 +113,7 @@ function exactSubstringMatch(queryLower: string, targetLower: string, target: st
  */
 function camelCaseMatch(query: string, target: string): FuzzyMatchResult {
   // Check if query looks like CamelCase abbreviation (multiple capitals)
-  const capitals = query.match(/[A-Z]/g);
+  const capitals = query.match(/\p{Lu}/gu);
   if (!capitals || capitals.length < 2) {
     return { matches: false, score: 0, matchedIndices: [] };
   }
@@ -124,12 +135,7 @@ function camelCaseMatch(query: string, target: string): FuzzyMatchResult {
   let charOffset = 0;
 
   // Calculate character offsets for each target part
-  const partOffsets: number[] = [];
-  let offset = 0;
-  for (const part of targetParts) {
-    partOffsets.push(offset);
-    offset += part.length;
-  }
+  const partOffsets = computePartOffsets(target, targetParts);
 
   for (const segment of querySegments) {
     const segmentLower = segment.toLowerCase();
@@ -321,7 +327,7 @@ function fuzzySubsequenceMatch(queryLower: string, targetLower: string): FuzzyMa
 }
 
 function isUpperCase(char: string): boolean {
-  return char >= 'A' && char <= 'Z';
+  return /\p{Lu}/u.test(char);
 }
 
 function isDelimiter(char: string): boolean {
@@ -338,7 +344,7 @@ export function fuzzyMatchPath(query: string, filePath: string): FuzzyMatchResul
   }
 
   // Split path into parts
-  const pathParts = filePath.split('/');
+  const pathParts = filePath.split(/[\\/]/);
   const filename = pathParts[pathParts.length - 1] || '';
 
   // Try matching against filename first (higher score)
@@ -349,7 +355,8 @@ export function fuzzyMatchPath(query: string, filePath: string): FuzzyMatchResul
     const adjustedIndices = filenameMatch.matchedIndices.map(i => i + filenameStart);
     return {
       matches: true,
-      score: filenameMatch.score, // Keep full score for filename match
+      score: filenameMatch.score,
+      keywordMatch: filenameMatch.keywordMatch, // Keep full score for filename match
       matchedIndices: adjustedIndices,
     };
   }
@@ -359,12 +366,22 @@ export function fuzzyMatchPath(query: string, filePath: string): FuzzyMatchResul
   if (pathMatch.matches) {
     return {
       matches: true,
-      score: pathMatch.score * 0.7, // Reduce score for path-only match
+      score: pathMatch.score * 0.7,
+      keywordMatch: pathMatch.keywordMatch, // Reduce score for path-only match
       matchedIndices: pathMatch.matchedIndices,
     };
   }
 
-  return { matches: false, score: 0, matchedIndices: [] };
+  // File extensions and path syntax stay literal; inflect only a plain name.
+  if (/^[а-яё\s]+$/iu.test(query)) {
+    let offset = 0;
+    for (const part of pathParts) {
+      const name = part.replace(/\.[^.]+$/, '');
+      const stem = matchSearchText(query, name);
+      if (stem) return { matches: true, score: 0.01, keywordMatch: stem.keywordMatch, matchedIndices: stem.matchedIndices.map(i => i + offset) };
+      offset += part.length + 1;
+    }
+  }  return { matches: false, score: 0, matchedIndices: [] };
 }
 
 /**

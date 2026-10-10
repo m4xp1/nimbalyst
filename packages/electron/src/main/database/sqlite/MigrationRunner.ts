@@ -253,6 +253,11 @@ export function getMigrations(schemaDir: string): Migration[] {
     { version: 50, name: 'personal_pages_one_tree', sqlFile: path.join(schemaDir, '0050_personal_pages_one_tree.sql') },
     { version: 51, name: 'personal_pages_parents_and_order', sqlFile: path.join(schemaDir, '0051_personal_pages_parents_and_order.sql') },
     { version: 52, name: 'personal_pages_fields', sqlFile: path.join(schemaDir, '0052_personal_pages_fields.sql') },
+    {
+      version: 53,
+      name: 'fts_update_order',
+      sqlFile: path.join(schemaDir, '0053_fts_update_order.sql'),
+    },
   ];
 }
 

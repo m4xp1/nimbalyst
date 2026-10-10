@@ -167,6 +167,13 @@ function sharedDoc(
   };
 }
 
+
+// Full visible text can span <mark> elements after search highlighting.
+function fullText(text: string) {
+  return (_: string, element: Element | null) => element?.textContent === text &&
+    !Array.from(element.children).some(child => child.textContent === text);
+}
+
 function typeSearch(value: string) {
   fireEvent.change(screen.getByTestId('unified-quick-open-search'), { target: { value } });
 }
@@ -315,14 +322,14 @@ describe('UnifiedQuickOpen — Projects tab', () => {
     typeSearch('roadmap');
 
     await screen.findByTestId('shared-file-quick-open-doc-roadmap');
-    await screen.findByText('roadmap.md');
+    await screen.findByText(fullText('roadmap.md'));
 
     fireEvent.click(within(screen.getByRole('group', { name: 'Show' })).getByText('Local'));
 
     await waitFor(() => {
       expect(screen.queryByTestId('shared-file-quick-open-doc-roadmap')).toBeNull();
     });
-    screen.getByText('roadmap.md');
+    screen.getByText(fullText('roadmap.md'));
 
     await waitFor(() => {
       expect(appSettings.get('unifiedQuickOpen.selectedFileSource')).toBe('local');
@@ -333,14 +340,14 @@ describe('UnifiedQuickOpen — Projects tab', () => {
     renderQuickOpen({ initialTab: 'files' }, store);
     typeSearch('roadmap');
 
-    await screen.findByText('roadmap.md');
+    await screen.findByText(fullText('roadmap.md'));
     expect(screen.queryByTestId('shared-file-quick-open-doc-roadmap')).toBeNull();
 
     // Scoping to shared drops the local hit and lists the team index instead.
     fireEvent.click(within(screen.getByRole('group', { name: 'Show' })).getByText('Shared'));
 
     await screen.findByTestId('shared-file-quick-open-doc-roadmap');
-    expect(screen.queryByText('roadmap.md')).toBeNull();
+    expect(screen.queryByText(fullText('roadmap.md'))).toBeNull();
   });
 
   it('hides the Files source row when the workspace has no shared documents', async () => {
@@ -529,34 +536,34 @@ describe('UnifiedQuickOpen — Prompts tab', () => {
 
     renderQuickOpen({ initialTab: 'prompts' });
 
-    await screen.findByText('web console design question');
+    await screen.findByText(fullText('web console design question'));
     const actorGroup = screen.getByRole('group', { name: 'Prompts from' });
     const allPrompts = within(actorGroup).getByRole('button', { name: 'All' });
     const myPrompts = within(actorGroup).getByRole('button', { name: 'Me' });
     const agentPrompts = within(actorGroup).getByRole('button', { name: 'Agents' });
 
     expect(allPrompts.getAttribute('aria-pressed')).toBe('true');
-    screen.getByText('web console implementation task');
-    screen.getByText('web console historical prompt');
+    screen.getByText(fullText('web console implementation task'));
+    screen.getByText(fullText('web console historical prompt'));
 
     typeSearch('web');
     fireEvent.click(myPrompts);
-    screen.getByText('web console design question');
-    expect(screen.queryByText('web console implementation task')).toBeNull();
-    expect(screen.queryByText('web console historical prompt')).toBeNull();
+    screen.getByText(fullText('web console design question'));
+    expect(screen.queryByText(fullText('web console implementation task'))).toBeNull();
+    expect(screen.queryByText(fullText('web console historical prompt'))).toBeNull();
     expect(myPrompts.getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(agentPrompts);
-    screen.getByText('web console implementation task');
-    expect(screen.queryByText('web console design question')).toBeNull();
-    expect(screen.queryByText('web console historical prompt')).toBeNull();
+    screen.getByText(fullText('web console implementation task'));
+    expect(screen.queryByText(fullText('web console design question'))).toBeNull();
+    expect(screen.queryByText(fullText('web console historical prompt'))).toBeNull();
     expect(agentPrompts.getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(agentPrompts);
     expect(allPrompts.getAttribute('aria-pressed')).toBe('true');
-    screen.getByText('web console design question');
-    screen.getByText('web console implementation task');
-    screen.getByText('web console historical prompt');
+    screen.getByText(fullText('web console design question'));
+    screen.getByText(fullText('web console implementation task'));
+    screen.getByText(fullText('web console historical prompt'));
   });
 });
 
@@ -701,5 +708,64 @@ describe('UnifiedQuickOpen — Team tab', () => {
         expect.objectContaining({ initialTab: 'team' }),
       );
     });
+  });
+});
+
+
+describe('Quick Open Russian search and request freshness', () => {
+  beforeEach(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
+  afterEach(() => { delete (window as unknown as { electronAPI?: unknown }).electronAPI; });
+  it('finds shared Russian filename forms while excluding locked documents', async () => {
+    const api = setupElectronApiMock(), store = createStore(); activateTeam(store);
+    store.set(sharedDocumentsAtom, [sharedDoc('ru-open', 'Интерфейс.md'), sharedDoc('ru-locked', 'Интерфейсы.md', { decryptFailed: true })]);
+    renderQuickOpen({ initialTab: 'files' }, store); typeSearch('интерфейсами');
+    await waitFor(() => expect(screen.getByTestId('shared-file-quick-open-ru-open')).toBeTruthy());
+    expect(screen.queryByTestId('shared-file-quick-open-ru-locked')).toBeNull();
+    expect(api.semanticSearch.query).not.toHaveBeenCalled();
+  });
+  it('filters session titles with ё/e and forms without embeddings', async () => {
+    const api = setupElectronApiMock(), fallback = api.invoke.getMockImplementation()!;
+    api.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'sessions:list' ? { success: true, sessions: [
+      { id: 'ru', title: 'Русская ПРИЁМКА интерфейса', updatedAt: Date.now(), createdAt: Date.now(), provider: 'openai-codex' },
+      { id: 'other', title: 'Unrelated session', updatedAt: Date.now(), createdAt: Date.now(), provider: 'openai-codex' },
+    ] } : fallback(channel, ...args));
+    renderQuickOpen({ initialTab: 'sessions' }); typeSearch('приемка');
+    await screen.findByText(fullText('Русская ПРИЁМКА интерфейса'));
+    typeSearch('интерфейсами'); await screen.findByText(fullText('Русская ПРИЁМКА интерфейса'));
+    expect(screen.queryByText('Unrelated session')).toBeNull(); expect(api.semanticSearch.query).not.toHaveBeenCalled();
+  });
+  it('keeps exact prompts ahead of word forms and highlights original text', async () => {
+    const api = setupElectronApiMock(); api.listUserPrompts.mockResolvedValue({ success: true, prompts: [
+      { id: 'stem', sessionId: 'a', content: 'На русском языке', createdAt: 3, sessionTitle: 'A', provider: 'openai-codex', promptActor: 'human' },
+      { id: 'exact', sessionId: 'b', content: 'Слова языками', createdAt: 2, sessionTitle: 'B', provider: 'openai-codex', promptActor: 'human' },
+    ] }); renderQuickOpen({ initialTab: 'prompts' }); typeSearch('языками');
+    await screen.findByText(fullText('На русском языке'));
+    const rows = document.querySelectorAll('.prompts-pane .unified-quick-open-item');
+    expect(rows[0].textContent).toContain('Слова языками'); expect(rows[1].querySelector('mark')?.textContent).toBe('языке');
+    expect(api.semanticSearch.query).not.toHaveBeenCalled();
+  });
+  it('finds project names with NFC/case/ё variants and Russian forms', async () => {
+    const api = setupElectronApiMock(), fallback = api.invoke.getMockImplementation()!;
+    api.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'get-recent-workspaces' ? [
+      { path: '/fixtures/приёмка', name: 'Прие\u0308мка интерфейса', timestamp: 2 },
+    ] : fallback(channel, ...args)); renderQuickOpen({ initialTab: 'projects' }); typeSearch('ПРИЕМКА');
+    await screen.findByText(fullText('Прие\u0308мка интерфейса')); typeSearch('интерфейсами');
+    await screen.findByText(fullText('Прие\u0308мка интерфейса')); expect(api.semanticSearch.query).not.toHaveBeenCalled();
+  });
+  it('does not resurrect stale Memory results after clearing the query', async () => {
+    const api = setupElectronApiMock(); api.semanticSearch.isAvailable.mockResolvedValue(true);
+    let resolve!: (value: any) => void; api.semanticSearch.query.mockImplementation(() => new Promise(r => { resolve = r; }));
+    renderQuickOpen({ initialTab: 'search' }); typeSearch('язык');
+    await waitFor(() => expect(api.semanticSearch.query).toHaveBeenCalled()); typeSearch('');
+    await act(async () => resolve([{ refType: 'doc-file', refId: 'old.md', sourceClass: 'docs', sourcePath: 'old.md', title: 'STALE_MEMORY_RESULT', snippet: 'old', score: .1, signals: {dense:true,sparse:false} }]));
+    expect(screen.queryByText('STALE_MEMORY_RESULT')).toBeNull();
+  });
+  it('does not let a slow file response replace the latest query', async () => {
+    setupElectronApiMock(); let resolve!: (value: any) => void;
+    vi.mocked(window.electronAPI.searchWorkspaceFileNames).mockImplementation((_ws: string, q: string) => q === 'old' ? new Promise(r => { resolve = r; }) : Promise.resolve([{ path: WORKSPACE + '/Новый.md', type: 'file' }]));
+    renderQuickOpen({ initialTab: 'files' }); typeSearch('old'); await waitFor(() => expect(resolve).toBeTruthy());
+    typeSearch('новый'); await screen.findByText(fullText('Новый.md'));
+    await act(async () => resolve([{ path: WORKSPACE + '/Старый.md', type: 'file' }]));
+    expect(screen.queryByText('Старый.md')).toBeNull(); expect(screen.getByText(fullText('Новый.md'))).toBeTruthy();
   });
 });
