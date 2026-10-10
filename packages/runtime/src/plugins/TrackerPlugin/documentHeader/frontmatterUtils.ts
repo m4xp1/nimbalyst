@@ -339,6 +339,13 @@ export function updateTrackerInFrontmatter(
     }
   }
 
+  // Older trackerStatus blocks still carry attributes beside type. Moving to
+  // the flat format must preserve them when editing a different field.
+  for (const [key, value] of Object.entries(existingTracker)) {
+    if (key !== 'type' && !Object.prototype.hasOwnProperty.call(frontmatter, key)) {
+      topLevelUpdates[key] = value;
+    }
+  }
   for (const [key, value] of Object.entries(updates)) {
     if (key === 'type') {
       trackerStatusData.type = value;

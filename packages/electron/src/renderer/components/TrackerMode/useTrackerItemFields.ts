@@ -12,12 +12,15 @@ import { getRecordTitle } from '@nimbalyst/runtime/plugins/TrackerPlugin/tracker
 import { reconcileExternalFieldChanges } from './trackerDetailFieldSync';
 import { isLocalWikiRecord } from '../../services/localWikiTrackerRecords';
 import { saveLocalWikiItemFields } from '../../services/localWikiTrackerWrites';
+import { errorNotificationService } from '../../services/ErrorNotificationService';
 
 export interface UseTrackerItemFieldsOptions {
   itemId: string;
   item: TrackerRecord | null | undefined;
   editable: boolean;
   sharing: TrackerSharing;
+  withFileWrite?: (write: () => Promise<void>) => Promise<void>;
+  flushPendingOnNavigation?: boolean;
   /** Called after a field save re-indexed the item's relationships. */
   onRelationshipsReindexed?: () => void;
 }
@@ -27,6 +30,8 @@ export function useTrackerItemFields({
   item,
   editable,
   sharing,
+  withFileWrite,
+  flushPendingOnNavigation = false,
   onRelationshipsReindexed,
 }: UseTrackerItemFieldsOptions) {
   const onReindexedRef = useRef(onRelationshipsReindexed);
@@ -41,6 +46,7 @@ export function useTrackerItemFields({
   // `externalFieldBaselineRef` is the last-reconciled snapshot of persisted
   // values used to detect external writes (NIM-790).
   const fieldSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const pendingUpdatesRef = useRef<Map<string, unknown>>(new Map());
   const pendingFieldsRef = useRef<Set<string>>(new Set());
   const externalFieldBaselineRef = useRef<Record<string, unknown>>({});
 
@@ -89,15 +95,17 @@ export function useTrackerItemFields({
     try {
       if (isLocalWikiRecord(item)) {
         // A Local wiki item is a file; the wiki library writes it and reports a failure.
-        await saveLocalWikiItemFields(item, updates);
+        const write = async () => { if (!(await saveLocalWikiItemFields(item, updates))) throw new Error('Could not save this file’s attributes.'); };
+        if (withFileWrite) await withFileWrite(write); else await write();
         return;
       }
       if ((item.source === 'frontmatter' || item.source === 'import' || item.source === 'inline') && item.system.documentPath) {
         // File-backed items with a real document path: update in source file
-        await window.electronAPI.documentService.updateTrackerItemInFile({
-          itemId: item.id,
-          updates,
-        });
+        const write = async () => {
+          const result = await window.electronAPI.documentService.updateTrackerItemInFile({ itemId: item.id, updates });
+          if (!result.success) throw new Error(result.error || 'Could not save this file’s attributes.');
+        };
+        if (withFileWrite) await withFileWrite(write); else await write();
       } else {
         // Native DB items, or file-backed items whose document_path is missing/empty
         await window.electronAPI.documentService.updateTrackerItem({
@@ -114,19 +122,22 @@ export function useTrackerItemFields({
         .catch(() => {});
     } catch (err) {
       console.error('[TrackerItemDetail] Failed to save field:', err);
+      errorNotificationService.showError('Attribute not saved', err instanceof Error ? err.message : String(err));
     }
-  }, [item?.id, item?.source, editable, sharing]);
+  }, [item?.id, item?.source, editable, sharing, withFileWrite]);
 
   /** Debounced save for a single text field. Per-field timers + pending-field
    *  tracking let the reconciliation effect distinguish "user is editing this
    *  field" from "external write landed" (NIM-790). */
   const debouncedSaveField = useCallback((fieldName: string, value: any) => {
     pendingFieldsRef.current.add(fieldName);
+    pendingUpdatesRef.current.set(fieldName, value);
     const timers = fieldSaveTimersRef.current;
     const existing = timers.get(fieldName);
     if (existing) clearTimeout(existing);
     timers.set(fieldName, setTimeout(async () => {
       timers.delete(fieldName);
+      pendingUpdatesRef.current.delete(fieldName);
       try {
         await saveField({ [fieldName]: value });
       } finally {
@@ -141,8 +152,15 @@ export function useTrackerItemFields({
     return () => {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
+      if (flushPendingOnNavigation) {
+        const updates = Object.fromEntries(pendingUpdatesRef.current);
+        pendingUpdatesRef.current.clear();
+        if (Object.keys(updates).length) void saveField(updates);
+      } else {
+        pendingUpdatesRef.current.clear();
+      }
     };
-  }, []);
+  }, [itemId, saveField, flushPendingOnNavigation]);
 
   /** Handle immediate field change (selects, checkboxes) */
   const handleImmediateFieldChange = useCallback((fieldName: string, value: any) => {

@@ -47,6 +47,8 @@ import { editorExportMenuItems } from '../TabEditor/editorExport';
 import { openPageAncestor } from '../CollabMode/pageHeaderNavigation';
 import { TrackerCollabAvatars, TrackerCollabSyncDot } from './trackerCollabChrome';
 import { HeaderTableOfContents } from '../TabEditor/HeaderTableOfContents';
+import { TrackerFilePageEditor } from './TrackerFilePageEditor';
+import { trackerFilePath, withFlushedTrackerFile } from '../../services/trackerFileEditor';
 
 // Moved to collab-client with the shared layout; re-exported for existing imports.
 export { crumbItemLookup, legacyDescriptionToRecover, trackerPageCrumb, trackerPageCrumbFolders, type TrackerPageCrumb } from '@nimbalyst/collab-client/trackers-ui/page';
@@ -149,8 +151,12 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
 
   const { teamOrgId, teamMembers, teamError, retryTeamLookup } = useTrackerTeam(workspacePath);
   const writeAccess = useMemo(() => resolveTrackerWriteAccess(model), [model]);
-  // Pages hold native items; any other source keeps its fields read-only here.
-  const editable = item ? isNativeItem(item) && writeAccess.canWrite : false;
+  // Every registered type uses its existing write route, including file-backed items.
+  const editable = !!item && !!model && writeAccess.canWrite;
+  const filePath = item && !isNativeItem(item) ? trackerFilePath(item.system.documentPath, workspacePath) : null;
+  const withFileWrite = useCallback(async (write: () => Promise<void>) => {
+    if (filePath) await withFlushedTrackerFile(filePath, write); else await write();
+  }, [filePath]);
 
   const body = useTrackerItemBody({
     itemId,
@@ -169,6 +175,8 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
     item,
     editable,
     sharing: body.sharing,
+    withFileWrite,
+    flushPendingOnNavigation: true,
     onRelationshipsReindexed: bumpLinks,
   });
   const handleRename = useCallback((title: string) => handleTextFieldChange('title', title), [handleTextFieldChange]);
@@ -227,7 +235,7 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
     if (contentMode === 'local-pglite' && localEditorConfig) {
       return (
         <TrackerReferenceSourceProvider value={referenceSource}>
-          <NimbalystEditor key={`${item.id}-${body.externalContentEpoch}`} config={localEditorConfig} />
+          <NimbalystEditor key={`${item.id}-${body.externalContentEpoch}`} config={{ ...localEditorConfig, editable }} />
         </TrackerReferenceSourceProvider>
       );
     }
@@ -240,7 +248,7 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
             </div>
           )}
           <TrackerReferenceSourceProvider value={referenceSource}>
-            <NimbalystEditor key={`collab-${item.id}-${body.providerEpoch}`} config={collabEditorConfig} />
+            <NimbalystEditor key={`collab-${item.id}-${body.providerEpoch}`} config={{ ...collabEditorConfig, editable }} />
           </TrackerReferenceSourceProvider>
         </>
       );
@@ -251,13 +259,10 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
     if (contentMode === 'collaborative' && body.collabLoading) {
       return <div className="tracker-page-view-gutter py-4 text-sm text-nim-faint">Connecting...</div>;
     }
-    if (item.system.documentPath) {
-      // File-backed pages keep their body in the file; Pages mode does not edit it.
-      return (
-        <div className="tracker-page-view-gutter py-4 text-sm text-nim-muted">
-          This page&apos;s body lives in <span className="font-mono">{item.system.documentPath}</span>.
-        </div>
-      );
+    if (filePath) {
+      return <TrackerReferenceSourceProvider value={referenceSource}>
+        <TrackerFilePageEditor key={filePath} filePath={filePath} workspacePath={workspacePath} editable={editable} onSaved={bumpLinks} />
+      </TrackerReferenceSourceProvider>;
     }
     return null;
   };
