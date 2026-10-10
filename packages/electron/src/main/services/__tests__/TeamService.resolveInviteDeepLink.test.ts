@@ -20,7 +20,7 @@ const { accountsMock, authenticatedMock, fetchMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
-  BrowserWindow: class {},
+  BrowserWindow: class { static getAllWindows() { return []; } },
   net: { fetch: fetchMock },
 }));
 

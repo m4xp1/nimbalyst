@@ -21,7 +21,7 @@ const { fetchMock, safeHandleMock, handlers, resolveTeamOrgAccountBindingMock } 
 });
 
 vi.mock('electron', () => ({
-  BrowserWindow: class {},
+  BrowserWindow: class { static getAllWindows() { return []; } },
   net: { fetch: fetchMock },
 }));
 

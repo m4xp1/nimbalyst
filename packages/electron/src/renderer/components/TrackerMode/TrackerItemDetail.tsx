@@ -211,7 +211,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   useRecordTrackerOpened(item?.id, workspacePath);
 
   // Team lookup (orgId for the body mode and the copy link; members for people chips).
-  const { teamOrgId, teamMembers } = useTrackerTeam(workspacePath);
+  const { teamOrgId, teamMembers, teamError, retryTeamLookup } = useTrackerTeam(workspacePath);
 
   const handleCopyLink = useCallback(async () => {
     if (!item || !teamOrgId) return;
@@ -355,6 +355,8 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
     hasRichContent,
     contentMarkdown,
     contentLoaded,
+    contentError,
+    contentSaveError,
     externalContentEpoch,
     collabLoading,
     collabStatus,
@@ -1143,7 +1145,15 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
             key={item.id} description={item.fields.description} currentBody={contentMarkdown} editor={recoveryEditor}
             canInsert={editable && contentLoaded && (contentMode === 'local-pglite' || (contentMode === 'collaborative' && hasSyncedOnce && collabStatus === 'connected'))}
           />}
-          {isLocalWikiRecord(item) && !item.system.documentPath ? (
+          {contentSaveError && <p className="text-sm text-nim-error" role="alert">{contentSaveError} Your edits remain in the editor.</p>}
+          {contentError ? (
+            <p className="text-sm text-nim-error" role="alert">{contentError}</p>
+          ) : contentMode === 'collaborative' && teamError ? (
+            <div className="text-sm text-nim-muted py-4" role="alert">
+              <p>{teamError}</p>
+              <button type="button" className="rounded border border-nim px-2 py-1" onClick={retryTeamLookup}>Retry</button>
+            </div>
+          ) : isLocalWikiRecord(item) && !item.system.documentPath ? (
             <p className="text-sm text-nim-faint m-0" data-testid="tracker-local-wiki-row-no-body">
               A row of a Local wiki table has no page body.
             </p>

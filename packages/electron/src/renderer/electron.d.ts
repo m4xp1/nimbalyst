@@ -297,6 +297,7 @@ interface ElectronAPI {
   onNewUntitledDocument: (callback: (data: { untitledName: string }) => void) => () => void;
 
   // Workspace callbacks
+  onWorkspaceTeamResolutionInvalidated: (callback: (workspacePath?: string) => void) => () => void;
   onWorkspaceOpened: (callback: (data: { workspacePath: string; workspaceName: string; fileTree: FileTreeItem[] }) => void) => () => void;
   onOpenWorkspaceFile: (callback: (filePath: string) => void) => () => void;
   onOpenDocument: (callback: (data: { path: string }) => void) => () => void;

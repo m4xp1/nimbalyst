@@ -147,7 +147,7 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
   useMarkTrackerViewed(item, workspacePath);
   useRecordTrackerOpened(item?.id, workspacePath);
 
-  const { teamOrgId, teamMembers } = useTrackerTeam(workspacePath);
+  const { teamOrgId, teamMembers, teamError, retryTeamLookup } = useTrackerTeam(workspacePath);
   const writeAccess = useMemo(() => resolveTrackerWriteAccess(model), [model]);
   // Pages hold native items; any other source keeps its fields read-only here.
   const editable = item ? isNativeItem(item) && writeAccess.canWrite : false;
@@ -217,6 +217,13 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
 
   const renderBody = () => {
     if (!item) return null;
+    if (body.contentError) return <div className="tracker-page-view-gutter py-4" role="alert">{body.contentError}</div>;
+    if (contentMode === 'collaborative' && teamError) return (
+      <div className="tracker-page-view-gutter py-4 text-sm text-nim-muted" role="alert">
+        <p>{teamError}</p>
+        <button type="button" className="rounded border border-nim px-2 py-1" onClick={retryTeamLookup}>Retry</button>
+      </div>
+    );
     if (contentMode === 'local-pglite' && localEditorConfig) {
       return (
         <TrackerReferenceSourceProvider value={referenceSource}>
@@ -268,7 +275,7 @@ export const TrackerPageView: React.FC<TrackerPageViewProps> = ({
       teamMembers={teamMembers}
       onCreateCollection={handleCreateCollection}
       renderBody={renderBody}
-      beforeBody={item && savedDescription !== null ? (
+      beforeBody={body.contentSaveError ? <div className="tracker-page-view-gutter py-4" role="alert">{body.contentSaveError} Your edits remain in the editor.</div> : item && savedDescription !== null ? (
         <div className="tracker-page-view-gutter">
           <TrackerSavedDescription
             key={item.id} description={savedDescription} currentBody={currentBody} editor={body.recoveryEditor}

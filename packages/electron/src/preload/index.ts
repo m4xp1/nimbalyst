@@ -146,6 +146,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('file-open', callback);
     return () => ipcRenderer.removeListener('file-open', callback);
   },
+  onWorkspaceTeamResolutionInvalidated: (callback: (workspacePath?: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, workspacePath?: string) => callback(workspacePath);
+    ipcRenderer.on('team:workspace-resolution-invalidated', handler);
+    return () => ipcRenderer.removeListener('team:workspace-resolution-invalidated', handler);
+  },
   onWorkspaceOpened: (callback: (data: { workspacePath: string; workspaceName: string; fileTree: any[] }) => void) => {
     const handler = (_event: any, data: any) => callback(data);
     ipcRenderer.on('workspace-opened', handler);

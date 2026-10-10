@@ -42,6 +42,7 @@ import {
   getSessionToken,
   getSessionTokenForAccount,
   isAuthenticated,
+  isAuthRestored,
   refreshPersonalSession,
   refreshPersonalSessionForAccount,
   onAuthStateChange,
@@ -1202,6 +1203,13 @@ export function invalidateListTeamsCache(): void {
   listTeamsCache = null;
   if (listTeamsInFlight) listTeamsInFlightInvalidated = true;
   teamAccountBindingHints.clear();
+  notifyWorkspaceTeamInvalidated();
+}
+
+function notifyWorkspaceTeamInvalidated(workspacePath?: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('team:workspace-resolution-invalidated', workspacePath);
+  }
 }
 
 export interface ListTeamsOptions {
@@ -1400,6 +1408,7 @@ function setLocalOrgBinding(workspacePath: string, orgId: string, teamProjectId?
   updateWorkspaceState(workspacePath, (state) => {
     state.localOrgBinding = teamProjectId ? { orgId, teamProjectId } : { orgId };
   });
+  notifyWorkspaceTeamInvalidated(workspacePath);
 }
 
 /**
@@ -1465,6 +1474,7 @@ export async function findTeamForWorkspace(
 export interface WorkspaceTeamResolution {
   team: TeamDetails | null;
   complete: boolean;
+  authState?: 'restoring' | 'signed-out';
 }
 
 export async function resolveTeamForWorkspace(
@@ -1472,8 +1482,17 @@ export async function resolveTeamForWorkspace(
   precomputedRemote?: GitRemoteIdentities,
 ): Promise<WorkspaceTeamResolution> {
   if (!isAuthenticated()) {
-    // logger.main.info('[TeamService] findTeamForWorkspace: not authenticated');
-    return { team: null, complete: false };
+    const restored = isAuthRestored();
+    // A known team binding remains protected when signed out. Unbound local
+    // cards can open immediately once credential restoration has finished.
+    if (!restored) return { team: null, complete: false, authState: 'restoring' };
+    try {
+      const binding = getWorkspaceStateField(workspacePath, 'localOrgBinding');
+      return { team: null, complete: !binding, authState: 'signed-out' };
+    } catch (error) {
+      logger.main.error('[TeamService] Cannot determine local project binding:', error);
+      return { team: null, complete: false, authState: 'signed-out' };
+    }
   }
 
   const remote = precomputedRemote ?? await getGitRemoteIdentities(workspacePath);
@@ -1600,11 +1619,13 @@ export async function findPendingInviteForEmail(email: string): Promise<TeamDeta
  * failed), so a `null` team means "ask again later", never "this workspace has
  * no organization".
  */
-type FindForWorkspaceResult = { success: true; team: TeamDetails | null; complete: boolean };
+type FindForWorkspaceResult = { success: true } & WorkspaceTeamResolution;
 
 async function findTeamOrPendingInviteForWorkspace(workspacePath: string): Promise<FindForWorkspaceResult> {
   // Try active team match first
-  const { team, complete } = await resolveTeamForWorkspace(workspacePath);
+  const resolution = await resolveTeamForWorkspace(workspacePath);
+  const { team, complete } = resolution;
+  if (resolution.authState) return { success: true, ...resolution };
   if (team) {
     return { success: true, team, complete: true };
   }
