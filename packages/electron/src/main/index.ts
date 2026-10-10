@@ -28,6 +28,7 @@ import {
 import { beginStartupActivation, finishStartupWindowCreation } from './window/StartupActivation';
 import { loadFileIntoWindow } from './file/FileOperations';
 import { createApplicationMenu } from './menu/ApplicationMenu';
+import { installPhysicalShortcuts } from './menu/physicalShortcuts';
 import { updateNativeTheme, updateWindowTitleBars } from './theme/ThemeManager';
 import { restoreSessionState, saveSessionState } from './session/SessionState';
 import { createRestartShutdown } from './session/restartShutdown';
@@ -354,6 +355,11 @@ setAuthCallbackSuccessHandler(async () => {
 // timing relative to the explicit allow-when-granted install in whenReady is
 // not guaranteed — without the guard, deny-always could overwrite that gate
 // and block Voice Mode capture even after the OS grant.
+app.on('browser-window-created', (_event, win) => {
+  const resetModifiers = installPhysicalShortcuts(win.webContents);
+  win.on('blur', resetModifiers);
+});
+
 app.on('session-created', (createdSession) => {
   if (createdSession === session.defaultSession) return;
   installMicrophoneGate(createdSession, {
