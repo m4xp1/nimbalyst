@@ -1,5 +1,4 @@
 import { defineConfig } from '@playwright/test';
-import path from 'node:path';
 // This gate deliberately does not load .env or use the Vite dev server.
 export default defineConfig({
   testDir: './e2e', testMatch: 'russian-quick-open.spec.ts', workers: 1,

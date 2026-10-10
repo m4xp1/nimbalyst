@@ -55,7 +55,12 @@ permissions:
   contents: read
 
 jobs:
+  fork-search:
+    if: github.repository == 'm4xp1/nimbalyst'
+    uses: ./.github/workflows/fork-search-gate.yml
   build:
+    needs: fork-search
+    if: always() && (github.repository != 'm4xp1/nimbalyst' || needs.fork-search.result == 'success')
     strategy:
       # One platform failing must not cancel the others. With fail-fast on, a
       # single red job skipped the `release` job entirely -- leaving the pushed

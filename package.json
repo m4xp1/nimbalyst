@@ -73,7 +73,8 @@
     "check:team-lane-crypto-names": "node scripts/check-team-lane-crypto-names.mjs",
     "check:tracker-policy-reads": "node scripts/check-tracker-policy-reads.mjs",
     "check:analytics-allowlist": "node scripts/check-analytics-allowlist.mjs",
-    "test:cloudflare-sandbox": "pnpm --filter @nimbalyst/cloudflare-sandbox run typecheck && pnpm --filter @nimbalyst/cloudflare-sandbox run test:artifact && node --test packages/cloudflare-sandbox/container/checks/image-pins.test.mjs"
+    "test:cloudflare-sandbox": "pnpm --filter @nimbalyst/cloudflare-sandbox run typecheck && pnpm --filter @nimbalyst/cloudflare-sandbox run test:artifact && node --test packages/cloudflare-sandbox/container/checks/image-pins.test.mjs",
+    "test:fork-search": "vitest run packages/runtime/src/utils/__tests__/russianSearch.test.ts packages/runtime/src/utils/__tests__/fuzzyMatch.test.ts packages/electron/src/main/services/__tests__/russianSessionSearch.test.ts packages/electron/src/main/services/__tests__/PGLiteSessionStore.test.ts packages/electron/src/main/services/__tests__/PGLiteSessionStore.sqliteMetadata.test.ts packages/electron/src/main/database/sqlite/__tests__/SQLiteStoreAdapter.test.ts packages/electron/src/main/utils/__tests__/russianFileContentSearch.test.ts packages/electron/src/renderer/components/__tests__/UnifiedQuickOpen.test.tsx packages/electron/src/renderer/components/UnifiedQuickOpen/__tests__/SearchHighlight.test.tsx"
   },
   "devDependencies": {
     "@babel/plugin-transform-flow-strip-types": "^7.24.7",
