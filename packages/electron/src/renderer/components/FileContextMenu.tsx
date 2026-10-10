@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import type { NewFileType, ExtensionFileType } from './NewFileMenu';
 import { CommonFileActions } from './CommonFileActions';
 import { useFloatingMenu, FloatingPortal, virtualElement } from '../hooks/useFloatingMenu';
-import { historyDialogFileAtom } from '../store';
+import { historyDialogFileAtom, workspaceRootPathsAtom } from '../store';
+import { relativeWorkspacePath } from '../utils/relativeWorkspacePath';
 import { requestConfirmation } from '../dialogs/requestConfirmation';
 
 interface FileContextMenuProps {
@@ -55,6 +56,7 @@ export function FileContextMenu({
   onDetachFolder,
 }: FileContextMenuProps) {
   const openHistoryDialog = useSetAtom(historyDialogFileAtom);
+  const roots = useAtomValue(workspaceRootPathsAtom);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newName, setNewName] = useState(fileName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -280,6 +282,7 @@ export function FileContextMenu({
           menuItemClass={menuItemClasses}
           separatorClass={separatorClasses}
           isDirectory={fileType === 'directory'}
+          relativePath={relativeWorkspacePath(filePath, roots)}
         />
 
         {isWorkspaceRoot ? (
