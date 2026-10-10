@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.80.6+m4xp1.2] - 2026-10-10
+
+### Added
+- Copy a file or folder path relative to its project root from the Files menu.
+- Edit file-backed tracker pages and their attributes directly in Wiki.
+
+### Changed
+- Sessions use sky blue in the Memory Coverage bar and legend.
+- Quick Open supports Russian normalization and additional word forms across all six search tabs.
+
+### Fixed
+- Local database tracker content opens without the long team lookup retry.
+- Modified keyboard shortcuts work across layouts in the app and editors.
+- File tree focus and ordinary selection follow the same current item.
+
 ## [0.80.6] - 2026-10-09
 
 
