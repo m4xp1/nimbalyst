@@ -97,6 +97,7 @@ const SOURCE_CLASS_META: Record<string, { label: string; color: string }> = {
   docs: { label: 'docs', color: '#4ade80' },
   design: { label: 'design', color: '#60a5fa' },
   facts: { label: 'voice-memory facts', color: '#f472b6' },
+  sessions: { label: 'sessions', color: '#38bdf8' },
   claude: { label: 'CLAUDE.md', color: '#fbbf24' },
 };
 const FALLBACK_COLOR = '#808080';
