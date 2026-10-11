@@ -20,7 +20,7 @@ import {
 import { canvasWorkingSetRegistry } from '@nimbalyst/runtime/canvas/canvasPresence';
 import { store } from '@nimbalyst/runtime/store';
 import { DocumentModelRegistry } from '../services/document-model/DocumentModelRegistry';
-import { flushTrackerFileEditors } from '../services/trackerFileEditor';
+import { flushTrackerFileEditors, getOpenTrackerFileModel } from '../services/trackerFileEditor';
 import { aiApi } from '../services/aiApi';
 import { getFileName } from '../utils/pathUtils';
 import { isCollabUri } from '@nimbalyst/collab-protocol';
@@ -260,7 +260,7 @@ export function useIPCHandlers(props: UseIPCHandlersProps) {
     cleanupFns.push(window.electronAPI.on('tracker-file:prepare-write', async ({ filePath, resultChannel }) => {
       try {
         await flushTrackerFileEditors(filePath);
-        const model = DocumentModelRegistry.get(filePath);
+        const model = getOpenTrackerFileModel(filePath);
         if (model?.getState().diffState) throw new Error('Finish reviewing the open file changes before editing this tracker.');
         window.electronAPI.send(resultChannel, { success: true });
       } catch (error) {
