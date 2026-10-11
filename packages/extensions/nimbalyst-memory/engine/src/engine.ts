@@ -17,6 +17,7 @@ import type {
   RetrievalCapabilities,
   SearchHit,
   VirtualRecord,
+  FileRecord,
   SourceSet,
 } from './types.js';
 import { SqliteStore } from './store/sqliteStore.js';
@@ -107,7 +108,7 @@ export class MemoryEngine {
     this.roots = resolveRoots(config.root, config.sources);
     this.indexer = new Indexer(config, store, embedder);
     this.facts = new FactsStore(config.root, config.factsDir);
-    this.retriever = new Retriever(store.loadAll());
+    this.retriever = new Retriever(store.loadAll().filter(chunk => this.indexer.readable(chunk)));
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -145,7 +146,7 @@ export class MemoryEngine {
 
   /** Rebuild the in-memory retrieval snapshot from the store. */
   private refreshSnapshot(): void {
-    this.retriever = new Retriever(this.store.loadAll());
+    this.retriever = new Retriever(this.store.loadAll().filter(chunk => this.indexer.readable(chunk)));
   }
 
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
@@ -233,6 +234,16 @@ export class MemoryEngine {
     const { embedded, changed } = await this.indexer.indexRecords(records);
     if (changed > 0) this.refreshSnapshot();
     return { ingested: embedded };
+  }
+
+  async syncFileRecords(records: FileRecord[], obsoleteIds: string[] = []): Promise<void> {
+    try {
+      for (const id of obsoleteIds) this.store.deleteSource(id);
+      await this.indexer.syncFileRecords(records);
+    } finally {
+      this.refreshSnapshot();
+      this.watcher?.refreshEntityPaths();
+    }
   }
 
   /**

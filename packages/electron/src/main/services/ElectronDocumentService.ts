@@ -3315,7 +3315,8 @@ export class ElectronDocumentService implements DocumentService {
       const existingResult = await database.query<any>(
         `SELECT id, type, line_number, title, data, updated
          FROM tracker_items
-         WHERE workspace = $1 AND document_path = $2`,
+         WHERE workspace = $1 AND document_path = $2
+           AND (source = 'inline' OR (source IS NULL AND line_number IS NOT NULL))`,
         [this.workspacePath, relativePath]
       );
       // console.log(`[DocumentService] Found ${existingResult.rows.length} existing tracker items in database`);

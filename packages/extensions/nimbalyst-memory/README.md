@@ -26,6 +26,8 @@ The next scoped-memory, review-queue, nightly-distillation, and team-sync work i
 
 ## Development
 
+The app catalog registers file-backed trackers by their workspace-relative path. The engine reads the current Markdown and frontmatter into one TRACKER search entity and removes the separate DOCUMENT entry for that path. The ownership manifest stores identifiers and indexing rules, not the body. These cards remain searchable outside ordinary document include masks; explicit exclusions and inaccessible files suppress their indexed content. Removing the card marker restores the ordinary document rules. Chunks and embeddings remain a rebuildable search cache, while tracker tools read and write the original file.
+
 ```sh
 cd engine
 pnpm run build       # tsc → dist/ (produces dist/serve.js)

@@ -18,7 +18,9 @@ import type {
   SourceSet,
   StoredChunk,
   VirtualRecord,
+  FileRecord,
 } from '../types.js';
+import { parseFrontmatter } from '../frontmatter.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
 import { chunkMarkdown } from '../chunker.js';
 import { sha256 } from '../hash.js';
@@ -111,6 +113,10 @@ function pageRowFor(
 }
 
 export class Indexer {
+  private fileRecords = new Map<string, FileRecord>();
+  private validatedFiles = new Set<string>();
+  private entityIds = new Set<string>();
+  private fileLanes = new Map<string, Promise<number>>();
   private roots: ResolvedRoot[];
   private matchers: { sourceClass: string; root: ResolvedRoot; isMatch: (p: string) => boolean }[];
   private isExcluded: (p: string) => boolean;
@@ -134,6 +140,59 @@ export class Indexer {
     this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(expandSourcePatterns(config.workspaceExclude, config.root),{dot:true,nocase:true}) : () => false;
     this.isExcluded = exclude.length ? picomatch(exclude, { dot: true, nocase: true }) : () => false;
     this.ignoreGlobs = exclude;
+    for (const record of this.store.getFileRecords()) {
+      const key = this.entityFileKey(record.file?.path);
+      if (key) this.fileRecords.set(key, record);
+    }
+    this.entityIds = new Set([...this.fileRecords.values()].map(r => r.id));
+  }
+
+  private entityFileKey(ref: string | undefined): string | null {
+    if (!ref || /^[a-z][a-z\d+.-]*:\/\//i.test(ref)) return null;
+    const abs = path.resolve(this.config.root, ref.replace(/[\\/]/g, path.sep));
+    const rel = path.relative(this.config.root, abs);
+    if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+    return process.platform === 'win32' ? abs.toLowerCase() : abs;
+  }
+
+  entityFilePaths(): string[] { return [...this.fileRecords.values()].map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
+
+  readable(chunk: StoredChunk): boolean {
+    return !this.entityIds.has(chunk.sourcePath) || this.validatedFiles.has(chunk.sourcePath);
+  }
+
+  /** Replace the complete ownership manifest; never persist a copy of the file body here. */
+  async syncFileRecords(records: FileRecord[]): Promise<void> {
+    const old = this.fileRecords;
+    this.fileRecords = new Map();
+    for (const record of records) {
+      const key = this.entityFileKey(record.file?.path);
+      if (key) this.fileRecords.set(key, record);
+      else this.store.deleteSource(record.id);
+    }
+    this.store.setFileRecords([...this.fileRecords.values()]);
+    this.entityIds = new Set([...this.fileRecords.values()].map(r => r.id));
+    for (const [key, previous] of old) {
+      if (this.fileRecords.get(key)?.id !== previous.id) {
+        this.store.deleteSource(previous.id);
+        this.validatedFiles.delete(previous.id);
+      }
+    }
+    // Remove old DOCUMENT clones by normalized path, never by their text.
+    for (const sourcePath of this.store.fileSourcePaths()) {
+      try {
+        const { abs } = resolveInRoots(this.roots, sourcePath);
+        const key = this.entityFileKey(abs);
+        if (key && this.fileRecords.has(key)) this.store.deleteSource(sourcePath);
+      } catch { /* An unrelated root's key is not ours to remove. */ }
+    }
+    for (const record of this.fileRecords.values()) await this.indexFile(record.file.path, record.sourceClass);
+    for (const [key, previous] of old) {
+      if (!this.fileRecords.has(key)) {
+        const hit = this.classify(previous.file.path);
+        if (hit) await this.indexFile(hit.sourcePath, hit.sourceClass);
+      }
+    }
   }
 
   /** The configured roots, primary first. */
@@ -161,6 +220,10 @@ export class Indexer {
     for (const set of this.config.sources) {
       const matches = await this.globSet(set);
       for (const sp of matches) if (!seen.has(sp)) seen.set(sp, set.sourceClass);
+    }
+    for (const record of this.fileRecords.values()) {
+      const hit = this.classify(record.file.path);
+      if (hit) seen.set(hit.sourcePath, record.sourceClass);
     }
     return Array.from(seen.entries()).map(([sourcePath, sourceClass]) => ({
       sourcePath,
@@ -231,6 +294,17 @@ export class Indexer {
 
   /** Index a single file by `sourcePath`. Returns the number of chunks (re)embedded. */
   async indexFile(sourcePath: string, sourceClass: string): Promise<number> {
+    const key = this.entityFileKey(sourcePath) ?? sourcePath;
+    const previous = this.fileLanes.get(key) ?? Promise.resolve(0);
+    const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass));
+    this.fileLanes.set(key, next);
+    try { return await next; } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
+  }
+
+  private async indexFileNow(sourcePath: string, sourceClass: string): Promise<number> {
+    const key = this.entityFileKey(sourcePath);
+    const record = key ? this.fileRecords.get(key) : undefined;
+    if (record) return this.indexEntityFile(record);
     let abs: string;
     let root: ResolvedRoot;
     try {
@@ -266,6 +340,49 @@ export class Indexer {
       raw,
       root.id === null ? undefined : { refId: abs }
     );
+  }
+
+  private async indexEntityFile(record: FileRecord): Promise<number> {
+    const abs = path.resolve(this.config.root, record.file.path.replace(/[\\/]/g, path.sep));
+    const rel = path.relative(this.config.root, abs).split(path.sep).join('/');
+    this.validatedFiles.delete(record.id);
+    this.store.deleteSource(rel);
+    let embedding = false;
+    try {
+      if (record.file.disabled || this.isExcluded(rel) || this.isWorkspaceExcluded(rel) || !await isInsideRealRoot(this.config.root, abs)) {
+        this.store.deleteSource(record.id); return 0;
+      }
+      const bytes = await readFile(abs);
+      if (bytes.includes(0)) throw new Error('Binary file body');
+      const raw = new TextDecoder('utf-8', {fatal:true}).decode(bytes).replace(/^\uFEFF/, '');
+      const parsed = parseFrontmatter(raw);
+      const marker = parsed.data[record.file.markerKey];
+      const fields = marker && typeof marker === 'object' && !Array.isArray(marker)
+        ? { ...parsed.data, ...marker as Record<string, unknown> } : null;
+      const type = fields && record.file.typeField ? fields[record.file.typeField] ?? record.file.defaultType : undefined;
+      if (!fields || (record.file.expectedType && type !== record.file.expectedType)) {
+        this.store.deleteSource(record.id);
+        const hit = this.classifyDocument(rel);
+        embedding = true;
+        return hit ? await this.indexContent(hit.sourcePath, hit.sourceClass, raw) : 0;
+      }
+      const metadata = Object.entries(record.file.fields).flatMap(([name,label]) => {
+        const value = fields[name];
+        return value == null || value === '' ? [] : [`${label}: ${Array.isArray(value) ? value.join(', ') : String(value)}`];
+      });
+      const title = typeof fields.title === 'string' ? fields.title : record.title;
+      const text = [title ? `# ${title}` : '', record.text, ...metadata, parsed.body].filter(Boolean).join('\n\n');
+      embedding = true;
+      const count = await this.indexContent(record.id, record.sourceClass, text, {refType:record.refType,refId:record.refId});
+      this.validatedFiles.add(record.id);
+      return count;
+    } catch (error) {
+      this.store.deleteSource(record.id);
+      this.store.deleteSource(rel);
+      if (embedding) throw error;
+      this.config.onLog?.('warn', `[indexer] file entity unavailable: ${rel}`);
+      return 0;
+    }
   }
 
   /**
@@ -392,6 +509,9 @@ export class Indexer {
 
   /** Drop a source file from the index. */
   removeFile(sourcePath: string): void {
+    const key = this.entityFileKey(sourcePath);
+    const record = key ? this.fileRecords.get(key) : undefined;
+    if (record) { this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }
     this.store.deleteSource(sourcePath);
   }
 
@@ -406,6 +526,17 @@ export class Indexer {
    * watcher used to do exactly that.
    */
   classify(relOrAbs: string): { sourceClass: string; sourcePath: string } | null {
+    const key = this.entityFileKey(relOrAbs);
+    const record = key ? this.fileRecords.get(key) : undefined;
+    if (record) {
+      const rel = path.relative(this.config.root, path.resolve(this.config.root, record.file.path.replace(/[\\/]/g, path.sep))).split(path.sep).join('/');
+      // Excluded paths remain watchable so an older body can be evicted.
+      return { sourceClass: record.sourceClass, sourcePath: rel };
+    }
+    return this.classifyDocument(relOrAbs);
+  }
+
+  private classifyDocument(relOrAbs: string): { sourceClass: string; sourcePath: string } | null {
     const located = path.isAbsolute(relOrAbs)
       ? locateAbsolute(this.roots, relOrAbs)
       : parseSourcePath(this.roots, relOrAbs);
