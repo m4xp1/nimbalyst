@@ -1024,10 +1024,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       itemId: string;
       content: any;
       expectedBodyVersion?: number;
+      expectedFileVersion?: string;
     }) => ipcRenderer.invoke('document-service:tracker-item-update-content', payload) as Promise<{ success: boolean; conflict?: boolean; bodyVersion?: number; error?: string }>,
     getTrackerItemContent: (payload: {
       itemId: string;
-    }) => ipcRenderer.invoke('document-service:tracker-item-get-content', payload) as Promise<{ success: boolean; content?: any; error?: string }>,
+    }) => ipcRenderer.invoke('document-service:tracker-item-get-content', payload) as Promise<{ success: boolean; content?: any; filePath?: string; fileVersion?: string; error?: string }>,
     getTrackerBodyCacheForDetail: (payload: {
       itemId: string;
     }) => ipcRenderer.invoke('document-service:get-tracker-body-cache-for-detail', payload) as Promise<{

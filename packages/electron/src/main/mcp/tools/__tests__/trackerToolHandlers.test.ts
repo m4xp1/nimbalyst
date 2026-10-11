@@ -1352,6 +1352,7 @@ describe('handleTrackerGet', () => {
   });
 
   it('reads items through the workspace document service', async () => {
+    Object.assign(mockDocService, { getTrackerItemFileBody: vi.fn(async () => ({ markdown: '# Body' })) });
     mockDocumentServices.set('/tmp/workspace-a', mockDocService);
     mockDocService.getTrackerItemById.mockResolvedValueOnce(
       makeItem({
@@ -2930,9 +2931,9 @@ describe('handleTrackerUpdate description / collab body', () => {
     );
 
     expect(result.isError).toBe(false);
-    expect(mockDocService.updateTrackerItemInFile).toHaveBeenCalledWith(publicId, {
+    expect(mockDocService.updateTrackerItemInFile).toHaveBeenCalledWith(publicId, expect.objectContaining({
       status: 'in-progress',
-    });
+    }));
     const payload = JSON.parse(result.content[0].text!);
     expect(payload.structured.id).toBe(publicId);
     expect(payload.structured.type).toBe('plan');

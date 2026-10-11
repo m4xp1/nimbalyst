@@ -11,8 +11,9 @@ import { globalRegistry } from '@nimbalyst/tracker-schema';
 import { getDatabase } from '../../database/initialize';
 import { getEffectiveTrackerSharingPolicy, shouldSyncTrackerItem } from '../../services/TrackerPolicyService';
 import { isPersonalPageUri, parsePersonalPageUri } from '../../../shared/personalPageUri';
-import { resolveTrackerRowByReference } from './trackerToolItemAccess';
+import { getDocumentServiceForWorkspace, resolveTrackerItemFromDocumentService, resolveTrackerRowByReference } from './trackerToolItemAccess';
 import { rowToTrackerItem } from './trackerToolHandlers';
+import { isFileTracker } from '../../services/tracker/fileTrackerBody';
 
 const TEAM_TYPED_PAGE_PREFIX = 'collab://tracker-content/';
 
@@ -37,13 +38,30 @@ export async function describeTypedPage(itemId: string, workspacePath: string | 
   const db = getDatabase();
   if (!db) return null;
   const row = await resolveTrackerRowByReference(db as any, itemId, workspacePath);
-  if (!row) return null;
+  if (!row) {
+    const { docService } = await getDocumentServiceForWorkspace(workspacePath);
+    const fileItem = await resolveTrackerItemFromDocumentService(docService, itemId);
+    return fileItem && isFileTracker(fileItem) ? { title: String(fileItem.title || itemId), shared: false } : null;
+  }
+  if (isFileTracker(row)) return { title: String(rowToTrackerItem(row).title || itemId), shared: false };
   const item = rowToTrackerItem(row);
   const workspace = row.workspace || workspacePath;
   const shared = workspace
     ? shouldSyncTrackerItem(getEffectiveTrackerSharingPolicy(workspace, row.type, globalRegistry.get(row.type)), item)
     : false;
   return { title: String(item.title || itemId), shared };
+}
+
+/** Both legacy page URI schemes must reach the same authoritative file route. */
+export async function fileTrackerPageUri(uri: string, workspacePath: string | undefined): Promise<string> {
+  const itemId = typedPageItemId(uri);
+  if (!itemId || !workspacePath) return uri;
+  const db = getDatabase();
+  const row = db ? await resolveTrackerRowByReference(db as any, itemId, workspacePath) : null;
+  if (row) return isFileTracker(row) ? `personal://tracker-content/${itemId}` : uri;
+  const { docService } = await getDocumentServiceForWorkspace(workspacePath);
+  const item = await resolveTrackerItemFromDocumentService(docService, itemId);
+  return item && isFileTracker(item) ? `personal://tracker-content/${itemId}` : uri;
 }
 
 /**

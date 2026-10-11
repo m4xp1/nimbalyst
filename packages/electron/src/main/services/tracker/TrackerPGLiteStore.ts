@@ -22,6 +22,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { isFileTracker } from './fileTrackerBody';
 import type { AppDatabase } from '../../database/PGLiteDatabaseWorker';
 import type {
   TrackerItemEnvelope,
@@ -489,7 +490,7 @@ export class TrackerPGLiteStore implements TrackerPersistence {
         toDbBoolean(item.archived),
         item.source || 'native',
         item.sourceRef ?? null,
-        item.content != null ? JSON.stringify(item.content) : null,
+        !isFileTracker(item) && item.content != null ? JSON.stringify(item.content) : null,
         // NIM-1559: honor the sender's authoritative updatedAt instead of
         // stamping NOW() on every accepted delta. A bootstrap/echo re-apply
         // of an unchanged envelope then writes back the SAME timestamp rather
@@ -614,7 +615,7 @@ export class TrackerPGLiteStore implements TrackerPersistence {
         toDbBoolean(item.archived),
         item.source || 'native',
         item.sourceRef ?? null,
-        item.content != null ? JSON.stringify(item.content) : null,
+        !isFileTracker(item) && item.content != null ? JSON.stringify(item.content) : null,
         optimisticUpdatedAtMs,
       ],
     );

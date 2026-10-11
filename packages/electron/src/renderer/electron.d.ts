@@ -816,10 +816,11 @@ interface ElectronAPI {
       content: any;
       /** Write only if the stored body is still at this version; otherwise answer `conflict`. */
       expectedBodyVersion?: number;
+      expectedFileVersion?: string;
     }) => Promise<{ success: boolean; conflict?: boolean; bodyVersion?: number; error?: string }>;
     getTrackerItemContent: (payload: {
       itemId: string;
-    }) => Promise<{ success: boolean; content?: any; error?: string }>;
+    }) => Promise<{ success: boolean; content?: any; filePath?: string; fileVersion?: string; error?: string }>;
     getTrackerBodyCacheForDetail: (payload: {
       itemId: string;
     }) => Promise<{
