@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 <!-- Changes to existing functionality go here -->
 - File-backed tracker cards and agent tools read and save their body in the original Markdown file.
-- Memory Coverage assigns distinct colors to source categories, including orange trackers.
+- Memory Coverage assigns distinct, softer colors to source categories, including orange trackers.
 
 ### Fixed
 <!-- Bug fixes go here -->

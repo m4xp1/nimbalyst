@@ -1,15 +1,15 @@
 export interface CoverageMeta { label: string; color: string }
 
 export const COVERAGE_META: Record<string, CoverageMeta> = {
-  docs: { label: 'docs', color: '#4ade80' },
-  design: { label: 'design', color: '#3b82f6' },
-  plans: { label: 'plans', color: '#a78bfa' },
-  facts: { label: 'voice-memory facts', color: '#f472b6' },
-  sessions: { label: 'sessions', color: '#38bdf8' },
-  trackers: { label: 'trackers', color: '#fb923c' },
-  claude: { label: 'CLAUDE.md', color: '#fbbf24' },
-  rules: { label: 'rules', color: '#f87171' },
-  'harness-memory': { label: 'harness-memory', color: '#2dd4bf' },
+  docs: { label: 'docs', color: '#5ecd87' },
+  design: { label: 'design', color: '#5388df' },
+  plans: { label: 'plans', color: '#a48fe2' },
+  facts: { label: 'voice-memory facts', color: '#de7caf' },
+  sessions: { label: 'sessions', color: '#51b4e0' },
+  trackers: { label: 'trackers', color: '#e39454' },
+  claude: { label: 'CLAUDE.md', color: '#e3b642' },
+  rules: { label: 'rules', color: '#e17b7b' },
+  'harness-memory': { label: 'harness-memory', color: '#48c6b6' },
   custom: { label: 'custom', color: '#808080' },
 };
 
@@ -45,7 +45,7 @@ export function coveragePalette(classes: string[]): Record<string, CoverageMeta>
     let attempt = 0;
     do {
       color = shade((seed % 360 + attempt * 137.508) % 360,
-        0.56 + ((seed + attempt) % 22) / 100, 0.45 + ((seed + attempt * 7) % 22) / 100);
+        0.42 + ((seed + attempt) % 20) / 100, 0.45 + ((seed + attempt * 7) % 22) / 100);
       attempt++;
     } while (used.has(color) || (attempt < 500 && [...used].some(value => distance(color, value) < 55)));
     used.add(color);
