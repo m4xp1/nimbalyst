@@ -15,17 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
-- File-backed tracker cards and agent tools read and save their body in the original Markdown file.
-- Memory Coverage assigns distinct, softer colors to source categories, including orange trackers.
 
 ### Fixed
 <!-- Bug fixes go here -->
-- Preserve project tracker definitions when opening a Markdown editor.
-- Keep one file-backed tracker card when Windows paths use different separators.
-- Show file-backed cards once in Memory as trackers and keep their search content current.
 
 ### Removed
 <!-- Removed features go here -->
+
+## [0.80.6+m4xp1.3] - 2026-10-12
+
+### Changed
+- File-backed cards and agent tools read and save the original Markdown, with one current TRACKER result in Memory.
+- Coverage uses distinct, softer category colors, including orange trackers.
+
+### Fixed
+- Preserve project tracker definitions and keep one file card across Windows path separators.
 
 ## [0.80.6+m4xp1.2] - 2026-10-10
 
