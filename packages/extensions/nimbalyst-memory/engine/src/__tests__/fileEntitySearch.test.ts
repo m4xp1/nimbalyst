@@ -30,7 +30,7 @@ function record(file = 'docs/card.md'): FileRecord {
     file:{path:file,markerKey:'trackerStatus',typeField:'type',expectedType:'idea',defaultType:'plan',fields:{status:'Status',priority:'Priority'}}};
 }
 async function sparse(engine: MemoryEngine, query: string, classes?: string[]) {
-  return (await engine.search(query,100,classes ? {sourceClasses:classes} : undefined)).filter(hit => hit.signals.sparse);
+  return (await engine.search(query,100,classes ? {sourceClasses:classes} : undefined)).filter(hit => hit.signals?.sparse);
 }
 describe('canonical file entity search', () => {
   it('transitions old DOCUMENT and tracker copies to one TRACKER, retaining a standalone database card', async () => {
