@@ -215,13 +215,11 @@ jobs:
           @"
           Nimbalyst $tag for Windows x64, based on upstream v0.80.6.
 
-          - Russian normalization and additional word forms across Files, In Files, Sessions, Prompts, Projects and Memory, with correct highlights and exact-match priority in text search.
-          - Local database tracker content opens without the previous long team lookup retry.
-          - File-backed Wiki tracker pages support editing content and available attributes in the original file.
-          - Keyboard shortcuts work across layouts in application commands and editors.
-          - File tree selection and focus stay aligned; Copy Relative Path is available for files and folders.
-          - Coverage shows sessions in sky blue, distinct from custom sources.
-          - Memory semantic nearest-candidate/RRF behavior and the configured model remain unchanged.
+          - Project tracker schemas remain stable when editors open or workspaces change.
+          - File-backed cards and agent tools read and save the original Markdown; Windows path separators resolve to one card.
+          - Memory keeps one current TRACKER entity per file card and reconciles file changes without a full Rebuild.
+          - Coverage uses distinct, softer category colors, including orange trackers.
+          - Standalone database and published team cards keep their routes; Memory model, semantic policy, RRF and recall remain unchanged.
 
           App/About: $version; Windows FileVersion: $revision. Source commit: $env:GITHUB_SHA.
           Only Windows x64 is built. The installer is unsigned and updates are installed manually.
