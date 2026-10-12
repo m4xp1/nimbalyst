@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.80.6+m4xp1.3] - 2026-10-12
+
+### Changed
+- File-backed cards and agent tools read and save the original Markdown, with one current TRACKER result in Memory.
+- Coverage uses distinct, softer category colors, including orange trackers.
+
+### Fixed
+- Preserve project tracker definitions and keep one file card across Windows path separators.
+
 ## [0.80.6+m4xp1.2] - 2026-10-10
 
 ### Added

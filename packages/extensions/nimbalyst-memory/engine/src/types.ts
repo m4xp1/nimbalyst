@@ -101,6 +101,20 @@ export interface VirtualRecord {
   text: string;
 }
 
+/** An openable entity whose body is read from a primary-workspace file. */
+export interface FileRecord extends VirtualRecord {
+  file: {
+    path: string;
+    disabled?: boolean;
+    markerKey: string;
+    typeField?: string;
+    expectedType?: string;
+    defaultType?: string;
+    /** Frontmatter fields included alongside the body, with display labels. */
+    fields: Record<string, string>;
+  };
+}
+
 /** Identity of the vectors in the store; switching any field forces re-index. */
 export interface EmbedderInfo {
   /** Stable id, e.g. "openai" or "local". */

@@ -15,6 +15,7 @@ import { awaitServerIssueKey } from '../../services/tracker/awaitServerIssueKey'
 import { isLocalIssueKey, resolveDisplayIssueKey } from '../../../shared/localIssueKey';
 import { applyHeadlessBodyMarkdown, initializeHeadlessBodyMarkdown } from '../../services/MainBodyDocService';
 import { initialTrackerBodyCache } from '../../services/tracker/trackerBodySnapshot';
+import { isFileTracker } from '../../services/tracker/fileTrackerBody';
 import { recordTypedPageBodySnapshot } from '../../services/tracker/typedPageBodyHistory';
 import { applyRelationshipFieldWrites } from '../../services/tracker/relationshipFieldWrite';
 import { pinCitedRevisions } from '../../services/tracker/citationPins';
@@ -192,6 +193,14 @@ export function readLinkedTrackerItemIds(rawMetadata: unknown): string[] {
  * - Adds trackerId to session's metadata.linkedTrackerItemIds[]
  * Returns true if any link was actually created (vs already existing).
  */
+async function persistFileSessionLinks(row: any, publicId: string, linkedSessions: string[]): Promise<void> {
+  if (!isFileTracker(row)) return;
+  const { docService } = await getDocumentServiceForWorkspace(row.workspace);
+  if (!docService) throw new Error('The file tracker workspace is unavailable.');
+  // Save the authoritative frontmatter before mutating either database link.
+  await docService.updateTrackerItemInFile(publicId, { linkedSessions });
+}
+
 export async function createBidirectionalLink(
   trackerId: string,
   sessionId: string,
@@ -204,7 +213,7 @@ export async function createBidirectionalLink(
 
   // 1. Add session to tracker item's linkedSessions only for local trackers.
   const trackerResult = await db.query<any>(
-    `SELECT workspace, type, sync_status, data FROM tracker_items WHERE id = $1`,
+    `SELECT * FROM tracker_items WHERE id = $1`,
     [trackerRowId]
   );
   if (trackerResult.rows.length > 0) {
@@ -215,6 +224,7 @@ export async function createBidirectionalLink(
       if (!linkedSessions.includes(sessionId)) {
         linkedSessions.push(sessionId);
         data.linkedSessions = linkedSessions;
+        await persistFileSessionLinks(row, trackerId, linkedSessions);
         await db.query(
           `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
           [JSON.stringify(data), trackerRowId]
@@ -269,7 +279,7 @@ export async function removeBidirectionalLink(
 
   // 1. Remove session from tracker item's linkedSessions only for local trackers.
   const trackerResult = await db.query<any>(
-    `SELECT workspace, type, sync_status, data FROM tracker_items WHERE id = $1`,
+    `SELECT * FROM tracker_items WHERE id = $1`,
     [trackerRowId]
   );
   if (trackerResult.rows.length > 0) {
@@ -279,6 +289,7 @@ export async function removeBidirectionalLink(
       const linkedSessions: string[] = Array.isArray(data.linkedSessions) ? data.linkedSessions : [];
       const nextLinkedSessions = linkedSessions.filter((linkedSessionId) => linkedSessionId !== sessionId);
       if (nextLinkedSessions.length !== linkedSessions.length) {
+        await persistFileSessionLinks(row, trackerId, nextLinkedSessions);
         if (nextLinkedSessions.length > 0) {
           data.linkedSessions = nextLinkedSessions;
         } else {
@@ -390,7 +401,7 @@ export function rowToTrackerItem(row: any): any {
     updated: data.updated || row.updated || undefined,
     dueDate: data.dueDate || undefined,
     lastIndexed: new Date(row.last_indexed),
-    content: row.content != null ? parseTrackerContent(row.content) : undefined,
+    content: !isFileTracker(row) && row.content != null ? parseTrackerContent(row.content) : undefined,
     archived: row.archived ?? false,
     archivedAt: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
     source: row.source || (row.document_path ? 'inline' : 'native'),
@@ -1763,6 +1774,12 @@ export async function handleTrackerGet(
     lines.push(`**Updated**: ${item.updated}`);
     lines.push("");
 
+    // Lists carry only file metadata. A detail read resolves the current file,
+    // including saving pending editor changes, rather than returning a DB copy.
+    if (docService && (item.source === 'frontmatter' || item.source === 'import')) {
+      const file = await docService.getTrackerItemFileBody(item.id, true);
+      if (file) item = { ...item, content: file.markdown };
+    }
     // Include content as markdown
     if (item.content) {
       const content =
@@ -2437,7 +2454,7 @@ export async function handleTrackerUpdate(
         const tooLarge = row ? sharedTrackerItemTooLarge(rowToTrackerItem({ ...row, data: JSON.stringify(data) }), workspacePath) : null;
         if (tooLarge) return tooLargeToShareToolResult('tracker_update', tooLarge);
         if (Object.keys(fileUpdates).length > 0) {
-          await docService.updateTrackerItemInFile(publicTrackerId, fileUpdates);
+          await docService.updateTrackerItemInFile(publicTrackerId, { ...fileUpdates, activity: data.activity, lastModifiedBy: modifierIdentity });
         }
 
         row = await resolveTrackerRowByReference(db, publicTrackerId, workspacePath);
@@ -3361,6 +3378,11 @@ export async function handleTrackerAddComment(
     const { getDatabase } = await import("../../database/initialize");
     const db = getDatabase();
 
+    const { docService } = await getDocumentServiceForWorkspace(workspacePath);
+    const item = await resolveTrackerItemFromDocumentService(docService, args.trackerId);
+    if (item && docService && (item.source === 'frontmatter' || item.source === 'import')) {
+      await docService.ensureTrackerProjection(item.id);
+    }
     // Read existing item
     const row = await resolveTrackerRowByReference(db, args.trackerId, workspacePath);
     if (!row) {
@@ -3400,6 +3422,10 @@ export async function handleTrackerAddComment(
 
     const tooLarge = sharedTrackerItemTooLarge(rowToTrackerItem({ ...row, data: JSON.stringify(data) }), workspacePath);
     if (tooLarge) return tooLargeToShareToolResult('tracker_add_comment', tooLarge);
+    if (isFileTracker(row)) {
+      if (!docService) throw new Error('The file tracker workspace is unavailable.');
+      await docService.updateTrackerItemInFile(item?.id || row.id, { comments, lastModifiedBy: authorIdentity, activity: data.activity });
+    }
     await db.query(
       `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
       [JSON.stringify(data), row.id]

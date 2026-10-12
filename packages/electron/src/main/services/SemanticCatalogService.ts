@@ -21,6 +21,9 @@ import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories
 import { getPrivilegedExtensionHost, type ModuleHandle } from '../extensions/PrivilegedExtensionHost';
 import { documentServices } from '../window/WindowManager';
 import { getAppSetting, setAppSetting } from '../utils/store';
+import * as path from 'node:path';
+import { isFileTracker, readFileTrackerBody } from './tracker/fileTrackerBody';
+import { EXTENSION_OWNED_KEYS, LEGACY_KEY_TO_TYPE } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
 
 const EXT_ID = 'com.nimbalyst.memory';
 const MODULE_ID = 'memory-engine';
@@ -52,6 +55,10 @@ interface VirtualRecord {
   refId: string;
   title?: string;
   text: string;
+}
+
+interface FileRecord extends VirtualRecord {
+  file: { path: string; disabled?: boolean; markerKey: string; typeField?: string; expectedType?: string; defaultType?: string; fields: Record<string,string> };
 }
 
 /** Mirror of the backend `globalSearch` result shape. */
@@ -104,6 +111,7 @@ interface PendingChanges {
   upserts: Map<string, VirtualRecord>;
   removes: Set<string>;
   timer: NodeJS.Timeout | null;
+  fileChanged: boolean;
 }
 
 interface WiredWorkspace {
@@ -164,6 +172,32 @@ function buildTrackerRecord(item: TrackerItem): VirtualRecord {
   };
 }
 
+async function buildFileRecord(workspace: string, item: TrackerItem): Promise<{ record: FileRecord; verified: boolean }> {
+  const prefix: VirtualRecord = {
+    id: `tracker:${item.id}`, sourceClass: 'trackers', refType: 'tracker', refId: item.id,
+    title: item.title || item.issueKey || 'Untitled',
+    text: [item.issueKey, `Type: ${(item.typeTags?.length ? item.typeTags : [item.type]).join(', ')}`].filter(Boolean).join(' · '),
+  };
+  let relativePath = item.sourceRef || item.module || '';
+  let markerKey = 'trackerStatus';
+  let typeField: string | undefined = 'type';
+  let verified = false;
+  try {
+    const file = await readFileTrackerBody(workspace, item);
+    relativePath = file.relativePath;
+    const owned = Object.entries(EXTENSION_OWNED_KEYS).find(([key,type]) => type === item.type && file.frontmatter[key]);
+    const legacy = Object.entries(LEGACY_KEY_TO_TYPE).find(([key,type]) => type === item.type && file.frontmatter[key]);
+    if (owned) { markerKey = owned[0]; typeField = undefined; }
+    else if (!file.frontmatter.trackerStatus && legacy) { markerKey = legacy[0]; typeField = undefined; }
+    verified = true;
+  } catch { /* Keep the binding so the engine evicts unreadable/obsolete bodies. */ }
+  return { verified, record: { ...prefix, file: {
+    path: relativePath.replace(/\\/g, '/'), disabled: !!item.archived, markerKey, typeField,
+    expectedType: typeField ? item.type : undefined, defaultType: 'plan',
+    fields: {status:'Status',priority:'Priority',tags:'Tags',description:'Description'},
+  } } };
+}
+
 /** Heuristic: skip assistant messages whose content is raw tool/structured JSON. */
 function looksLikeJson(text: string): boolean {
   const t = text.trimStart();
@@ -181,6 +215,7 @@ export class SemanticCatalogService {
   private sessionGenerations = new Map<string, number>();
   private sessionErrors = new Map<string, string>();
   private sessionOperations = new Map<string, Promise<void>>();
+  private catalogOperations = new Map<string, Promise<void>>();
 
   static getInstance(): SemanticCatalogService {
     if (!this.instance) this.instance = new SemanticCatalogService();
@@ -358,11 +393,15 @@ export class SemanticCatalogService {
       return;
     }
 
-    const pending: PendingChanges = { upserts: new Map(), removes: new Set(), timer: null };
+    const pending: PendingChanges = { upserts: new Map(), removes: new Set(), timer: null, fileChanged: false };
     const unwatch = docService.watchTrackerItems((change: TrackerItemChangeEvent) => {
       this.enqueueChange(workspacePath, change);
     });
-    this.wired.set(workspacePath, { unwatch, pending });
+    const unwatchFiles = docService.watchDocumentMetadata(() => {
+      pending.fileChanged = true;
+      this.scheduleFlush(workspacePath);
+    });
+    this.wired.set(workspacePath, { unwatch: () => { unwatch(); unwatchFiles(); }, pending });
 
     void this.backfillTrackers(workspacePath);
   }
@@ -376,11 +415,36 @@ export class SemanticCatalogService {
   }
 
   private async backfillTrackers(workspacePath: string): Promise<void> {
+    const prior = this.catalogOperations.get(workspacePath) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(() => this.backfillTrackersNow(workspacePath));
+    this.catalogOperations.set(workspacePath, next);
+    try { await next; } finally { if (this.catalogOperations.get(workspacePath) === next) this.catalogOperations.delete(workspacePath); }
+  }
+
+  private async backfillTrackersNow(workspacePath: string): Promise<void> {
     const docService = documentServices.get(workspacePath);
     if (!docService) return;
     try {
       const items = await docService.listTrackerItems();
-      const records = items.filter((i) => !i.archived).map(buildTrackerRecord);
+      const records = items.filter((i) => !i.archived && !isFileTracker(i)).map(buildTrackerRecord);
+      const files = new Map<string, {record:FileRecord;verified:boolean}>();
+      const fileIds = new Set<string>();
+      for (const item of items.filter(isFileTracker)) {
+        fileIds.add(`tracker:${item.id}`);
+        const candidate = await buildFileRecord(workspacePath, item);
+        const abs = path.resolve(workspacePath, candidate.record.file.path);
+        const key = process.platform === 'win32' ? abs.toLowerCase() : abs;
+        if (!files.get(key)?.verified || candidate.verified) files.set(key, candidate);
+      }
+      const fileRecords = [...files.values()].map(entry => entry.record);
+      const selected = new Set(fileRecords.map(record => record.id));
+      await getPrivilegedExtensionHost().request({
+        extensionId: EXT_ID, moduleId: MODULE_ID, workspacePath, method: 'syncFileRecords',
+        params: { records: fileRecords, obsoleteIds: [...fileIds].filter(id => !selected.has(id)) }, requiredPermission: null,
+      });
+      if (!this.isAvailable(workspacePath)) {
+        this.scheduleReadinessRefresh(workspacePath, this.currentGeneration(workspacePath));
+      }
       for (let i = 0; i < records.length; i += INGEST_BATCH) {
         const batch = records.slice(i, i + INGEST_BATCH);
         await this.ingest(workspacePath, batch);
@@ -399,6 +463,10 @@ export class SemanticCatalogService {
     const { upserts, removes } = entry.pending;
     for (const item of [...change.added, ...change.updated]) {
       const recordId = `tracker:${item.id}`;
+      if (isFileTracker(item)) {
+        upserts.delete(recordId); removes.delete(recordId); entry.pending.fileChanged = true;
+        continue;
+      }
       if (item.archived) {
         upserts.delete(recordId);
         removes.add(recordId);
@@ -408,6 +476,7 @@ export class SemanticCatalogService {
       }
     }
     for (const id of change.removed) {
+      entry.pending.fileChanged = true;
       const recordId = `tracker:${id}`;
       upserts.delete(recordId);
       removes.add(recordId);
@@ -428,19 +497,26 @@ export class SemanticCatalogService {
     const { upserts, removes } = entry.pending;
     const records = Array.from(upserts.values());
     const ids = Array.from(removes);
+    const fileChanged = entry.pending.fileChanged;
+    entry.pending.fileChanged = false;
     upserts.clear();
     removes.clear();
     entry.pending.timer = null;
 
     try {
+      if (fileChanged) await this.backfillTrackers(workspacePath);
       if (records.length) await this.ingest(workspacePath, records);
       if (ids.length) {
+        // A queued removal can be followed by recreation during the backfill.
+        // Do not erase the freshly indexed entity from that newer snapshot.
+        const current = await documentServices.get(workspacePath)?.listTrackerItems();
+        const active = new Set(current?.filter(item => !item.archived).map(item => `tracker:${item.id}`));
         await getPrivilegedExtensionHost().request({
           extensionId: EXT_ID,
           moduleId: MODULE_ID,
           workspacePath,
           method: 'removeRecords',
-          params: { ids },
+          params: { ids: ids.filter(id => !active.has(id)) },
           requiredPermission: null,
         });
       }

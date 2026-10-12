@@ -15,6 +15,7 @@ import { deriveRelationshipEdges } from '@nimbalyst/runtime/plugins/TrackerPlugi
 import { getDatabase } from '../../database/initialize';
 import { logger } from '../../utils/logger';
 import { flattenDataForRead } from './relationshipFieldStorage';
+import { isFileTracker, readFileTrackerBody } from './fileTrackerBody';
 import {
   BODY_LINK_FIELD_PREFIX,
   bodyLinkHomeScope,
@@ -392,7 +393,7 @@ async function rebuildWorkspaceIndexOrThrow(
 ): Promise<number> {
   // Tombstoned items (remote deletes keep the row) are neither sources nor targets.
   const result = await db.query(
-    `SELECT t.id, t.type, t.data, t.content, t.issue_key, t.updated, t.sync_id, c.content AS cached_content
+    `SELECT t.id, t.type, t.data, t.content, t.issue_key, t.updated, t.sync_id, t.source, t.source_ref, t.document_path, c.content AS cached_content
        FROM tracker_items t
        LEFT JOIN tracker_body_cache c ON c.item_id = t.id AND c.body_version = t.body_version
       WHERE t.workspace = $1 AND t.deleted_at IS NULL`,
@@ -412,9 +413,14 @@ async function rebuildWorkspaceIndexOrThrow(
   for (const row of rows) {
     const data = parseMeta(row.data);
     const defs = fieldDefsFor(row.type) ?? [];
+    let body = newestBodyOf(row);
+    if (isFileTracker(row)) {
+      try { body = (await readFileTrackerBody(workspace, row)).markdown; }
+      catch { body = null; } // Missing file never falls back to its old DB body.
+    }
     const edges = [
       ...deriveRelationshipEdges(row.id, flattenDataForRead(data), defs),
-      ...deriveBodyLinkEdges(row.id, bodyMarkdownOf(newestBodyOf(row)), (key) => targets.get(key)),
+      ...deriveBodyLinkEdges(row.id, bodyMarkdownOf(body), (key) => targets.get(key)),
     ];
     if (edges.length === 0) continue;
     const updatedAt = trackerRowUpdatedToIso(row.updated);

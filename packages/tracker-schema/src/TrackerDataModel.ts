@@ -441,12 +441,17 @@ export class TrackerDataModelRegistry {
   private workspaceLabelLayers: Map<string, LabelRegistry> = new Map();
 
   register(model: TrackerDataModel | DerivedTrackerTypeDeclaration, builtin = false): void {
+    // Editor modules can seed the registry again after project schemas loaded.
+    // A seed is a fallback, never a replacement for a workspace override.
+    if (builtin && this.builtinTypes.has(model.type)) return;
     if (isDerivedTrackerTypeDeclaration(model)) {
       this.registerDerived(model, builtin);
       return;
     }
     const normalized = ensureTagsSupport(model);
-    this.models.set(normalized.type, normalized);
+    if (!builtin || (!this.models.has(normalized.type) && !this.declarations.has(normalized.type))) {
+      this.models.set(normalized.type, normalized);
+    }
     if (builtin) {
       this.builtinTypes.add(normalized.type);
       this.builtinModels.set(normalized.type, normalized);

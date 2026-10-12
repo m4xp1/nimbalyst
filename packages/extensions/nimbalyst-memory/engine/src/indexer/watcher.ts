@@ -120,7 +120,7 @@ export class IndexWatcher {
 
   start(): void {
     if (this.watcher) return;
-    const targets = this.resolveWatchTargets();
+    const targets = [...this.resolveWatchTargets(), ...this.indexer.entityFilePaths()];
     this.stopped = false;
     if (
       targets.length === 0 &&
@@ -132,7 +132,7 @@ export class IndexWatcher {
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     });
-    if (this.config.sources.some((s) => s.sourceClass === "custom")) {
+    if (this.config.sources.some((s) => s.sourceClass === "custom") || this.indexer.entityFilePaths().length) {
       void this.discover();
       this.discoveryTimer = setInterval(() => void this.discover(), 3000);
     }
@@ -141,6 +141,15 @@ export class IndexWatcher {
       .on("change", (p) => this.queue(p, "upsert"))
       .on("unlink", (p) => this.queue(p, "remove"))
       .on("error", error => this.onError(error));
+  }
+
+  refreshEntityPaths(): void {
+    if (!this.watcher) { this.start(); return; }
+    this.watcher.add(this.indexer.entityFilePaths());
+    if (!this.discoveryTimer && this.indexer.entityFilePaths().length) {
+      void this.discover();
+      this.discoveryTimer = setInterval(() => void this.discover(), 3000);
+    }
   }
 
   /**

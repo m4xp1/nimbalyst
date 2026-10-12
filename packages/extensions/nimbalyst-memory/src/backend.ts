@@ -28,7 +28,7 @@ import {
   safeIndexError,
   normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
 } from '../engine/dist/index.js';
-import type { EngineConfig, SearchHit, VirtualRecord } from '../engine/dist/index.js';
+import type { EngineConfig, SearchHit, VirtualRecord, FileRecord } from '../engine/dist/index.js';
 // The write gate. It runs on the LIVE `remember` path below rather than at
 // export time, because a credential is already a problem once it is on disk in
 // a fact file — waiting for the phase 4 replica to filter it would mean every
@@ -576,6 +576,12 @@ export async function activate(ctx: ActivateCtx) {
         const records = Array.isArray(params?.records) ? params.records : [];
         if (!records.length) return { ingested: 0 };
         return requireEngine().ingestRecords(records);
+      },
+
+      /** Host-only: canonical file entities; ordinary document clones are removed by path. */
+      syncFileRecords: async (params: { records?: FileRecord[]; obsoleteIds?: string[] }) => {
+        await requireEngine().syncFileRecords(Array.isArray(params.records) ? params.records : [], params.obsoleteIds ?? []);
+        return { synced: params.records?.length ?? 0 };
       },
 
       /** Host-only: remove persisted sessions without consulting the host DB. */

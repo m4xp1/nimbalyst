@@ -188,6 +188,17 @@ export class SqliteStore {
     return rows.map((r) => r.source_path);
   }
 
+  getFileRecords(): import('../types.js').FileRecord[] {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'file_records'").get() as { value: string } | undefined;
+    if (!row) return [];
+    try { const records = JSON.parse(row.value); return Array.isArray(records) ? records : []; } catch { return []; }
+  }
+
+  setFileRecords(records: import('../types.js').FileRecord[]): void {
+    this.db.prepare("INSERT INTO meta(key,value) VALUES('file_records',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify(records));
+  }
+
   /**
    * Source paths backed by on-disk files only (`ref_type='doc-file'`). The file
    * index pass prunes against THIS list, never against virtual records (trackers,

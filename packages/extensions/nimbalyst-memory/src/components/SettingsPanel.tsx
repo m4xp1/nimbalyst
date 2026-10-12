@@ -18,6 +18,7 @@ import type { SettingsPanelProps } from '@nimbalyst/runtime';
 import { SourceSettings } from './SourceSettings';
 import type { FileIndexStatus, SafeIndexError } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
+import { coveragePalette } from './coveragePalette';
 
 interface IndexStatus {
   ready?: boolean;
@@ -89,21 +90,6 @@ interface SearchHit {
   text: string;
   score: number;
   signals?: { dense: boolean; sparse: boolean };
-}
-
-/** Display label + accent for each known source class (coverage breakdown). */
-const SOURCE_CLASS_META: Record<string, { label: string; color: string }> = {
-  plans: { label: 'plans', color: '#a78bfa' },
-  docs: { label: 'docs', color: '#4ade80' },
-  design: { label: 'design', color: '#60a5fa' },
-  facts: { label: 'voice-memory facts', color: '#f472b6' },
-  sessions: { label: 'sessions', color: '#38bdf8' },
-  claude: { label: 'CLAUDE.md', color: '#fbbf24' },
-};
-const FALLBACK_COLOR = '#808080';
-
-function metaFor(cls: string): { label: string; color: string } {
-  return SOURCE_CLASS_META[cls] ?? { label: cls, color: FALLBACK_COLOR };
 }
 
 function formatBytes(n: number | undefined): string {
@@ -478,10 +464,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
     return 'Keyword search only';
   })();
   const breakdown = useMemo(
-    () =>
-      Object.entries(bySourceClass)
-        .map(([cls, n]) => ({ cls, n, ...metaFor(cls) }))
-        .sort((a, b) => b.n - a.n),
+    () => {
+      const palette = coveragePalette(Object.keys(bySourceClass));
+      return Object.entries(bySourceClass)
+        .map(([cls, n]) => ({ cls, n, ...palette[cls] }))
+        .sort((a, b) => b.n - a.n);
+    },
     [bySourceClass]
   );
 

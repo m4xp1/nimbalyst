@@ -45,6 +45,10 @@ import {
   writeStoredFieldValue,
 } from './tracker/relationshipFieldStorage';
 import { projectionWouldChange } from './tracker/projectionUpdateGuard';
+import { isFileTracker, readFileTrackerBody, resolveFileTrackerPath, splitTrackerMarkdown, withFileTrackerWrite, writeFileTrackerSnapshot, FileTrackerConflictError, type FileTrackerBody } from './tracker/fileTrackerBody';
+import { prepareFileTrackerEditor } from './tracker/fileTrackerEditorBridge';
+import { clearLegacyFileTrackerBody } from './tracker/fileTrackerProjectionRecovery';
+import { runWhenFirstUsable } from './startupMaintenanceGate';
 import { assignLocalKeysToRows } from './tracker/localKeyAllocator';
 import { typeHasLocalNumbers } from './tracker/localNumberTypes';
 import { workspaceLocalKeyStore } from './tracker/workspaceLocalKeyStore';
@@ -446,6 +450,8 @@ export class ElectronDocumentService implements DocumentService {
   private static readonly MAX_DEPTH = 8;              // Maximum directory depth
 
   private isScanning = false; // Prevent concurrent scans
+  private fileBodyMaintenanceScheduled = false;
+  private disposed = false;
   /** Whether the most recent scan stopped early (hit the time/file/depth cap). */
   private lastScanStoppedEarly = false;
   /** Guards against scheduling more than one background completion pass. */
@@ -567,6 +573,55 @@ export class ElectronDocumentService implements DocumentService {
     // the extended pass itself (avoid an endless loop if even 120s isn't enough).
     if (!isExtendedPass) {
       this.scheduleExtendedScanIfNeeded();
+    }
+    this.scheduleFileBodyMaintenance();
+  }
+
+  private scheduleFileBodyMaintenance(): void {
+    if (this.fileBodyMaintenanceScheduled || this.disposed) return;
+    this.fileBodyMaintenanceScheduled = true;
+    runWhenFirstUsable(`file-tracker-body:${this.workspacePath}`, async () => {
+      let cursor = '';
+      let retryNeeded = false;
+      while (!this.disposed) {
+        let result;
+        try {
+          result = await database.query<any>(
+            "SELECT * FROM tracker_items WHERE workspace = $1 AND source IN ('frontmatter', 'import') AND id > $2 ORDER BY id LIMIT 32",
+            [this.workspacePath, cursor],
+          );
+        } catch (error) {
+          this.fileBodyMaintenanceScheduled = false;
+          throw error;
+        }
+        if (!result.rows.length) break;
+        for (const row of result.rows) {
+          cursor = row.id;
+          if (this.disposed) return;
+          if (!isFileTracker(row)) continue;
+          try {
+            const file = await readFileTrackerBody(this.workspacePath, row);
+            await clearLegacyFileTrackerBody(database, row, file);
+          } catch (error) {
+            retryNeeded = true;
+            console.warn('[DocumentService] File tracker body cleanup deferred:', row.id, error instanceof Error ? error.message : String(error));
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      if (retryNeeded) this.fileBodyMaintenanceScheduled = false;
+    });
+  }
+
+  /** Body-link queries need metadata rows even for never-opened file cards. */
+  async ensureFileTrackerProjections(workspace = this.workspacePath): Promise<void> {
+    if (workspace !== this.workspacePath) return;
+    await this.ensureInitialized();
+    for (const item of await this.listFullDocumentTrackerItemsFromMetadata()) {
+      const parsed = parseFullDocumentTrackerId(item.id);
+      if (parsed && !(await this.findRowForFrontmatterFile(parsed.relativePath, parsed.trackerType))) {
+        await this.ensureFrontmatterProjectionRow(parsed.relativePath, parsed.trackerType);
+      }
     }
   }
 
@@ -1406,8 +1461,8 @@ export class ElectronDocumentService implements DocumentService {
           source: existing.source,
           sourceRef: existing.sourceRef,
           customFields: {
-            ...(existing.customFields || {}),
             ...(item.customFields || {}),
+            ...(existing.customFields || {}),
           },
         });
       } else {
@@ -1495,7 +1550,7 @@ export class ElectronDocumentService implements DocumentService {
         workspacePath: this.workspacePath,
         parseTrackerContentColumn,
         rowToTrackerItem: row => this.rowToTrackerItem(row),
-        updateTrackerItemContent: (itemId, content) => this.updateTrackerItemContent(itemId, content),
+        updateTrackerItemContent: (itemId, content) => this.updateTrackerItemContent(itemId, content, undefined, undefined, true),
       },
       options,
     );
@@ -1507,14 +1562,7 @@ export class ElectronDocumentService implements DocumentService {
   ): Promise<TrackerItem | null> {
     if (isExcludedFromTrackerProjection(relativePath)) return null;
     if (isInLocalWikiFolder(relativePath, localWikiFolderWithin(this.workspacePath))) return null;
-    const fullPath = path.join(this.workspacePath, relativePath);
-
-    let fileContent: string;
-    try {
-      fileContent = await fs.readFile(fullPath, 'utf-8');
-    } catch {
-      return null;
-    }
+    const fullPath = await resolveFileTrackerPath(this.workspacePath, { source_ref: relativePath });
 
     const { data: frontmatter } = await extractFrontmatter(fullPath);
     if (!frontmatter) return null;
@@ -1533,7 +1581,7 @@ export class ElectronDocumentService implements DocumentService {
     // A promoted file is an inert origin: its content and fields now live in the
     // shared item. Re-projecting would overwrite a teammate's edits with the
     // stale local file, so the scan stops here.
-    if (this.isPromotedTrackerRow(existing, declaredId)) {
+    if (this.isPromotedTrackerRow(existing, declaredId) || (existing && !isFileTracker(existing))) {
       // W4-C: older promoted files may still contain their pre-share body and
       // share flag. Collapse them to the same provenance-only shape as newly
       // published plans -- but `body_version` is only the cheap pre-filter here,
@@ -1545,8 +1593,8 @@ export class ElectronDocumentService implements DocumentService {
       return this.rowToTrackerItem(existing);
     }
 
-    const bodyMatch = fileContent.match(/^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)$/);
-    const markdownBody = bodyMatch ? bodyMatch[1].trim() : '';
+    const fileBody = await readFileTrackerBody(this.workspacePath, { source: 'frontmatter', source_ref: relativePath, type: resolved.trackerType });
+    if (existing) await clearLegacyFileTrackerBody(database, existing, fileBody);
     // A file whose `trackerId` names an item this workspace has returned above.
     // Here the id names nothing we hold: a test fixture, a copied file, or a
     // clone whose items have not synced down yet. Binding a native row to it
@@ -1555,7 +1603,8 @@ export class ElectronDocumentService implements DocumentService {
     const canonicalId = buildFullDocumentTrackerId(resolved.trackerType, relativePath);
     const source = 'frontmatter';
 
-    const data: Record<string, any> = { title };
+    const previousData = typeof existing?.data === 'string' ? JSON.parse(existing.data) : existing?.data;
+    const data: Record<string, any> = { ...(previousData || {}), title };
     for (const [key, value] of Object.entries(resolved.trackerData)) {
       if (key === 'type' || key === 'trackerStatus' || key === 'trackerId') continue;
       if (value !== undefined && value !== null) {
@@ -1570,7 +1619,7 @@ export class ElectronDocumentService implements DocumentService {
          WHERE id = $4`,
         [
           JSON.stringify(data),
-          markdownBody ? JSON.stringify(markdownBody) : null,
+          null,
           relativePath,
           existing.id,
           source,
@@ -1599,7 +1648,7 @@ export class ElectronDocumentService implements DocumentService {
         JSON.stringify(data),
         this.workspacePath,
         relativePath,
-        markdownBody ? JSON.stringify(markdownBody) : null,
+        null,
         source,
       ]
     );
@@ -1777,7 +1826,7 @@ export class ElectronDocumentService implements DocumentService {
       {
         workspacePath: this.workspacePath,
         rowToTrackerItem: row => this.rowToTrackerItem(row),
-        updateTrackerItemContent: (itemId, content) => this.updateTrackerItemContent(itemId, content),
+        updateTrackerItemContent: (itemId, content) => this.updateTrackerItemContent(itemId, content, undefined, undefined, true),
       },
       item,
       rowId,
@@ -1935,7 +1984,7 @@ export class ElectronDocumentService implements DocumentService {
       lastIndexed: new Date(row.last_indexed),
       // Rich content (Lexical editor state). Stored as JSON.stringify(markdown);
       // undo that on read or the raw JSON-quoted string renders as literal text.
-      content: row.content != null ? parseTrackerContentColumn(row.content) : undefined,
+      content: !isFileTracker(row) && row.content != null ? parseTrackerContentColumn(row.content) : undefined,
       // Archive state
       archived: fromDbBoolean(row.archived),
       archivedAt: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
@@ -1978,7 +2027,9 @@ export class ElectronDocumentService implements DocumentService {
    */
   async getTrackerItemById(itemId: string): Promise<TrackerItem | null> {
     const merged = await this.listMergedTrackerItems();
-    const found = merged.find(item => item.id === itemId);
+    const parsed = parseFullDocumentTrackerId(itemId);
+    const publicId = parsed ? buildFullDocumentTrackerId(parsed.trackerType, parsed.relativePath) : itemId;
+    const found = merged.find(item => item.id === publicId);
     if (found) return found;
 
     const row = await this.resolveTrackerRowForPublicId(itemId);
@@ -2039,6 +2090,10 @@ export class ElectronDocumentService implements DocumentService {
     const row = await this.resolveTrackerRowForPublicId(itemId, { createProjectionForFullDocument: true });
     if (!row) {
       throw new Error(`Tracker item not found: ${itemId}`);
+    }
+    if (isFileTracker(row)) {
+      options.beforeWrite?.({ ...this.rowToTrackerItem(row), ...updates });
+      return this.updateTrackerItemInFile(itemId, updates);
     }
     const data = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
 
@@ -2211,7 +2266,7 @@ export class ElectronDocumentService implements DocumentService {
         {
           workspacePath: this.workspacePath,
           rowToTrackerItem: candidate => this.rowToTrackerItem(candidate),
-          updateTrackerItemContent: (candidateId, content) => this.updateTrackerItemContent(candidateId, content),
+          updateTrackerItemContent: (candidateId, content) => this.updateTrackerItemContent(candidateId, content, undefined, undefined, true),
           promoteFileBackedTrackerRow: candidate => this.promoteFileBackedTrackerRow(candidate),
           demoteFileBackedTrackerRow: candidate => this.demoteFileBackedTrackerRow(candidate),
           reconcileFrontmatterShare: (item, rowId, relativePath, nowShared) =>
@@ -2342,10 +2397,18 @@ export class ElectronDocumentService implements DocumentService {
    * still that value, and otherwise throws `TrackerBodyVersionConflictError`
    * carrying the current version. Without it the write is unconditional.
    */
-  async updateTrackerItemContent(itemId: string, content: any, expectedBodyVersion?: number): Promise<void> {
+  async updateTrackerItemContent(itemId: string, content: any, expectedBodyVersion?: number, expectedFileVersion?: string, publication = false): Promise<void> {
     const row = await this.resolveTrackerRowForPublicId(itemId, { createProjectionForFullDocument: true });
     if (!row) {
       throw new Error(`Tracker item not found: ${itemId}`);
+    }
+    if (!publication && isFileTracker(row)) {
+      if (typeof content !== 'string') throw new Error('A file-backed tracker body must be Markdown text.');
+      if (expectedBodyVersion !== undefined && !expectedFileVersion) {
+        throw new Error('Read the file version before changing a file-backed tracker body.');
+      }
+      await this.updateTrackerItemInFile(itemId, { description: content }, expectedFileVersion);
+      return;
     }
     const contentJson = content != null ? JSON.stringify(content) : null;
     if (trackerContentMatches(row.content, content, contentJson)) {
@@ -2501,6 +2564,7 @@ export class ElectronDocumentService implements DocumentService {
   async getTrackerBodyCacheLatest(itemId: string): Promise<{ bodyVersion: number; content: any } | null> {
     const trackerRow = await this.resolveTrackerRowForPublicId(itemId);
     if (!trackerRow) return null;
+    if (isFileTracker(trackerRow)) return null;
     const result = await database.query<{ body_version: string | number | null; content: string | null }>(
       `SELECT t.body_version, c.content
          FROM tracker_items t
@@ -2528,6 +2592,8 @@ export class ElectronDocumentService implements DocumentService {
    * Get the rich content (Lexical editor state) of a tracker item.
    */
   async getTrackerItemContent(itemId: string): Promise<any | null> {
+    const file = await this.getTrackerItemFileBody(itemId);
+    if (file) return file.markdown;
     const row = await this.resolveTrackerRowForPublicId(itemId);
     if (!row) return null;
     const result = await database.query<any>(
@@ -2537,6 +2603,21 @@ export class ElectronDocumentService implements DocumentService {
     if (result.rows.length === 0) return null;
     const raw = result.rows[0].content;
     return raw != null ? parseTrackerContentColumn(raw) : null;
+  }
+
+  /** Fresh file body for agents/indexers; never attach this to cached item lists. */
+  async getTrackerItemFileBody(itemId: string, prepareEditor = false): Promise<FileTrackerBody | null> {
+    const row = await this.resolveTrackerRowForPublicId(itemId);
+    const parsed = parseFullDocumentTrackerId(itemId);
+    const identity = row ?? (parsed ? { id: itemId, workspace: this.workspacePath, source: 'frontmatter', source_ref: parsed.relativePath, type: parsed.trackerType } : null);
+    if (!identity || !isFileTracker(identity)) return null;
+    if (prepareEditor) {
+      const filePath = await resolveFileTrackerPath(this.workspacePath, identity);
+      await prepareFileTrackerEditor(this.workspacePath, filePath);
+    }
+    const file = await readFileTrackerBody(this.workspacePath, identity);
+    if (row) await clearLegacyFileTrackerBody(database, row, file);
+    return file;
   }
 
   /**
@@ -2676,7 +2757,17 @@ export class ElectronDocumentService implements DocumentService {
    * Update a file-backed tracker item by writing field changes back to the file.
    * Handles both frontmatter-based items (YAML) and inline items (#type[...]).
    */
-  async updateTrackerItemInFile(itemId: string, updates: Record<string, any>): Promise<TrackerItem> {
+  async updateTrackerItemInFile(itemId: string, updates: Record<string, any>, expectedFileVersion?: string): Promise<TrackerItem> {
+    const row = await this.resolveTrackerRowForPublicId(itemId);
+    const parsed = parseFullDocumentTrackerId(itemId);
+    const identity = row ?? (parsed ? { source: 'frontmatter', source_ref: parsed.relativePath, type: parsed.trackerType } : null);
+    if (!identity || (!isFileTracker(identity) && identity.source !== 'inline')) throw new Error('This tracker has no editable file source.');
+    const filePath = await resolveFileTrackerPath(this.workspacePath, identity);
+    await prepareFileTrackerEditor(this.workspacePath, filePath);
+    return withFileTrackerWrite(filePath, () => this.updateTrackerItemInFileNow(itemId, updates, expectedFileVersion));
+  }
+
+  private async updateTrackerItemInFileNow(itemId: string, updates: Record<string, any>, expectedFileVersion?: string): Promise<TrackerItem> {
     let row = await this.resolveTrackerRowForPublicId(itemId, { createProjectionForFullDocument: false });
     const parsedFullDocumentId = parseFullDocumentTrackerId(itemId);
     if (!row && parsedFullDocumentId
@@ -2716,21 +2807,11 @@ export class ElectronDocumentService implements DocumentService {
       throw new Error(`Item ${itemId} has no source file reference`);
     }
 
-    const fullPath = path.join(this.workspacePath, relativePath);
-
-    // Read current file content -- if the source file was deleted, fall through
-    // to a DB-only update (no file to write back to)
-    let fileContent: string | null = null;
-    try {
-      fileContent = await fs.readFile(fullPath, 'utf-8');
-    } catch (err: any) {
-      if (err?.code === 'ENOENT') {
-        // Source file was deleted -- we'll just update the DB below
-        // console.log(`[DocumentService] Source file ${relativePath} no longer exists, updating DB only`);
-      } else {
-        throw new Error(`Failed to read source file: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    const fullPath = await resolveFileTrackerPath(this.workspacePath, row);
+    const snapshot = isFileTracker(row) ? await readFileTrackerBody(this.workspacePath, row) : null;
+    if (expectedFileVersion && snapshot?.version !== expectedFileVersion) throw new FileTrackerConflictError();
+    const fileContent = snapshot?.text ?? await fs.readFile(fullPath, 'utf-8');
+    if (snapshot && row.id) await clearLegacyFileTrackerBody(database, row, snapshot);
 
     if (fileContent !== null) {
       let updatedContent: string;
@@ -2753,20 +2834,15 @@ export class ElectronDocumentService implements DocumentService {
           : fileContent;
         if (description !== undefined) {
           const normalizedBody = typeof description === 'string'
-            ? description.replace(/\\n/g, '\n')
+            ? description
             : String(description ?? '');
-          const frontmatterRegex = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
-          const frontmatterMatch = updatedContent.match(frontmatterRegex);
-          if (frontmatterMatch) {
-            updatedContent = `${frontmatterMatch[0]}${normalizedBody}${normalizedBody.endsWith('\n') ? '' : '\n'}`;
-          } else {
-            updatedContent = normalizedBody;
-          }
+          updatedContent = `${splitTrackerMarkdown(updatedContent).header}${normalizedBody}`;
         }
       }
 
       // Write back
-      await fs.writeFile(fullPath, updatedContent, 'utf-8');
+      if (snapshot) await writeFileTrackerSnapshot(snapshot, updatedContent, expectedFileVersion);
+      else await fs.writeFile(fullPath, updatedContent, 'utf-8');
     }
 
     // Also update the database row so the UI reflects changes immediately
@@ -2785,30 +2861,18 @@ export class ElectronDocumentService implements DocumentService {
         writtenFields: Object.keys(fileUpdates),
       });
       const normalizedDescription = typeof fileUpdates.description === 'string'
-        ? fileUpdates.description.replace(/\\n/g, '\n')
+        ? fileUpdates.description
         : undefined;
       if ((source === 'frontmatter' || source === 'import') && fileUpdates.description !== undefined) {
         delete mergedData.description;
-        const contentJson = normalizedDescription != null ? JSON.stringify(normalizedDescription) : null;
-        const versionResult = await database.query<{ body_version: string | number | null }>(
+        await database.query(
           `UPDATE tracker_items
              SET data = $1,
-                 content = $2,
-                 body_version = COALESCE(body_version, 0) + 1,
+                 content = NULL,
                  updated = NOW()
-           WHERE id = $3
-           RETURNING body_version`,
-          [JSON.stringify(mergedData), contentJson, resolvedRow.id]
+           WHERE id = $2`,
+          [JSON.stringify(mergedData), resolvedRow.id]
         );
-        const newBodyVersion = Number(versionResult.rows[0]?.body_version ?? 0);
-        if (contentJson !== null && newBodyVersion > 0) {
-          await database.query(
-            `INSERT INTO tracker_body_cache (item_id, body_version, content, cached_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT (item_id, body_version) DO NOTHING`,
-            [resolvedRow.id, newBodyVersion, contentJson]
-          );
-        }
         await reindexItemRelationshipsAfterWrite(resolvedRow.workspace, resolvedRow.id, mergedData, fieldDefs,
           null, database as any, normalizedDescription ?? null);
       } else {
@@ -2849,26 +2913,29 @@ export class ElectronDocumentService implements DocumentService {
   }
 
   /**
-   * Import a single markdown file as a native tracker item.
-   * Reads frontmatter for metadata and the markdown body as content.
+   * Import a Markdown file as a metadata-only tracker projection.
+   * Its body remains authoritative in the original file.
    * Returns the created item or null if the file has no tracker frontmatter.
    */
   async importTrackerItemFromFile(relativePath: string, options?: {
     skipDuplicates?: boolean;
   }): Promise<{ item: TrackerItem | null; skipped: boolean; error?: string }> {
+    relativePath = relativePath.replace(/\\/g, '/');
     // A Local wiki page is already a typed page through the wiki library.
     if (isInLocalWikiFolder(relativePath, localWikiFolderWithin(this.workspacePath))) {
       return { item: null, skipped: true, error: 'Local wiki pages are not imported into the database' };
     }
-    const fullPath = path.join(this.workspacePath, relativePath);
+    const fullPath = await resolveFileTrackerPath(this.workspacePath, { source_ref: relativePath });
 
     // Check for duplicate by source_ref
     if (options?.skipDuplicates !== false) {
       const existing = await database.query<any>(
-        `SELECT id FROM tracker_items WHERE workspace = $1 AND source = 'frontmatter' AND source_ref = $2`,
-        [this.workspacePath, relativePath]
+        `SELECT * FROM tracker_items WHERE workspace = $1 AND source = 'frontmatter' AND REPLACE(source_ref, $3, '/') = $2`,
+        [this.workspacePath, relativePath, '\\']
       );
       if (existing.rows.length > 0) {
+        const file = await readFileTrackerBody(this.workspacePath, existing.rows[0]);
+        await clearLegacyFileTrackerBody(database, existing.rows[0], file);
         return { item: null, skipped: true };
       }
     }
@@ -2895,10 +2962,6 @@ export class ElectronDocumentService implements DocumentService {
     }
     const { trackerData, trackerType } = resolved;
 
-    // Extract markdown body (everything after frontmatter)
-    const bodyMatch = fileContent.match(/^---\s*\n[\s\S]*?\n---\s*\n([\s\S]*)$/);
-    const markdownBody = bodyMatch ? bodyMatch[1].trim() : '';
-
     // Build title from frontmatter or file name
     const title = (trackerData.title as string)
       || (frontmatter.title as string)
@@ -2906,7 +2969,8 @@ export class ElectronDocumentService implements DocumentService {
 
     // Generate stable canonical ID from tracker type + file path so UI, MCP,
     // and file-backed mutation paths all resolve the same logical item.
-    const id = buildFullDocumentTrackerId(trackerType, relativePath);
+    const projectionRow = await this.findRowForFrontmatterFile(relativePath, trackerType, frontmatter);
+    const id = projectionRow?.id ?? buildFullDocumentTrackerId(trackerType, relativePath);
 
     // Build JSONB data: ALL frontmatter fields go into the data bag generically.
     // No privileged field vocabulary -- the schema determines which fields matter.
@@ -2919,7 +2983,7 @@ export class ElectronDocumentService implements DocumentService {
       }
     }
 
-    const contentJson = markdownBody ? JSON.stringify(markdownBody) : null;
+    const contentJson = null;
 
     // NIM-1559: don't bump `updated` on a no-op re-import. A cold-open scan
     // re-imports every tracker markdown file; without this guard each one
@@ -2929,10 +2993,15 @@ export class ElectronDocumentService implements DocumentService {
     // field or the body actually changed; otherwise refresh `last_indexed`
     // (the scan timestamp) alone.
     const existingRow = await database.query<any>(
-      `SELECT data, content FROM tracker_items WHERE id = $1`,
+      `SELECT * FROM tracker_items WHERE id = $1`,
       [id]
     );
     const hadRow = existingRow.rows.length > 0;
+    if (hadRow) {
+      if (!isFileTracker(existingRow.rows[0])) return { item: this.rowToTrackerItem(existingRow.rows[0]), skipped: true };
+      const file = await readFileTrackerBody(this.workspacePath, existingRow.rows[0]);
+      await clearLegacyFileTrackerBody(database, existingRow.rows[0], file);
+    }
     const changed = !hadRow || projectionWouldChange(
       parseJsonColumn<Record<string, unknown>>(existingRow.rows[0].data) ?? {},
       data,
@@ -3250,7 +3319,8 @@ export class ElectronDocumentService implements DocumentService {
       const existingResult = await database.query<any>(
         `SELECT id, type, line_number, title, data, updated
          FROM tracker_items
-         WHERE workspace = $1 AND document_path = $2`,
+         WHERE workspace = $1 AND document_path = $2
+           AND (source = 'inline' OR (source IS NULL AND line_number IS NOT NULL))`,
         [this.workspacePath, relativePath]
       );
       // console.log(`[DocumentService] Found ${existingResult.rows.length} existing tracker items in database`);
@@ -3569,6 +3639,7 @@ export class ElectronDocumentService implements DocumentService {
   }
 
   destroy() {
+    this.disposed = true;
     if (this.watchInterval) {
       clearInterval(this.watchInterval);
       this.watchInterval = null;
@@ -4011,9 +4082,10 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     content: any;
     /** Write only while the stored body is at this version; see updateTrackerItemContent. */
     expectedBodyVersion?: number;
+    expectedFileVersion?: string;
   }) => {
     try {
-      await requireDocumentService(event).updateTrackerItemContent(payload.itemId, payload.content, payload.expectedBodyVersion);
+      await requireDocumentService(event).updateTrackerItemContent(payload.itemId, payload.content, payload.expectedBodyVersion, payload.expectedFileVersion);
 
       // Trigger sync; the new sync engine orders writes by server-assigned syncId.
       try {
@@ -4035,6 +4107,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
 
       return { success: true };
     } catch (error) {
+      if (error instanceof FileTrackerConflictError) return { success: false, conflict: true, error: error.message };
       if (error instanceof TrackerBodyVersionConflictError) {
         return { success: false, conflict: true, bodyVersion: error.bodyVersion, error: error.message };
       }
@@ -4048,7 +4121,10 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     itemId: string;
   }) => {
     try {
-      const content = await requireDocumentService(event).getTrackerItemContent(payload.itemId);
+      const service = requireDocumentService(event);
+      const file = await service.getTrackerItemFileBody(payload.itemId);
+      if (file) return { success: true, content: file.markdown, filePath: file.path, fileVersion: file.version };
+      const content = await service.getTrackerItemContent(payload.itemId);
       return { success: true, content };
     } catch (error) {
       console.error('[DocumentService] tracker-item-get-content failed:', error);
@@ -4331,12 +4407,21 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
   }
 
   // Comment management handlers
+  async function commentItemRow(event: Electron.IpcMainInvokeEvent, itemId: string): Promise<any | null> {
+    const svc = requireDocumentService(event);
+    await svc.ensureTrackerProjection(itemId);
+    const row = await svc.findTrackerRowForPublicId(itemId);
+    if (row) svc.assertWorkspace(row.workspace);
+    return row;
+  }
   safeHandle('document-service:tracker-item-add-comment', async (event, payload: {
     itemId: string;
     body: string;
   }) => {
     try {
-      const row = await database.query<any>(`SELECT * FROM tracker_items WHERE id = $1`, [payload.itemId]);
+      const resolved = await commentItemRow(event, payload.itemId);
+      if (resolved) payload = { ...payload, itemId: resolved.id };
+      const row = { rows: resolved ? [resolved] : [] };
       if (row.rows.length === 0) return { success: false, error: 'Item not found' };
 
       const data = typeof row.rows[0].data === 'string' ? JSON.parse(row.rows[0].data) : row.rows[0].data || {};
@@ -4362,6 +4447,10 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
 
       // Record activity for the comment
       appendActivity(data, authorIdentity, 'commented');
+
+      if (isFileTracker(row.rows[0])) {
+        await requireDocumentService(event).updateTrackerItemInFile(payload.itemId, { comments, lastModifiedBy: authorIdentity, activity: data.activity });
+      }
 
       await database.query(
         `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
@@ -4398,7 +4487,9 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     deleted?: boolean;
   }) => {
     try {
-      const row = await database.query<any>(`SELECT * FROM tracker_items WHERE id = $1`, [payload.itemId]);
+      const resolved = await commentItemRow(event, payload.itemId);
+      if (resolved) payload = { ...payload, itemId: resolved.id };
+      const row = { rows: resolved ? [resolved] : [] };
       if (row.rows.length === 0) return { success: false, error: 'Item not found' };
 
       const data = typeof row.rows[0].data === 'string' ? JSON.parse(row.rows[0].data) : row.rows[0].data || {};
@@ -4437,6 +4528,10 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
         },
       );
 
+      if (isFileTracker(row.rows[0])) {
+        await requireDocumentService(event).updateTrackerItemInFile(payload.itemId, { comments: result.comments, lastModifiedBy: actor, activity: data.activity });
+      }
+
       await database.query(
         `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
         [JSON.stringify(data), payload.itemId]
@@ -4460,18 +4555,17 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
   // UI resolves source titles from its already-loaded items map, so we return
   // only the edge identity.
   // Rebuilds are throttled per workspace (shared with the Links section IPC).
-  const ensureRelationshipIndex = (workspace: string) => ensureWorkspaceRelationshipIndex(
-    workspace,
-    (type) => globalRegistry.get(type)?.fields ?? [],
-    database as any,
-  );
+  const ensureRelationshipIndex = async (workspace: string, event: IpcMainInvokeEvent) => {
+    await requireDocumentService(event).ensureFileTrackerProjections(workspace);
+    return ensureWorkspaceRelationshipIndex(workspace, (type) => globalRegistry.getForWorkspace(workspace, type)?.fields ?? [], database as any);
+  };
 
   safeHandle('document-service:tracker-item-backlinks', async (_event, payload: { itemId: string }) => {
     try {
       const row = await database.query<any>(`SELECT workspace FROM tracker_items WHERE id = $1`, [payload.itemId]);
       const workspace = row.rows[0]?.workspace;
       if (!workspace) return { success: true, backlinks: [] };
-      await ensureRelationshipIndex(workspace);
+      await ensureRelationshipIndex(workspace, _event);
       const backlinks = await getRelationshipBacklinks(workspace, payload.itemId, database as any);
       return {
         success: true,

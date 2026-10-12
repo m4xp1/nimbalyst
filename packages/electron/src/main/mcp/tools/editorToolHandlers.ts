@@ -15,6 +15,7 @@ import {
   pageUpdatedText,
   personalTypedPageError,
   typedPageItemId,
+  fileTrackerPageUri,
 } from "./agentPageTargets";
 import { teamPageLocalLinkWarning } from "./teamPageLocalLinks";
 import { PAGE_TOOL_DESKTOP_PROJECT_ARG } from "@nimbalyst/collab-protocol";
@@ -434,7 +435,8 @@ async function readCollabDocLocally(
   args: any,
   workspacePath?: string,
 ): Promise<McpToolResult & { otherProjectId?: string }> {
-  const targetFilePath = args?.filePath;
+  const targetFilePath = typeof args?.filePath === 'string'
+    ? await fileTrackerPageUri(args.filePath, workspacePath) : args?.filePath;
   if (!isAgentPageUri(targetFilePath)) {
     return {
       content: [
@@ -541,7 +543,7 @@ export async function handleApplyCollabDocEdit(
       isError: true,
     };
   }
-  return handleApplyDiff(args, sessionId, workspacePath);
+  return handleApplyDiff({ ...args, filePath: await fileTrackerPageUri(targetFilePath, workspacePath) }, sessionId, workspacePath);
 }
 
 type CollabCommentOperation = "list" | "reply" | "createAnchored";

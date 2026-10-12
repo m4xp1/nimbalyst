@@ -94,7 +94,7 @@ trackerStatus:
     const items = await service.listTrackerItems();
 
     expect(items).toHaveLength(1);
-    expect(items[0].id).toBe(buildFullDocumentTrackerId('plan', 'plans/example.md'));
+    expect(items[0].id).toBe(buildFullDocumentTrackerId('plan', path.join('plans', 'example.md')));
     expect(items[0].source).toBe('frontmatter');
     expect(items[0].status).toBe('to-do');
   });
@@ -202,6 +202,9 @@ planStatus:
         state.row = { ...state.row, data: params?.[0] };
         return { rows: [] };
       }
+      if (normalized.startsWith('SELECT body_version, content FROM tracker_body_cache')) return { rows: [] };
+      if (normalized.startsWith('UPDATE tracker_items SET content = NULL')) { state.row.content = null; return { rows: [] }; }
+      if (normalized.startsWith('DELETE FROM tracker_body_cache')) return { rows: [] };
       throw new Error(`Unexpected query in test: ${normalized}`);
     });
 
@@ -250,7 +253,8 @@ trackerStatus:
       // The file->row lookup deliberately does NOT filter on `source`: a shared
       // file-backed item is promoted to `source = 'native'` but keeps its
       // `source_ref`, and filtering it out would mint a duplicate projection.
-      if (normalized.includes('WHERE workspace = $1 AND source_ref = $2 AND type = $3')) {
+      if (normalized.includes('WHERE workspace = $1 AND source_ref = $2 AND type = $3')
+        || normalized.includes("WHERE workspace = $1 AND REPLACE(source_ref, $4, '/') = $2 AND type = $3")) {
         return { rows: state.row ? [state.row] : [] };
       }
 
@@ -293,6 +297,9 @@ trackerStatus:
         return { rows: [state.row] };
       }
 
+      if (normalized.startsWith('SELECT body_version, content FROM tracker_body_cache')) return { rows: [] };
+      if (normalized.startsWith('UPDATE tracker_items SET content = NULL')) { state.row.content = null; return { rows: [] }; }
+      if (normalized.startsWith('DELETE FROM tracker_body_cache')) return { rows: [] };
       throw new Error(`Unexpected query in test: ${normalized}`);
     });
 

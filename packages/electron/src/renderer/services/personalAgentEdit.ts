@@ -26,6 +26,7 @@ import {
 } from '@nimbalyst/runtime/editor/plugins/DiffPlugin/DiffCommands';
 import { editorRegistry } from '@nimbalyst/runtime/ai/EditorRegistry';
 import { parsePersonalPageUri, personalTypedPageHistoryKey } from '../../shared/personalPageUri';
+import { flushTrackerFileEditors } from './trackerFileEditor';
 
 const PERSONAL_DOC_EDITOR_PREFIX = 'personal-doc://';
 
@@ -52,8 +53,8 @@ export interface PersonalPageIo {
   /** Keep text in a page's local history under its history key. */
   keepInHistory(historyKey: string, content: string, description: string): Promise<void>;
   /** The body with its `body_version`; version null when it cannot be read together with the text. */
-  getTypedPageBody(itemId: string): Promise<{ content: unknown; version: number | null }>;
-  setTypedPageBody(itemId: string, content: string, expectedVersion: number): Promise<TypedPageBodyWrite>;
+  getTypedPageBody(itemId: string): Promise<{ content: unknown; version: number | null; fileVersion?: string; filePath?: string }>;
+  setTypedPageBody(itemId: string, content: string, expectedVersion: number, expectedFileVersion?: string): Promise<TypedPageBodyWrite>;
   /** The typed page's mounted body editor, if any. */
   liveTypedPage(itemId: string): LiveTypedPageEditor | null;
   /** The editor mounted for this path, if any, applies the replacements itself. */
@@ -116,15 +117,20 @@ const rendererIo: PersonalPageIo = {
     // reads the row at the current version, text and version in one query.
     const cached = await window.electronAPI.documentService.getTrackerBodyCacheForDetail({ itemId });
     if (cached.success && cached.row) return { content: cached.row.content, version: cached.row.bodyVersion };
-    const result = await window.electronAPI.documentService.getTrackerItemContent({ itemId });
+    let result = await window.electronAPI.documentService.getTrackerItemContent({ itemId });
+    if (result.success && result.filePath) {
+      await flushTrackerFileEditors(result.filePath);
+      result = await window.electronAPI.documentService.getTrackerItemContent({ itemId });
+    }
     if (!result.success) throw new Error(result.error || `Could not read the typed page ${itemId}`);
-    return { content: result.content, version: null };
+    return { content: result.content, version: null, fileVersion: result.fileVersion, filePath: result.filePath };
   },
-  setTypedPageBody: async (itemId, content, expectedVersion) => {
+  setTypedPageBody: async (itemId, content, expectedVersion, expectedFileVersion) => {
     const result = await window.electronAPI.documentService.updateTrackerItemContent({
       itemId,
       content,
-      expectedBodyVersion: expectedVersion,
+      expectedBodyVersion: expectedFileVersion ? undefined : expectedVersion,
+      expectedFileVersion,
     });
     if (result.conflict) return { conflict: true, version: result.bodyVersion ?? 0 };
     if (!result.success) throw new Error(result.error || `Could not save the typed page ${itemId}`);
@@ -222,7 +228,7 @@ async function editStoredTypedPage(itemId: string, replacements: TextReplacement
     const next = applyTextReplacementsToString(current, replacements);
     if (next === current) return;
     if (attempt === 0) await io.keepInHistory(personalTypedPageHistoryKey(itemId), current, 'Before agent edit');
-    const written = await io.setTypedPageBody(itemId, next, version);
+    const written = await io.setTypedPageBody(itemId, next, version, body.fileVersion);
     if (!('conflict' in written)) return;
     knownVersion = written.version;
   }
@@ -337,13 +343,13 @@ export async function restorePersonalTypedPageBody(
     return;
   }
   const read = await io.getTypedPageBody(itemId);
-  const written = await io.setTypedPageBody(itemId, markdown, read.version ?? 0);
+  const written = await io.setTypedPageBody(itemId, markdown, read.version ?? 0, read.fileVersion);
   if (!('conflict' in written)) return;
   if (read.version !== null) throw new Error(RESTORE_CONFLICT);
   const reread = await io.getTypedPageBody(itemId);
   const moved = JSON.stringify(reread.content) !== JSON.stringify(read.content)
     || (reread.version !== null && reread.version !== written.version);
   if (moved) throw new Error(RESTORE_CONFLICT);
-  const retried = await io.setTypedPageBody(itemId, markdown, written.version);
+  const retried = await io.setTypedPageBody(itemId, markdown, written.version, reread.fileVersion);
   if ('conflict' in retried) throw new Error(RESTORE_CONFLICT);
 }
