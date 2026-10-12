@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 <!-- Bug fixes go here -->
 - Preserve project tracker definitions when opening a Markdown editor.
+- Keep one file-backed tracker card when Windows paths use different separators.
 - Show file-backed cards once in Memory as trackers and keep their search content current.
 
 ### Removed

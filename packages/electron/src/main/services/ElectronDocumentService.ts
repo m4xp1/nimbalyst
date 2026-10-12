@@ -2027,7 +2027,9 @@ export class ElectronDocumentService implements DocumentService {
    */
   async getTrackerItemById(itemId: string): Promise<TrackerItem | null> {
     const merged = await this.listMergedTrackerItems();
-    const found = merged.find(item => item.id === itemId);
+    const parsed = parseFullDocumentTrackerId(itemId);
+    const publicId = parsed ? buildFullDocumentTrackerId(parsed.trackerType, parsed.relativePath) : itemId;
+    const found = merged.find(item => item.id === publicId);
     if (found) return found;
 
     const row = await this.resolveTrackerRowForPublicId(itemId);
@@ -2918,6 +2920,7 @@ export class ElectronDocumentService implements DocumentService {
   async importTrackerItemFromFile(relativePath: string, options?: {
     skipDuplicates?: boolean;
   }): Promise<{ item: TrackerItem | null; skipped: boolean; error?: string }> {
+    relativePath = relativePath.replace(/\\/g, '/');
     // A Local wiki page is already a typed page through the wiki library.
     if (isInLocalWikiFolder(relativePath, localWikiFolderWithin(this.workspacePath))) {
       return { item: null, skipped: true, error: 'Local wiki pages are not imported into the database' };
@@ -2927,8 +2930,8 @@ export class ElectronDocumentService implements DocumentService {
     // Check for duplicate by source_ref
     if (options?.skipDuplicates !== false) {
       const existing = await database.query<any>(
-        `SELECT * FROM tracker_items WHERE workspace = $1 AND source = 'frontmatter' AND source_ref = $2`,
-        [this.workspacePath, relativePath]
+        `SELECT * FROM tracker_items WHERE workspace = $1 AND source = 'frontmatter' AND REPLACE(source_ref, $3, '/') = $2`,
+        [this.workspacePath, relativePath, '\\']
       );
       if (existing.rows.length > 0) {
         const file = await readFileTrackerBody(this.workspacePath, existing.rows[0]);
@@ -2966,7 +2969,8 @@ export class ElectronDocumentService implements DocumentService {
 
     // Generate stable canonical ID from tracker type + file path so UI, MCP,
     // and file-backed mutation paths all resolve the same logical item.
-    const id = buildFullDocumentTrackerId(trackerType, relativePath);
+    const projectionRow = await this.findRowForFrontmatterFile(relativePath, trackerType, frontmatter);
+    const id = projectionRow?.id ?? buildFullDocumentTrackerId(trackerType, relativePath);
 
     // Build JSONB data: ALL frontmatter fields go into the data bag generically.
     // No privileged field vocabulary -- the schema determines which fields matter.

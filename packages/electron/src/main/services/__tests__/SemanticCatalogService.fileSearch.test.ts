@@ -60,6 +60,21 @@ async function setup() {
   return {callbacks,flush,sparse,setItems:(next:any[])=>{items=next;},getItems:()=>items};
 }
 describe('application file catalogue → actual Memory search', () => {
+  it('keeps one searchable card for legacy Windows separator aliases with different metadata', async () => {
+    const {setItems,getItems,callbacks,flush,sparse} = await setup();
+    const file = getItems()[0];
+    setItems([
+      {...file,id:'fm:idea:bugs/card.md'},
+      {...file,id:'fm:idea:bugs\\card.md',sourceRef:'bugs\\card.md',documentPath:'bugs\\card.md',title:'Other stale alias title'},
+      getItems()[1],
+    ]);
+    callbacks.file!(); await flush();
+    const hits = await sparse('freshfilemarker');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].refType).toBe('tracker');
+    expect(await sparse('staledatabasebody')).toEqual([]);
+    expect((await sparse('nativedatabasebody')).map(h=>h.refId)).toEqual(['native']);
+  });
   it('indexes the current file outside document includes and preserves an independent DB card with a documentPath', async () => {
     const {sparse} = await setup();
     expect((await sparse('freshfilemarker')).map(h=>h.refId)).toEqual(['file']);

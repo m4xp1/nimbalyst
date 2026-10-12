@@ -127,6 +127,7 @@ export async function findRowForFrontmatterFile(
   trackerType: string,
   frontmatter?: Record<string, any> | null,
 ): Promise<TrackerRow | null> {
+  relativePath = relativePath.replace(/\\/g, '/');
   const declaredId = typeof frontmatter?.trackerId === 'string' ? frontmatter.trackerId.trim() : '';
   if (declaredId) {
     const byDeclaredId = await database.query<TrackerRow>(
@@ -143,7 +144,17 @@ export async function findRowForFrontmatterFile(
      LIMIT 1`,
     [workspacePath, relativePath, trackerType],
   );
-  return bySourceRef.rows[0] || null;
+  if (bySourceRef.rows[0]) return bySourceRef.rows[0];
+  // Older Windows projections used native separators. Keep their stable row
+  // IDs and links; reuse that row instead of importing a second copy.
+  const legacy = await database.query<TrackerRow>(
+    `SELECT * FROM tracker_items
+     WHERE workspace = $1 AND REPLACE(source_ref, $4, '/') = $2 AND type = $3
+     ORDER BY updated DESC
+     LIMIT 1`,
+    [workspacePath, relativePath, trackerType, '\\'],
+  );
+  return legacy.rows[0] || null;
 }
 
 /**
