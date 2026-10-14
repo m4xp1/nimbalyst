@@ -216,7 +216,10 @@ const TOOL_DESCRIPTORS = [
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
       'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works.',
+      'answers in how the project actually works. For a specific quotation or fact, ' +
+      'use expand when needed and identify the result as indexed evidence. For current ' +
+      'session discussions or decisions, use read_session with the hit refId if that ' +
+      'tool is available; search snippets do not establish complete current history.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -266,7 +269,7 @@ const TOOL_DESCRIPTORS = [
   {
     name: 'read_session',
     voiceAgent: false,
-    description: 'Read the full current user/assistant dialogue for a session found by Memory. Sessions must be enabled. Pass sessionId (refId, without session:). Pages use a stable ten-minute snapshot; follow nextCursor until hasMore is false. Parent and child sessions are separate. This reads the current history, not indexed snippets.',
+    description: 'Read current user/assistant dialogue for a session found by Memory. Sessions must be enabled. Pass sessionId = the hit refId (without session:). Use this for current discussions, decisions, or full history. Pages use a stable ten-minute snapshot: follow nextCursor until hasMore is false only when the task requires the entire history; otherwise stop when sufficient and disclose partial reading. Never mix snapshot versions. If a cursor expires, restart from the first page. Reading errors or disabled Sessions must be reported, not replaced by claims of complete current history from indexed content. Parent and child sessions are separate.',
     inputSchema: {
       type:'object',properties:{sessionId:{type:'string'},cursor:{type:'string'},maxChars:{type:'integer',minimum:1000,maximum:24000,default:12000}},required:['sessionId'],additionalProperties:false,
     },
@@ -275,7 +278,10 @@ const TOOL_DESCRIPTORS = [
     name: 'expand',
     description:
       'Expand a search hit to its full heading section. Pass the sourcePath and ' +
-      'headingPath from a search_project_knowledge result. This is indexed content; for the full current session dialogue use read_session with the session refId.',
+      'headingPath from a search_project_knowledge result. Use this for a quotation or ' +
+      'specific fact and identify it as indexed evidence. It does not prove full or ' +
+      'current session history; for current discussions or decisions use read_session ' +
+      'with sessionId = the hit refId when that tool is available.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -574,7 +580,12 @@ export async function activate(ctx: ActivateCtx) {
         const k = typeof params?.k === 'number' ? params.k : 5;
         const eng = requireEngine();
         const chunks = await eng.search(query, k);
-        return buildProjectSearchResponse(chunks, eng.status().retrieval);
+        return {
+          ...buildProjectSearchResponse(chunks, eng.status().retrieval),
+          ...(chunks.some(chunk => chunk.refType === 'session') ? {
+            sessionReadHint: 'For a quotation or specific fact, expand the indexed section if needed and label it indexed evidence. For current dialogue or decisions, use read_session with sessionId = the session hit refId, if that tool is available in your tool catalog (discover deferred tools through your existing discovery mechanism). Follow nextCursor to hasMore=false only for a task requiring the entire history; otherwise disclose partial reading. Do not mix snapshot versions; restart expired cursors from page one. If reading is unavailable or fails, report the limitation; indexed evidence does not prove complete current history.',
+          } : {}),
+        };
       },
 
       // --- Host-only RPC methods (not MCP tools) -----------------------------
