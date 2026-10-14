@@ -16,6 +16,8 @@ import {createRawMessageStoreAdapter} from '../TranscriptMigrationAdapters';
 import {createPGLiteAgentMessagesStore} from '../PGLiteAgentMessagesStore';
 import {readMemorySessionContent} from '../sessionMemoryContent';
 import {watchSessionMemoryChanges} from '../sessionMemoryEvents';
+import {ExternalSessionPersistence} from '../externalSessions/ExternalSessionPersistence';
+import {runTransactionStatements} from '../../database/transactionStatements';
 
 describe('persisted session dialogue → actual search on both databases',()=>{
   it.each(['sqlite','pglite'])('reads all keyset pages, excludes hidden text, and preserves a rebuilt %s index after restart',async(kind)=>{
@@ -27,9 +29,10 @@ describe('persisted session dialogue → actual search on both databases',()=>{
         const db=new SQLiteDatabase({dbDir:path.join(root,'db'),schemaDir:path.resolve(__dirname,'../../database/sqlite/schemas'),log:()=>{}});
         await db.initialize();h.db=createSQLiteStoreAdapter(db);close=()=>db.close();
       } else {
-        const db=new PGlite();await db.exec(`CREATE TABLE ai_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,title TEXT,provider TEXT,updated_at TIMESTAMPTZ,is_archived BOOLEAN DEFAULT FALSE);
+        const db=new PGlite();await db.exec(`CREATE TABLE ai_sessions(id TEXT PRIMARY KEY,workspace_id TEXT,title TEXT,provider TEXT,provider_session_id TEXT,updated_at TIMESTAMPTZ,is_archived BOOLEAN DEFAULT FALSE);
+          CREATE TABLE external_session_cursors(provider TEXT,external_id TEXT,file_path TEXT,workspace_path TEXT,session_id TEXT,cursor TEXT,PRIMARY KEY(provider,external_id,file_path));
           CREATE TABLE ai_agent_messages(id SERIAL PRIMARY KEY,session_id TEXT,source TEXT,direction TEXT,content TEXT,metadata JSONB,hidden BOOLEAN,created_at TIMESTAMPTZ,provider_message_id TEXT,searchable BOOLEAN,searchable_text TEXT,message_kind TEXT);`);
-        h.db=db;close=()=>db.close();
+        h.db={query:(sql:string,params:any[])=>db.query(sql,params),runTransaction:(statements:any[])=>db.transaction(tx=>runTransactionStatements(tx,statements))};close=()=>db.close();
       }
       await h.db.query('INSERT INTO ai_sessions(id,workspace_id,title,provider) VALUES($1,$2,$3,$4)',['sql',root,'SQL dialogue','openai-codex']);
       const store=createPGLiteAgentMessagesStore(h.db);
@@ -50,6 +53,11 @@ describe('persisted session dialogue → actual search on both databases',()=>{
       }
       await engine.close();engine=MemoryEngine.create(config,new FakeEmbedder());
       expect(engine.expand('session:sql',[])?.text).toContain('ПоследнийМаркер');
+      await new ExternalSessionPersistence(h.db).appendAndAdvance({sessionId:'sql',ref:{providerId:'openai-codex',externalId:'sql',workspacePath:root,filePath:'/synthetic/rollout.jsonl'},expectedCursor:null,cursor:{byteOffset:1,fileSize:1,inode:1,lastEntryUuid:'import1'},messages:[{source:'openai-codex',direction:'output',content:JSON.stringify({method:'item/completed',params:{item:{id:'import1',type:'agentMessage',text:'ИмпортОтветМаркер'}}}),providerMessageId:'import1',metadata:{transport:'app-server'},createdAt:new Date()}]});
+      expect(notices).toBe(2);
+      const updated=await readMemorySessionContent({id:'sql',provider:'openai-codex'} as any,runtime);
+      await engine.ingestRecords([{id:'session:sql',refId:'sql',refType:'session',sourceClass:'sessions',text:updated.text}]);
+      expect((await engine.search('ИмпортОтветМаркер',50)).filter(hit=>hit.signals?.sparse)).toHaveLength(1);
     } finally {unsubscribe();TranscriptMigrationRepository.clearService();await engine?.close();await close!?.();rmSync(root,{recursive:true,force:true});}
   },30000);
 });

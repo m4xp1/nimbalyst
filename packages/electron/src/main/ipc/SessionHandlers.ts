@@ -1,4 +1,6 @@
 import { registerSessionPromptResponseHandler } from './sessionPromptResponseHandler';
+import {notifySessionMemoryChange} from '../services/sessionMemoryEvents';
+import {extractSearchable} from '@nimbalyst/runtime/ai/server/transcript/searchableTextExtractor';
 import { remoteSessions } from '../services/ai/remoteSessions';
 import { database } from '../database/PGLiteDatabaseWorker';
 import { projectSessionList, readSessionLaunchCounts } from './sessionListProjection';
@@ -945,6 +947,7 @@ export async function registerSessionHandlers() {
         title?: string;
         agentRole?: 'standard' | 'meta-agent';
         createdBySessionId?: string | null;
+        parentSessionId?: string | null;
         status?: 'idle' | 'running' | 'waiting_for_input' | 'error' | 'interrupted';
         createdAt?: number;
         updatedAt?: number;
@@ -960,6 +963,7 @@ export async function registerSessionHandlers() {
                 title = 'Test Session',
                 agentRole = 'standard',
                 createdBySessionId = null,
+                parentSessionId = null,
                 status = 'idle',
                 createdAt,
                 updatedAt,
@@ -972,12 +976,13 @@ export async function registerSessionHandlers() {
 
             await database.query(
                 `INSERT INTO ai_sessions (
-                    id, workspace_id, provider, model, title, session_type, agent_role, created_by_session_id, status, created_at, updated_at, last_activity
-                 ) VALUES ($1, $2, $3, $4, $5, 'session', $6, $7, $8, $9, $10, $11)`,
-                [id, workspaceId, provider, model, title, agentRole, createdBySessionId, status, createdAtDate, updatedAtDate, lastActivityDate]
+                    id, workspace_id, provider, model, title, session_type, agent_role, created_by_session_id, status, created_at, updated_at, last_activity, parent_session_id
+                 ) VALUES ($1, $2, $3, $4, $5, 'session', $6, $7, $8, $9, $10, $11, $12)`,
+                [id, workspaceId, provider, model, title, agentRole, createdBySessionId, status, createdAtDate, updatedAtDate, lastActivityDate,parentSessionId]
             );
 
             // Notify renderer to refresh session list
+            notifySessionMemoryChange(id,'metadata');
             event.sender.send('sessions:refresh-list', {
                 workspacePath: workspaceId,
                 sessionId: id
@@ -1004,13 +1009,15 @@ export async function registerSessionHandlers() {
         try {
             const { database } = await import('../database/PGLiteDatabaseWorker');
             const { sessionId, direction, content, source = 'nimbalyst', metadata } = payload;
+            const extracted=extractSearchable({source,direction,content,metadata});
 
             const { rows } = await database.query<{ id: string }>(
-                `INSERT INTO ai_agent_messages (session_id, source, direction, content, metadata, created_at, hidden)
-                 VALUES ($1, $2, $3, $4, $5, NOW(), false)
+                `INSERT INTO ai_agent_messages (session_id, source, direction, content, metadata, created_at, hidden, searchable, searchable_text, message_kind)
+                 VALUES ($1, $2, $3, $4, $5, NOW(), false, $6, $7, $8)
                  RETURNING id`,
-                [sessionId, source, direction, content, metadata ? JSON.stringify(metadata) : null]
+                [sessionId, source, direction, content, metadata ? JSON.stringify(metadata) : null, !!extracted.searchableText,extracted.searchableText,extracted.messageKind]
             );
+            notifySessionMemoryChange(sessionId,direction);
             return { success: true, id: rows[0].id };
         } catch (error) {
             console.error('[SessionHandlers] test:insert-message error:', error);

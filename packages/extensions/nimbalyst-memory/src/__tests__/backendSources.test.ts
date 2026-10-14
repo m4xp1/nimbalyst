@@ -8,6 +8,8 @@ describe('source settings backend bridge',()=>{
   const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir,log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:register}});
   try{
    const tools=register.mock.calls[0][0];for(const name of ['get_sources','set_sources'])expect(tools.find(t=>t.name===name)?.panelOnly).toBe(true);expect(tools.find(t=>t.name==='status')?.panelOnly).toBeUndefined();
+   expect(tools.find(t=>t.name==='read_session')?.inputSchema.required).toEqual(['sessionId']);
+   await expect(runtime.methods.read_session({sessionId:'s'})).rejects.toThrow(/unavailable/);
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    expect(tools.find(t=>t.name==='preview_sources')).toBeUndefined();
    await runtime.methods.set_sources({include:['MAP.md'],exclude:[]});

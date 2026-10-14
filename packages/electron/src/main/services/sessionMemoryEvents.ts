@@ -1,6 +1,13 @@
 /** Post-commit notifications; listeners only enqueue work and never affect persistence. */
-export interface SessionMemoryChange { sessionId: string; kind: 'input' | 'output' | 'metadata' | 'deleted' }
+export interface SessionMemoryChange { sessionId: string; kind: 'input' | 'output' | 'metadata' | 'access' | 'deleted' }
 const listeners = new Set<(change: SessionMemoryChange) => void>();
+const invalidationListeners=new Set<(workspace?:string)=>void>();
+export function watchSessionMemoryInvalidation(listener:(workspace?:string)=>void):()=>void {
+  invalidationListeners.add(listener);return ()=>{invalidationListeners.delete(listener);};
+}
+export function invalidateSessionMemoryReads(workspace?:string):void {
+  for(const listener of invalidationListeners)listener(workspace);
+}
 let rebuild:((workspace:string)=>Promise<void>)|null=null;
 export function registerSessionMemoryRebuilder(callback:(workspace:string)=>Promise<void>):()=>void {
   rebuild=callback;return ()=>{if(rebuild===callback)rebuild=null;};

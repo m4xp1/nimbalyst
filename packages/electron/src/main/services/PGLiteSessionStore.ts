@@ -712,11 +712,11 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
         if (db.runTransaction) await db.runTransaction(statements);
         else for (const statement of statements) await db.query(statement.sql, statement.params);
         await publishSubtreeArchive(subtree.map(row => row.id), metadata.isArchived);
-        for (const row of subtree) notifySessionMemoryChange(row.id, 'metadata');
+        for (const row of subtree) notifySessionMemoryChange(row.id, 'access');
       } else {
         await db.query(`UPDATE ai_sessions SET ${setClause} WHERE id=$1`, values);
       }
-      notifySessionMemoryChange(sessionId, 'metadata');
+      notifySessionMemoryChange(sessionId, metadata.isArchived!==undefined||metadata.workspaceId!==undefined||metadata.worktreeId!==undefined?'access':'metadata');
     },
 
     async findByProviderSessionId(provider: string, providerSessionId: string, workspaceId: string): Promise<ChatSession | null> {

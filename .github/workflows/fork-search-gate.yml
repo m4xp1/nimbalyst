@@ -30,7 +30,7 @@ jobs:
         run: |
           pnpm run build:workspace-deps
           if ($LASTEXITCODE -ne 0) { throw 'Workspace dependency build failed' }
-          pnpm --dir packages/extensions/nimbalyst-memory/engine run build
+          pnpm --dir packages/extensions/nimbalyst-memory run build
           if ($LASTEXITCODE -ne 0) { throw 'Memory build failed' }
       - name: Mandatory lexical and hybrid regression tests
         run: pnpm run test:fork-search

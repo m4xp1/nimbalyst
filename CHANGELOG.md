@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
-- Include the complete normalized conversation in Memory session searches.
+- Find complete session conversations in Memory and read their current dialogue in pages.
 
 ### Fixed
 <!-- Bug fixes go here -->

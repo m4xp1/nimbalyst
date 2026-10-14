@@ -18,7 +18,7 @@ import type {
 } from '@nimbalyst/runtime';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { readMemorySessionContent, invalidateMemorySessionContent } from './sessionMemoryContent';
-import { watchSessionMemoryChanges, registerSessionMemoryRebuilder, type SessionMemoryChange } from './sessionMemoryEvents';
+import { watchSessionMemoryChanges, registerSessionMemoryRebuilder, invalidateSessionMemoryReads, type SessionMemoryChange } from './sessionMemoryEvents';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { runWhenFirstUsable } from './startupMaintenanceGate';
 import { getPrivilegedExtensionHost, type ModuleHandle } from '../extensions/PrivilegedExtensionHost';
@@ -211,7 +211,7 @@ export class SemanticCatalogService {
   private sessionErrors = new Map<string, string>();
   private sessionOperations = new Map<string, Promise<void>>();
   private catalogOperations = new Map<string, Promise<void>>();
-  private sessionPending = new Map<string, {ids:Set<string>; timer:NodeJS.Timeout|null}>();
+  private sessionPending = new Map<string, {ids:Set<string>; deferred:Set<string>; timer:NodeJS.Timeout|null}>();
   private subscriptions: Array<() => void> = [];
 
   static getInstance(): SemanticCatalogService {
@@ -240,6 +240,7 @@ export class SemanticCatalogService {
   }
 
   stop(): void {
+    invalidateSessionMemoryReads();
     for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe?.();
     for (const workspace of this.sessionPending.keys()) this.cancelSessionTimer(workspace);
     for (const workspace of this.wired.keys()) this.unwireWorkspace(workspace);
@@ -255,18 +256,25 @@ export class SemanticCatalogService {
   }
 
   private enqueueSessionChange(change: SessionMemoryChange): void {
-    if(change.kind==='metadata'||change.kind==='deleted')invalidateMemorySessionContent(change.sessionId);
+    if(change.kind==='metadata'||change.kind==='access'||change.kind==='deleted')invalidateMemorySessionContent(change.sessionId);
     if(!this.sessionsEnabled()) return;
     for(const handle of getPrivilegedExtensionHost().list()) {
       if(handle.extensionId!==EXT_ID || handle.moduleId!==MODULE_ID || handle.state.status!=='running') continue;
       const workspace=handle.workspacePath;
       let pending=this.sessionPending.get(workspace);
-      if(!pending) {pending={ids:new Set(),timer:null};this.sessionPending.set(workspace,pending);}
+      if(!pending) {pending={ids:new Set(),deferred:new Set(),timer:null};this.sessionPending.set(workspace,pending);}
       pending.ids.add(change.sessionId);
-      if(change.kind==='output' && getSessionStateManager().getSessionState(change.sessionId)?.status==='running') continue;
+      if(change.kind==='output' && getSessionStateManager().getSessionState(change.sessionId)?.status==='running') {
+        pending.deferred.add(change.sessionId);continue;
+      }
+      pending.deferred.delete(change.sessionId);
       if(pending.timer) clearTimeout(pending.timer);
       pending.timer=setTimeout(()=>{
-        const ids=[...pending!.ids];this.sessionPending.delete(workspace);
+        const ids=[...pending!.ids].filter(id=>!pending!.deferred.has(id));
+        pending!.timer=null;
+        for(const id of ids)pending!.ids.delete(id);
+        if(!pending!.ids.size)this.sessionPending.delete(workspace);
+        if(!ids.length)return;
         const generation=this.sessionGenerations.get(workspace)??0;
         runWhenFirstUsable('live-session-projection',()=>{
           if(!this.sessionPassCurrent(workspace,generation))return;
@@ -325,6 +333,7 @@ export class SemanticCatalogService {
       if(this.sessionsEnabled())runWhenFirstUsable('memory-session-backfill',reconcile);
       else void reconcile();
     } else {
+      invalidateSessionMemoryReads(handle.workspacePath);
       this.cancelSessionTimer(handle.workspacePath);
       this.sessionGenerations.set(handle.workspacePath,
         (this.sessionGenerations.get(handle.workspacePath) ?? 0) + 1);
@@ -637,6 +646,7 @@ export class SemanticCatalogService {
   /** Toggle session indexing and (un)backfill every wired workspace to match. */
   async setSessionsEnabled(enabled: boolean): Promise<void> {
     setAppSetting(SESSIONS_SETTING_KEY, enabled);
+    if(!enabled)invalidateSessionMemoryReads();
     if(!enabled)invalidateMemorySessionContent();
     if(!enabled) for(const workspace of this.sessionPending.keys()) this.cancelSessionTimer(workspace);
     const running = getPrivilegedExtensionHost().list()

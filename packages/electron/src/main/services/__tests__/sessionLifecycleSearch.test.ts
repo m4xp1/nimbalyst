@@ -9,7 +9,8 @@ import {FakeEmbedder} from '../../../../../extensions/nimbalyst-memory/engine/sr
 import {TranscriptRuntime} from '@nimbalyst/runtime/ai/server/transcript/TranscriptRuntime';
 import {TranscriptMigrationRepository} from '@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository';
 import type {RawMessage} from '@nimbalyst/runtime/ai/server/transcript/TranscriptTransformer';
-const h=vi.hoisted(()=>({enabled:true,metas:[] as any[],listeners:[] as any[],request:vi.fn(),root:'',running:false}));
+const h=vi.hoisted(()=>({enabled:true,metas:[] as any[],listeners:[] as any[],stateListeners:[] as any[],active:false,request:vi.fn(),root:'',running:false}));
+vi.mock('@nimbalyst/runtime/ai/server/SessionStateManager',()=>({getSessionStateManager:()=>({getSessionState:()=>({status:h.active?'running':'idle'}),subscribe:(fn:any)=>{h.stateListeners.push(fn);return ()=>{};}})}));
 vi.mock('../../extensions/PrivilegedExtensionHost',()=>({getPrivilegedExtensionHost:()=>({
   list:()=>h.running?[{extensionId:'com.nimbalyst.memory',moduleId:'memory-engine',workspacePath:h.root,state:{status:'running'}}]:[],
   getState:()=>({status:h.running?'running':'stopped'}),onStateChanged:(fn:any)=>{h.listeners.push(fn);return ()=>{};},request:h.request,
@@ -23,7 +24,7 @@ import {readMemorySessionContent} from '../sessionMemoryContent';
 let engine:MemoryEngine,catalog:SemanticCatalogService;
 afterEach(async()=>{catalog?.stop();await engine?.close();TranscriptMigrationRepository.clearService();if(h.root)rmSync(h.root,{recursive:true,force:true});h.listeners=[];h.running=false;vi.restoreAllMocks();});
 async function setup() {
-  h.root=mkdtempSync(path.join(tmpdir(),'session-memory-search-'));h.enabled=true;h.running=false;
+  h.root=mkdtempSync(path.join(tmpdir(),'session-memory-search-'));h.enabled=true;h.running=false;h.active=false;h.stateListeners=[];
   h.metas=[{id:'parent',title:'Chat',provider:'openai-codex',workspaceId:h.root,isArchived:false,parentSessionId:null},
     {id:'child',title:'Child',provider:'openai-codex',workspaceId:h.root,isArchived:false,parentSessionId:'parent'}];
   const rows:RawMessage[]=[];
@@ -49,6 +50,15 @@ async function setup() {
   return {append,sparse,runtime};
 }
 describe('live normalized session catalogue → actual Memory search',()=>{
+  it('holds streaming output until completion, then makes it searchable once',async()=>{
+    const {append,sparse}=await setup();h.active=true;
+    append('parent','ЗавершённыйОтветМаркер','output');
+    append('child','ПараллельныйВопросМаркер','input');
+    await vi.waitFor(async()=>expect(await sparse('ПараллельныйВопросМаркер')).toHaveLength(1),{timeout:3000});
+    expect(await sparse('ЗавершённыйОтветМаркер')).toEqual([]);
+    h.active=false;for(const fn of h.stateListeners)fn({type:'session:completed',sessionId:'parent'});
+    await vi.waitFor(async()=>expect(await sparse('ЗавершённыйОтветМаркер')).toHaveLength(1),{timeout:3000});
+  });
   it('backfills more than 400 sessions and removes a deleted source without disturbing its siblings',async()=>{
     const {append,sparse}=await setup();
     for(let i=0;i<405;i++)h.metas.push({id:'history'+i,title:'History',provider:'openai-codex',isArchived:false,parentSessionId:null});

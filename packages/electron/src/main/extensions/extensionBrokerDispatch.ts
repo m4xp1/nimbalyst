@@ -23,6 +23,7 @@ import { registerBackendTools } from '../mcp/backendToolRegistry';
 import { dispatchExtensionSessionsOp } from '../services/extensionSessions/extensionSessionsService';
 import { CapabilityDeniedError } from './extensionCapabilityPolicy';
 import { rebuildSessionMemory } from '../services/sessionMemoryEvents';
+import {readCurrentMemorySession} from '../services/MemorySessionReader';
 import { setBackendPanelGutterBadge } from './backendPanelBadges';
 import type {
   BackendRuntimeContext,
@@ -40,6 +41,7 @@ export async function dispatchBrokerMethod(
     case 'memorySessions': {
       if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory session capability denied');
       const payload=rawPayload as BrokerPayloads['memorySessions'];
+      if(payload.op==='read')return readCurrentMemorySession(ctx.workspacePath,payload);
       if(payload.op!=='rebuild')throw new Error('Unknown Memory session operation');
       await rebuildSessionMemory(ctx.workspacePath);return {ok:true};
     }

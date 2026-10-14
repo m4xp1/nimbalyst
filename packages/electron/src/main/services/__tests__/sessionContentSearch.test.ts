@@ -31,6 +31,8 @@ describe('normalized session content for Memory search', () => {
     const {append,meta} = setup();
     expect((await readMemorySessionContent(meta)).text).toBe('');
     append({prompt:'РусскийМаркерНачало'},'input');
+    append({method:'item/agentMessage/delta',params:{itemId:'a1',delta:'ОтветМаркер'}},'output');
+    append({method:'item/completed',params:{item:{id:'a1',type:'agentMessage',text:'ОтветМаркерКонец'}}},'output');
     append({method:'item/completed',params:{item:{id:'a1',type:'agentMessage',text:'ОтветМаркерКонец'}}},'output');
     append({method:'item/completed',params:{item:{id:'tool1',type:'commandExecution',command:'СлужебныйМаркер'}}},'output');
     append({prompt:'СкрытыйМаркер'},'input',true);

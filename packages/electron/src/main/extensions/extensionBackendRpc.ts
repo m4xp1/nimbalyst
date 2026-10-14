@@ -185,7 +185,7 @@ export type BrokerMethodName =
 
 /** Payload shapes for each broker method. Kept here so both sides share one truth. */
 export interface BrokerPayloads {
-  memorySessions: {op:'rebuild'};
+  memorySessions: {op:'rebuild'} | {op:'read';sessionId:string;cursor?:string;maxChars?:number};
   logRaw: {
     direction: 'inbound' | 'outbound';
     sessionId: string;
@@ -251,7 +251,7 @@ export interface BrokerPayloads {
 
 /** Result shapes returned over broker-response for each method. */
 export interface BrokerResults {
-  memorySessions: {ok:true};
+  memorySessions: {ok:true} | import('../services/MemorySessionReader').MemorySessionReadResult;
   logRaw: { id: number };
   getApiKey: { key: string | null };
   readWorkspaceFile: { content: string };
