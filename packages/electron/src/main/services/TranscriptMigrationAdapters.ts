@@ -21,24 +21,19 @@ export function createRawMessageStoreAdapter(): IRawMessageStore {
         await database.initialize();
       }
 
-      let sql: string;
-      let params: any[];
-
-      if (afterId != null) {
-        sql = `SELECT id, session_id, source, direction, content, created_at, metadata, hidden
-               FROM ai_agent_messages
-               WHERE session_id = $1 AND id > $2
-               ORDER BY id ASC`;
-        params = [sessionId, afterId];
-      } else {
-        sql = `SELECT id, session_id, source, direction, content, created_at, metadata, hidden
-               FROM ai_agent_messages
-               WHERE session_id = $1
-               ORDER BY id ASC`;
-        params = [sessionId];
+      const rows: any[] = [];
+      let cursor = afterId ?? 0;
+      // Keep each worker query bounded without discarding the older dialogue.
+      for (;;) {
+        const page = await database.query<any>(
+          `SELECT id, session_id, source, direction, content, created_at, metadata, hidden
+           FROM ai_agent_messages WHERE session_id = $1 AND id > $2
+           ORDER BY id ASC LIMIT 500`, [sessionId, cursor],
+        );
+        rows.push(...page.rows);
+        if (page.rows.length < 500) break;
+        cursor = Number(page.rows[page.rows.length - 1].id);
       }
-
-      const { rows } = await database.query<any>(sql, params);
 
       return rows.map((row: any) => {
         let metadata = row.metadata;

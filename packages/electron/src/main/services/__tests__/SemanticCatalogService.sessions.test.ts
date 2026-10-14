@@ -23,8 +23,8 @@ vi.mock('../../utils/store', () => ({
 vi.mock('@nimbalyst/runtime/storage/repositories/AISessionsRepository', () => ({
   AISessionsRepository: { list: h.sessions },
 }));
-vi.mock('@nimbalyst/runtime/storage/repositories/AgentMessagesRepository', () => ({
-  AgentMessagesRepository: { list: h.messages },
+vi.mock('@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository', () => ({
+  TranscriptMigrationRepository: { getService: () => ({getViewMessages:h.messages}) },
 }));
 import { SemanticCatalogService } from '../SemanticCatalogService';
 function records(ws: string) {

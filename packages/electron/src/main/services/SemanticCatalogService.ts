@@ -17,7 +17,7 @@ import type {
   SessionMeta,
 } from '@nimbalyst/runtime';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
-import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
+import { readMemorySessionContent } from './sessionMemoryContent';
 import { getPrivilegedExtensionHost, type ModuleHandle } from '../extensions/PrivilegedExtensionHost';
 import { documentServices } from '../window/WindowManager';
 import { getAppSetting, setAppSetting } from '../utils/store';
@@ -37,12 +37,6 @@ const FLUSH_DEBOUNCE_MS = 800;
 /** Cap records per ingest RPC so a large backfill is many bounded messages. */
 const INGEST_BATCH = 200;
 
-/** Bound the session backfill so a huge history can't stall the first index. */
-const MAX_SESSIONS = 400;
-/** Messages read per session, and per-message / per-session text caps. */
-const SESSION_MSG_LIMIT = 60;
-const PER_MESSAGE_CAP = 2000;
-const SESSION_TEXT_CAP = 8000;
 
 /** Recheck a running engine while its initial index is still becoming ready. */
 const READINESS_RETRY_MS = 1000;
@@ -55,6 +49,7 @@ interface VirtualRecord {
   refId: string;
   title?: string;
   text: string;
+  parentSessionId?: string | null;
 }
 
 interface FileRecord extends VirtualRecord {
@@ -198,11 +193,6 @@ async function buildFileRecord(workspace: string, item: TrackerItem): Promise<{ 
   } } };
 }
 
-/** Heuristic: skip assistant messages whose content is raw tool/structured JSON. */
-function looksLikeJson(text: string): boolean {
-  const t = text.trimStart();
-  return t.startsWith('{') || t.startsWith('[');
-}
 
 export class SemanticCatalogService {
   private static instance: SemanticCatalogService | null = null;
@@ -598,37 +588,17 @@ export class SemanticCatalogService {
     return this.sessionsEnabled() && this.sessionGenerations.get(workspacePath) === generation;
   }
 
-  /** Build the indexable record for a session: title + tags + prompts + replies.
-   *  Never the raw transcript — user inputs are plain text; assistant outputs are
-   *  included only when not raw tool/structured JSON. */
+  /** Normalized chronological dialogue, using the same projection as the UI. */
   private async buildSessionRecord(meta: SessionMeta): Promise<VirtualRecord | null> {
-    let messages: Array<{ direction: string; content: unknown }> = [];
-    try {
-      messages = (await AgentMessagesRepository.list(meta.id, {
-        limit: SESSION_MSG_LIMIT,
-        includeHidden: false,
-      })) as Array<{ direction: string; content: unknown }>;
-    } catch {
-      messages = [];
-    }
-    const prompts: string[] = [];
-    const replies: string[] = [];
-    for (const m of messages) {
-      const content = typeof m.content === 'string' ? m.content.slice(0, PER_MESSAGE_CAP) : '';
-      if (!content.trim()) continue;
-      if (m.direction === 'input') prompts.push(content);
-      else if (m.direction === 'output' && !looksLikeJson(content)) replies.push(content);
-    }
+    const content = await readMemorySessionContent(meta);
     const tags = meta.tags?.length ? `Tags: ${meta.tags.join(', ')}` : '';
     const text = [
       meta.phase ? `Phase: ${meta.phase}` : '',
       tags,
-      prompts.length ? `Prompts:\n${prompts.join('\n')}` : '',
-      replies.length ? `Responses:\n${replies.join('\n')}` : '',
+      content.text,
     ]
       .filter(Boolean)
-      .join('\n\n')
-      .slice(0, SESSION_TEXT_CAP);
+      .join('\n\n');
     if (!text.trim() && !meta.title) return null;
     return {
       id: `session:${meta.id}`,
@@ -637,12 +607,13 @@ export class SemanticCatalogService {
       refId: meta.id,
       title: meta.title || 'Untitled session',
       text,
+      parentSessionId: content.parentSessionId,
     };
   }
 
   private async backfillSessions(workspacePath: string, generation: number): Promise<void> {
     const metas = await AISessionsRepository.list(workspacePath);
-    const active = metas.filter((m) => !m.isArchived).slice(0, MAX_SESSIONS);
+    const active = metas.filter((m) => !m.isArchived);
     let batch: VirtualRecord[] = [];
     let count = 0;
     for (const meta of active) {
