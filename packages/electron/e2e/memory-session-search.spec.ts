@@ -46,7 +46,11 @@ test.describe.serial('Built Memory session search and current dialogue',()=>{
  test.afterAll(async()=>{await client?.close();if(app){const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);}}});
  test('finds persisted user and assistant markers, reads pages, and opens the actual child',async()=>{
   await append(sid,'РусскийПользовательМаркер '+('Текст😀 '.repeat(4000)),'input');await append(sid,'РусскийАссистентМаркер','output');await append(child,'МаркерДочернегоДиалога','input');
-  await expect.poll(async()=>{const hits=await call('search_project_knowledge',{query:'РусскийАссистентМаркер',k:10});return JSON.stringify(hits).includes('РусскийАссистентМаркер');},{timeout:10000}).toBe(true);
+  await expect.poll(async()=>{const hits=await call('search_project_knowledge',{query:'РусскийАссистентМаркер',k:10});return hits.chunks.some((h:any)=>h.refId===sid&&h.text.includes('РусскийАссистентМаркер'));},{timeout:10000}).toBe(true);
+  const search=await call('search_project_knowledge',{query:'РусскийАссистентМаркер',k:10});
+  expect(search.sessionReadHint).toEqual(expect.any(String));
+  const hit=search.chunks.find((h:any)=>h.refId===sid);expect(hit.sourcePath).toBe('session:'+sid);
+  expect((await call('expand',{sourcePath:hit.sourcePath,headingPath:hit.headingPath})).text).toContain('РусскийАссистентМаркер');
   let result=await call('read_session',{sessionId:sid,maxChars:1000}),text=result.text;const version=result.snapshotVersion;
   await append(sid,'ОтветПослеСнимкаМаркер','output');
   while(result.hasMore){result=await call('read_session',{sessionId:sid,cursor:result.nextCursor,maxChars:1000});expect(result.snapshotVersion).toBe(version);text+=result.text;}

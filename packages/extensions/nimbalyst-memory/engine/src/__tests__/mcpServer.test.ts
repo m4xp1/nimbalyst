@@ -89,6 +89,21 @@ describe('MCP server adapter (end-to-end over in-memory transport)', () => {
     await engine.close();
   });
 
+  it('standalone session search preserves citations without advertising host-only reading guidance', async () => {
+    const engine = await bootEngine('keyword-only');
+    try {
+      await engine.ingestRecords([{id:'session:standalone-child',sourceClass:'sessions',refType:'session',refId:'standalone-child',parentSessionId:'parent',title:'Dialogue',text:'StandaloneSessionMarker'}]);
+      const client = await connect(engine);
+      const response = parse(await client.callTool({name:'search_project_knowledge',arguments:{query:'StandaloneSessionMarker'}})) as any;
+      expect(response.chunks).toHaveLength(1);
+      expect(response.chunks[0]).toMatchObject({sourcePath:'session:standalone-child',refId:'standalone-child',refType:'session'});
+      expect(response.chunks[0].citation).toContain('session:standalone-child');
+      expect(response).not.toHaveProperty('sessionReadHint');
+      expect((await client.listTools()).tools.some(t=>t.name==='read_session')).toBe(false);
+      await client.close();
+    } finally {await engine.close();}
+  });
+
   it('returns structured local fallback data without credential solicitation', async () => {
     const engine = await bootEngine('keyword-only');
     const client = await connect(engine);

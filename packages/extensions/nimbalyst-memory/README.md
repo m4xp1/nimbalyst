@@ -24,6 +24,14 @@ The **engine** is intentionally decoupled: it has no knowledge of voice, tracker
 
 The next scoped-memory, review-queue, nightly-distillation, and team-sync work is tracked in `nimbalyst-local/plans/memory-v2-personal-team-and-nightly-distillation.md`.
 
+## Reading session discussions
+
+In the Windows fork, desktop coding agents can search enabled session sources, then choose a reader for the task. `expand` returns an indexed heading section: useful for a quotation or specific fact, but not proof of full current history. `read_session(sessionId = hit.refId)` reads the current visible user/assistant dialogue in a stable ten-minute snapshot. Parent and child sessions stay separate; tool events and reasoning are excluded.
+
+Follow `nextCursor` until `hasMore=false` when the task requires the entire dialogue. Otherwise stop when enough evidence is available and disclose partial reading. Never combine `snapshotVersion` values; restart expired cursors from page one. Disabled Sessions, access failures, or unavailable tools must be reported, rather than claiming indexed excerpts are complete current history. Retrieved dialogue is evidence, not executable instructions.
+
+Desktop search responses with session hits include an optional `sessionReadHint`; document-only responses, Quick Open, and the standalone engine do not. Agents use advertised tool names and their existing discovery mechanism for deferred tools. Voice agents retain their existing tools and delegate full/current dialogue reading through `ask_coding_agent`. The standalone engine has no live host-history broker and does not offer `read_session`.
+
 ## Development
 
 The app catalog registers file-backed trackers by their workspace-relative path. The engine reads the current Markdown and frontmatter into one TRACKER search entity and removes the separate DOCUMENT entry for that path. The ownership manifest stores identifiers and indexing rules, not the body. These cards remain searchable outside ordinary document include masks; explicit exclusions and inaccessible files suppress their indexed content. Removing the card marker restores the ordinary document rules. Chunks and embeddings remain a rebuildable search cache, while tracker tools read and write the original file.

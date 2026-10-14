@@ -233,6 +233,8 @@ export interface RetrievalCapabilities {
 
 export interface ProjectSearchResponse {
   chunks: SearchHit[];
+  /** Optional desktop-host guidance for session hits; absent from standalone and Quick Open. */
+  sessionReadHint?: string;
   capabilities: RetrievalCapabilities;
   fallback: {
     used: boolean;

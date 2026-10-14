@@ -45,8 +45,13 @@ export const BRAINSTORM_CHOREOGRAPHY =
   'flight, call search_project_knowledge for the relevant design docs/plans/' +
   'CLAUDE.md and recall for durable facts. Do these BEFORE ask_coding_agent -- ' +
   'they answer in under a second, whereas the coding agent can take minutes. ' +
-  'Only fall back to ask_coding_agent when memory returns nothing or the question ' +
-  'truly needs live code inspection. Use remember to store preferences ' +
+  'Memory session hits are indexed excerpts, not proof of complete current dialogue. ' +
+  'For a full or current session discussion, ask_coding_agent to use Memory read_session ' +
+  'if available, reading all pages only when required and disclosing partial reading. ' +
+  'Do not call an unlisted read_session tool yourself. Keep using the existing session ' +
+  'tools for session status and summaries. Also fall back to ask_coding_agent when ' +
+  'memory returns nothing or the question truly needs live code inspection. ' +
+  'Use remember to store preferences ' +
   'worth keeping; record a project decision where the project records ' +
   'decisions, not only here. ' +
   'Brainstorm loop: when an idea is fleshed out, kick off a plan with ' +
