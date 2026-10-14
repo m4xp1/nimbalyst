@@ -79,6 +79,7 @@ interface ActivateCtx {
     dataDir: string;
     log: (level: LogLevel, message: string, data?: unknown) => void;
     getApiKey: (providerId: string) => Promise<{ key: string | null }>;
+    memorySessions?: (payload:{op:'rebuild'})=>Promise<unknown>;
     registerMcpTools: (
       tools: Array<{
         name: string;
@@ -126,6 +127,7 @@ interface GlobalSearchResult {
    */
   similarity?: { cosine?: number; bm25?: number };
   keywordMatch?: 'exact' | 'stem';
+  parentSessionId?: string | null;
 }
 
 /**
@@ -150,6 +152,7 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
       signals: h.signals ?? { dense: false, sparse: false },
       ...(h.similarity ? { similarity: h.similarity } : {}),
       ...(h.keywordMatch ? { keywordMatch: h.keywordMatch } : {}),
+      ...(h.refType === 'session' ? {parentSessionId:h.parentSessionId ?? null} : {}),
     });
   }
   return Array.from(best.values())
@@ -586,6 +589,9 @@ export async function activate(ctx: ActivateCtx) {
 
       /** Host-only: remove persisted sessions without consulting the host DB. */
       clearSessionRecords: async () => requireEngine().clearSessionRecords(),
+      completeSessionProjection: async (params:{version?:number;parents:Record<string,string|null>}) => {
+        requireEngine().completeSessionProjection(params.version,params.parents);return {ok:true};
+      },
 
       /** Remove virtual records by id (the same id passed to ingestRecords). */
       removeRecords: async (params: { ids?: string[] }) => {
@@ -862,6 +868,7 @@ export async function activate(ctx: ActivateCtx) {
 
       rebuild: async () => {
         const result = await requireEngine().indexAll();
+        await ctx.services.memorySessions?.({op:'rebuild'});
         log('info', `[memory] rebuild: indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
         return { ok: true, ...result };
       },

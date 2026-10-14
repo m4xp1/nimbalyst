@@ -511,7 +511,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Prompt quick open (Cmd+Shift+L), with filters for user-authored and agent-sent prompts
 - Content search (Cmd+Shift+F)
 - Memory search (Cmd+Shift+O) — a Quick Open "Memory" tab with Docs, Trackers, and Sessions scopes for hybrid semantic + keyword lookup, powered by the Nimbalyst Memory extension; appears only when that extension is enabled. Tracker results retain issue keys, status, type filters, and exact-match lookup; AI session indexing is optional and off by default
-- Windows fork: optional session indexing uses the same normalized user and assistant dialogue as the transcript UI, including provider JSON and assembled streaming replies; parent and child sessions remain separate sources, without truncating the dialogue to its first messages.
+- Windows fork: optional session indexing uses the same normalized user and assistant dialogue as the transcript UI, including provider JSON and assembled streaming replies; parent and child sessions remain separate sources, without truncating the dialogue to its first messages. Saved replies update the index in the background; Rebuild also refreshes sessions and removes obsolete snapshots.
 - Shared team document quick open (Cmd+Shift+D) — a team-gated Quick Open tab with name filtering, unread/favorite cues, and direct navigation into Shared Documents
 - Mouse back/forward button support
 - Breadcrumb navigation

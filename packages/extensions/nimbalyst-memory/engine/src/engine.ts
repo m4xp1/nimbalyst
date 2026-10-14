@@ -232,6 +232,9 @@ export class MemoryEngine {
    */
   async ingestRecords(records: VirtualRecord[]): Promise<{ ingested: number }> {
     const { embedded, changed } = await this.indexer.indexRecords(records);
+    const projection=this.store.getSessionProjection();
+    for(const record of records) if(record.refType==='session') projection.parents[record.id]=record.parentSessionId??null;
+    this.store.setSessionProjection(projection);
     if (changed > 0) this.refreshSnapshot();
     return { ingested: embedded };
   }
@@ -259,11 +262,20 @@ export class MemoryEngine {
 
   clearSessionRecords(): { removed: number } {
     const removed = this.store.clearSessionRecords();
+    this.store.setSessionProjection({version:0,parents:{}});
     this.refreshSnapshot();
     return { removed };
   }
 
   // --- Retrieval -----------------------------------------------------------
+
+  completeSessionProjection(version:number|undefined,parents:Record<string,string|null>): void {
+    for(const source of this.store.sourcePaths()) {
+      if(source.startsWith('session:') && !(source in parents)) this.store.deleteSource(source);
+    }
+    this.store.setSessionProjection({version:version??this.store.getSessionProjection().version,parents});
+    this.refreshSnapshot();
+  }
 
   async search(
     query: string,
@@ -288,7 +300,9 @@ export class MemoryEngine {
       }
       this.lastEmbedError = msg;
     }
-    return this.retriever.search(query, vec, k, opts);
+    const parents=this.store.getSessionProjection().parents;
+    return this.retriever.search(query, vec, k, opts).map(hit=>hit.refType==='session'
+      ? {...hit,parentSessionId:parents[hit.sourcePath]??null}:hit);
   }
 
   expand(sourcePath: string, headingPath: string[]): { sourcePath: string; headingPath: string[]; text: string } | null {

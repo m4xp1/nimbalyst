@@ -22,6 +22,7 @@ import { dispatchDevAgentTool } from '../mcp/devAgentTools';
 import { registerBackendTools } from '../mcp/backendToolRegistry';
 import { dispatchExtensionSessionsOp } from '../services/extensionSessions/extensionSessionsService';
 import { CapabilityDeniedError } from './extensionCapabilityPolicy';
+import { rebuildSessionMemory } from '../services/sessionMemoryEvents';
 import { setBackendPanelGutterBadge } from './backendPanelBadges';
 import type {
   BackendRuntimeContext,
@@ -36,6 +37,12 @@ export async function dispatchBrokerMethod(
   ctx: BackendRuntimeContext
 ): Promise<BrokerResults[BrokerMethodName]> {
   switch (method) {
+    case 'memorySessions': {
+      if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory session capability denied');
+      const payload=rawPayload as BrokerPayloads['memorySessions'];
+      if(payload.op!=='rebuild')throw new Error('Unknown Memory session operation');
+      await rebuildSessionMemory(ctx.workspacePath);return {ok:true};
+    }
     case 'logRaw': {
       const payload = rawPayload as BrokerPayloads['logRaw'];
       // Per phase-4-sdk-types-proposal §4.3 anti-impersonation guarantee:

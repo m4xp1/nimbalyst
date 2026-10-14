@@ -7,6 +7,7 @@ import type {
   CreateAgentMessageInput,
 } from '@nimbalyst/runtime';
 import type { AgentMessagesStore } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
+import { notifySessionMemoryChange } from './sessionMemoryEvents';
 
 type PGliteLike = {
   query<T = any>(sql: string, params?: any[]): Promise<{ rows: T[] }>;
@@ -71,6 +72,7 @@ export function createPGLiteAgentMessagesStore(db: PGliteLike, ensureDbReady?: E
         );
 
         await db.query('COMMIT', []);
+        notifySessionMemoryChange(message.sessionId, message.direction);
       } catch (error) {
         await db.query('ROLLBACK', []);
         throw error;
@@ -147,6 +149,9 @@ export function createPGLiteAgentMessagesStore(db: PGliteLike, ensureDbReady?: E
         }
 
         await db.query('COMMIT', []);
+        for (const sessionId of latestPerSession.keys()) {
+          notifySessionMemoryChange(sessionId, messages.some(m => m.sessionId === sessionId && m.direction === 'input') ? 'input' : 'output');
+        }
       } catch (error) {
         await db.query('ROLLBACK', []);
         throw error;

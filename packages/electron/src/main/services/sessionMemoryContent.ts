@@ -1,11 +1,20 @@
 import type { SessionMeta } from '@nimbalyst/runtime';
-import { TranscriptMigrationRepository } from '@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository';
+import { TranscriptRuntime } from '@nimbalyst/runtime/ai/server/transcript/TranscriptRuntime';
+import { createRawMessageStoreAdapter } from './TranscriptMigrationAdapters';
+
+// Same parser/projector, separate derived cache: backfill must not evict open UI sessions.
+let runtime:TranscriptRuntime|undefined;
+export function invalidateMemorySessionContent(sessionId?:string):void {
+  if(sessionId)void runtime?.forceReparseSession(sessionId, '');
+  else runtime=undefined;
+}
 
 /** One reader for the search projection and live agent reads; never provider JSON. */
-export async function readMemorySessionContent(meta: SessionMeta): Promise<{
+export async function readMemorySessionContent(meta: SessionMeta, reader?:Pick<TranscriptRuntime,'getViewMessages'>): Promise<{
   text: string; parentSessionId: string | null;
 }> {
-  const messages = await TranscriptMigrationRepository.getService().getViewMessages(meta.id, meta.provider);
+  const source=reader??(runtime??=new TranscriptRuntime(createRawMessageStoreAdapter()));
+  const messages = await source.getViewMessages(meta.id, meta.provider);
   const text = messages.filter(message =>
     (message.type === 'user_message' || message.type === 'assistant_message') &&
     !message.optimistic && message.promptActor !== 'system' &&

@@ -21,4 +21,19 @@ describe('source settings backend bridge',()=>{
    expect((await runtime.methods.status() as any).bySourceClass.custom ?? 0).toBe(0);
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
+ it('Rebuild coordinates current session search through the broker without a blocking RPC cycle',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-session-rebuild-'));
+  let runtime:Awaited<ReturnType<typeof activate>>;
+  const rebuild=vi.fn(async()=>{
+   await runtime.methods.ingestRecords({records:[{id:'session:child',sourceClass:'sessions',refType:'session',refId:'child',parentSessionId:'parent',title:'Chat',text:'СвежийОтветМаркер'}]});
+   await runtime.methods.completeSessionProjection({version:2,parents:{'session:child':'parent'}});
+  });
+  runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'data'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySessions:rebuild}});
+  try {
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   await runtime.methods.rebuild();expect(rebuild).toHaveBeenCalledOnce();
+   const results=(await runtime.methods.globalSearch({query:'СвежийОтветМаркер',k:5}) as any).results;
+   expect(results).toHaveLength(1);expect(results[0]).toMatchObject({refId:'child',parentSessionId:'parent',signals:{sparse:true}});
+  } finally {await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
 });

@@ -96,6 +96,8 @@ const BROKER_METHOD_PERMISSIONS: {
 } = {
   logRaw: 'nimbalyst-database-write',
   getApiKey: 'secrets-read',
+  // Memory's opt-in session history only; dispatch checks exact module and bound workspace.
+  memorySessions: null,
   readWorkspaceFile: 'workspace-files',
   writeWorkspaceFile: 'workspace-files',
   registerMcpTools: 'mcp-server-register',

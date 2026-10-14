@@ -33,6 +33,7 @@ export function createRawMessageStoreAdapter(): IRawMessageStore {
         rows.push(...page.rows);
         if (page.rows.length < 500) break;
         cursor = Number(page.rows[page.rows.length - 1].id);
+        await new Promise<void>(resolve => setImmediate(resolve));
       }
 
       return rows.map((row: any) => {

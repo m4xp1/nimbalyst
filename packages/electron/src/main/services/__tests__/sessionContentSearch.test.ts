@@ -7,13 +7,16 @@ import { TranscriptRuntime } from '@nimbalyst/runtime/ai/server/transcript/Trans
 import { TranscriptMigrationRepository } from '@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository';
 import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
 import type { RawMessage } from '@nimbalyst/runtime/ai/server/transcript/TranscriptTransformer';
-import { readMemorySessionContent } from '../sessionMemoryContent';
+import { readMemorySessionContent as readContent } from '../sessionMemoryContent';
+let source:TranscriptRuntime;
+const readMemorySessionContent=(meta:any)=>readContent(meta,source);
 
 afterEach(() => { TranscriptMigrationRepository.clearService(); AgentMessagesRepository.clearStore(); });
 function setup(provider = 'openai-codex') {
   const rows: RawMessage[] = [];
   AgentMessagesRepository.setStore({create:async()=>{},list:async(_id,opts)=>rows.filter(r=>!r.hidden).slice(opts?.offset??0,(opts?.offset??0)+(opts?.limit??rows.length))});
   const runtime = new TranscriptRuntime({ getMessages: async (_id, after = 0) => rows.filter(r => r.id > after) });
+  source=runtime;
   TranscriptMigrationRepository.setService(runtime as any);
   const append = (content: unknown, direction: 'input' | 'output', hidden = false) => rows.push({
     id: rows.length + 1, sessionId: 's1', source: provider, direction,
