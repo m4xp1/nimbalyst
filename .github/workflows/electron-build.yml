@@ -212,14 +212,14 @@ jobs:
           $package = Get-Content packages/electron/package.json -Raw | ConvertFrom-Json
           $version = $package.version
           $revision = $package.build.buildVersion
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $section = [regex]::Match($changelog, '(?ms)^## \[' + [regex]::Escape($version) + '\][^\r\n]*\r?\n(?<body>.*?)(?=^## \[|\z)')
+          if (!$section.Success) { throw "Missing CHANGELOG section for $version" }
+          $changes = $section.Groups['body'].Value.Trim()
           @"
           Nimbalyst $tag for Windows x64, based on upstream v0.80.6.
 
-          - Project tracker schemas remain stable when editors open or workspaces change.
-          - File-backed cards and agent tools read and save the original Markdown; Windows path separators resolve to one card.
-          - Memory keeps one current TRACKER entity per file card and reconciles file changes without a full Rebuild.
-          - Coverage uses distinct, softer category colors, including orange trackers.
-          - Standalone database and published team cards keep their routes; Memory model, semantic policy, RRF and recall remain unchanged.
+          $changes
 
           App/About: $version; Windows FileVersion: $revision. Source commit: $env:GITHUB_SHA.
           Only Windows x64 is built. The installer is unsigned and updates are installed manually.
