@@ -1,4 +1,5 @@
 import { FtsLexiconCache, needsRussianFtsProjection, russianFtsQueries } from '../utils/russianFtsSearch';
+import { notifySessionMemoryChange } from './sessionMemoryEvents';
 import { sessionMetadataMergeSql } from './sessionMetadataMerge';
 /**
  * PGLite implementation of SessionStore interface from runtime package
@@ -585,6 +586,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
 
       // TODO: Debug logging - uncomment if needed
       // console.log('[PGLiteSessionStore] Session created successfully in database');
+      notifySessionMemoryChange(payload.id, 'metadata');
     },
 
 
@@ -710,9 +712,11 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
         if (db.runTransaction) await db.runTransaction(statements);
         else for (const statement of statements) await db.query(statement.sql, statement.params);
         await publishSubtreeArchive(subtree.map(row => row.id), metadata.isArchived);
+        for (const row of subtree) notifySessionMemoryChange(row.id, 'access');
       } else {
         await db.query(`UPDATE ai_sessions SET ${setClause} WHERE id=$1`, values);
       }
+      notifySessionMemoryChange(sessionId, metadata.isArchived!==undefined||metadata.workspaceId!==undefined||metadata.worktreeId!==undefined?'access':'metadata');
     },
 
     async findByProviderSessionId(provider: string, providerSessionId: string, workspaceId: string): Promise<ChatSession | null> {
@@ -1247,6 +1251,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
     async delete(sessionId: string): Promise<void> {
       await ensureReady();
       await deleteSessionAndLiftChildren(db, sessionId);
+      notifySessionMemoryChange(sessionId, 'deleted');
     },
 
     async updateTitleIfNotNamed(sessionId: string, title: string): Promise<boolean> {
@@ -1261,6 +1266,7 @@ export function createPGLiteSessionStore(db: PGliteLike, ensureDbReady?: EnsureR
          RETURNING 1 as affected_rows`,
         [sessionId, title]
       );
+      if (rows.length) notifySessionMemoryChange(sessionId, 'metadata');
       return rows.length > 0;
     },
 

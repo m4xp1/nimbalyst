@@ -1,4 +1,5 @@
 import { claimDesktopVoiceEvent, type DesktopVoiceClaim } from './mobileVoiceEvents';
+import {notifySessionMemoryChange} from '../sessionMemoryEvents';
 import { voicePresentationAuthority, registerDesktopVoicePresence } from './voicePresentationAuthority';
 import { getLocalHostDeviceId } from '../ai/sessionHostAttribution';
 import { VoiceStartupTiming } from '../../../shared/voiceStartupTiming';
@@ -1909,6 +1910,7 @@ export function initVoiceModeService() {
         ]
       );
       // Touch updated_at on the session
+      notifySessionMemoryChange(data.sessionId,data.direction);
       await database.query(
         `UPDATE ai_sessions SET updated_at = NOW() WHERE id = $1`,
         [data.sessionId]

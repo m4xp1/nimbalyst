@@ -79,6 +79,7 @@ interface ActivateCtx {
     dataDir: string;
     log: (level: LogLevel, message: string, data?: unknown) => void;
     getApiKey: (providerId: string) => Promise<{ key: string | null }>;
+    memorySessions?: (payload:{op:'rebuild'}|{op:'read';sessionId:string;cursor?:string;maxChars?:number})=>Promise<unknown>;
     registerMcpTools: (
       tools: Array<{
         name: string;
@@ -126,6 +127,7 @@ interface GlobalSearchResult {
    */
   similarity?: { cosine?: number; bm25?: number };
   keywordMatch?: 'exact' | 'stem';
+  parentSessionId?: string | null;
 }
 
 /**
@@ -150,6 +152,7 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
       signals: h.signals ?? { dense: false, sparse: false },
       ...(h.similarity ? { similarity: h.similarity } : {}),
       ...(h.keywordMatch ? { keywordMatch: h.keywordMatch } : {}),
+      ...(h.refType === 'session' ? {parentSessionId:h.parentSessionId ?? null} : {}),
     });
   }
   return Array.from(best.values())
@@ -261,10 +264,18 @@ const TOOL_DESCRIPTORS = [
     voiceAgent: true,
   },
   {
+    name: 'read_session',
+    voiceAgent: false,
+    description: 'Read the full current user/assistant dialogue for a session found by Memory. Sessions must be enabled. Pass sessionId (refId, without session:). Pages use a stable ten-minute snapshot; follow nextCursor until hasMore is false. Parent and child sessions are separate. This reads the current history, not indexed snippets.',
+    inputSchema: {
+      type:'object',properties:{sessionId:{type:'string'},cursor:{type:'string'},maxChars:{type:'integer',minimum:1000,maximum:24000,default:12000}},required:['sessionId'],additionalProperties:false,
+    },
+  },
+  {
     name: 'expand',
     description:
       'Expand a search hit to its full heading section. Pass the sourcePath and ' +
-      'headingPath from a search_project_knowledge result.',
+      'headingPath from a search_project_knowledge result. This is indexed content; for the full current session dialogue use read_session with the session refId.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -586,6 +597,9 @@ export async function activate(ctx: ActivateCtx) {
 
       /** Host-only: remove persisted sessions without consulting the host DB. */
       clearSessionRecords: async () => requireEngine().clearSessionRecords(),
+      completeSessionProjection: async (params:{version?:number;parents:Record<string,string|null>}) => {
+        requireEngine().completeSessionProjection(params.version,params.parents);return {ok:true};
+      },
 
       /** Remove virtual records by id (the same id passed to ingestRecords). */
       removeRecords: async (params: { ids?: string[] }) => {
@@ -691,6 +705,11 @@ export async function activate(ctx: ActivateCtx) {
           ? params.headingPath.map(String)
           : [];
         return requireEngine().expand(sourcePath, headingPath);
+      },
+
+      read_session: async (params:{sessionId:string;cursor?:string;maxChars?:number}) => {
+        if(!ctx.services.memorySessions)throw new Error('Current session reads are unavailable in this host');
+        return ctx.services.memorySessions({op:'read',sessionId:params.sessionId,...(params.cursor!==undefined?{cursor:params.cursor}:{}),...(params.maxChars!==undefined?{maxChars:params.maxChars}:{})});
       },
 
       read_doc: async (params: { path?: string }) => {
@@ -862,6 +881,7 @@ export async function activate(ctx: ActivateCtx) {
 
       rebuild: async () => {
         const result = await requireEngine().indexAll();
+        await ctx.services.memorySessions?.({op:'rebuild'});
         log('info', `[memory] rebuild: indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
         return { ok: true, ...result };
       },

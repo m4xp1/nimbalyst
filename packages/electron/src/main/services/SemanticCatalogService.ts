@@ -17,7 +17,10 @@ import type {
   SessionMeta,
 } from '@nimbalyst/runtime';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
-import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
+import { readMemorySessionContent, invalidateMemorySessionContent } from './sessionMemoryContent';
+import { watchSessionMemoryChanges, registerSessionMemoryRebuilder, invalidateSessionMemoryReads, type SessionMemoryChange } from './sessionMemoryEvents';
+import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
+import { runWhenFirstUsable } from './startupMaintenanceGate';
 import { getPrivilegedExtensionHost, type ModuleHandle } from '../extensions/PrivilegedExtensionHost';
 import { documentServices } from '../window/WindowManager';
 import { getAppSetting, setAppSetting } from '../utils/store';
@@ -37,12 +40,6 @@ const FLUSH_DEBOUNCE_MS = 800;
 /** Cap records per ingest RPC so a large backfill is many bounded messages. */
 const INGEST_BATCH = 200;
 
-/** Bound the session backfill so a huge history can't stall the first index. */
-const MAX_SESSIONS = 400;
-/** Messages read per session, and per-message / per-session text caps. */
-const SESSION_MSG_LIMIT = 60;
-const PER_MESSAGE_CAP = 2000;
-const SESSION_TEXT_CAP = 8000;
 
 /** Recheck a running engine while its initial index is still becoming ready. */
 const READINESS_RETRY_MS = 1000;
@@ -55,6 +52,7 @@ interface VirtualRecord {
   refId: string;
   title?: string;
   text: string;
+  parentSessionId?: string | null;
 }
 
 interface FileRecord extends VirtualRecord {
@@ -79,6 +77,7 @@ export interface SemanticSearchResult {
    */
   similarity?: { cosine?: number; bm25?: number };
   keywordMatch?: 'exact' | 'stem';
+  parentSessionId?: string | null;
 }
 
 /**
@@ -198,13 +197,9 @@ async function buildFileRecord(workspace: string, item: TrackerItem): Promise<{ 
   } } };
 }
 
-/** Heuristic: skip assistant messages whose content is raw tool/structured JSON. */
-function looksLikeJson(text: string): boolean {
-  const t = text.trimStart();
-  return t.startsWith('{') || t.startsWith('[');
-}
 
 export class SemanticCatalogService {
+  constructor(private readonly readSession:typeof readMemorySessionContent=readMemorySessionContent) {}
   private static instance: SemanticCatalogService | null = null;
   private wired = new Map<string, WiredWorkspace>();
   private readiness = new Map<string, boolean>();
@@ -216,6 +211,8 @@ export class SemanticCatalogService {
   private sessionErrors = new Map<string, string>();
   private sessionOperations = new Map<string, Promise<void>>();
   private catalogOperations = new Map<string, Promise<void>>();
+  private sessionPending = new Map<string, {ids:Set<string>; deferred:Set<string>; timer:NodeJS.Timeout|null}>();
+  private subscriptions: Array<() => void> = [];
 
   static getInstance(): SemanticCatalogService {
     if (!this.instance) this.instance = new SemanticCatalogService();
@@ -227,13 +224,101 @@ export class SemanticCatalogService {
     if (this.started) return;
     this.started = true;
     const host = getPrivilegedExtensionHost();
+    this.subscriptions.push(registerSessionMemoryRebuilder(workspace=>this.rebuildSessions(workspace)));
+    this.subscriptions.push(watchSessionMemoryChanges(change => this.enqueueSessionChange(change)));
+    this.subscriptions.push(getSessionStateManager().subscribe(event => {
+      if (['session:completed','session:interrupted','session:error','session:waiting'].includes(event.type)) {
+        this.enqueueSessionChange({sessionId:event.sessionId,kind:'metadata'});
+      }
+    }));
 
     // Wire any memory modules that are already running (service may init after
     // the user enabled memory in a prior window).
     for (const handle of host.list()) this.onModuleState(handle);
 
-    host.onStateChanged((handle) => this.onModuleState(handle));
+    this.subscriptions.push(host.onStateChanged((handle) => this.onModuleState(handle)));
   }
+
+  stop(): void {
+    invalidateSessionMemoryReads();
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe?.();
+    for (const workspace of this.sessionPending.keys()) this.cancelSessionTimer(workspace);
+    for (const workspace of this.wired.keys()) this.unwireWorkspace(workspace);
+    for (const [workspace,generation] of this.sessionGenerations) this.sessionGenerations.set(workspace,generation+1);
+    for (const timer of this.readinessRetryTimers.values()) clearTimeout(timer);
+    this.readinessRetryTimers.clear(); this.started=false;
+  }
+
+  private cancelSessionTimer(workspace: string): void {
+    const pending=this.sessionPending.get(workspace);
+    if(pending?.timer) clearTimeout(pending.timer);
+    this.sessionPending.delete(workspace);
+  }
+
+  private enqueueSessionChange(change: SessionMemoryChange): void {
+    if(change.kind==='metadata'||change.kind==='access'||change.kind==='deleted')invalidateMemorySessionContent(change.sessionId);
+    if(!this.sessionsEnabled()) return;
+    for(const handle of getPrivilegedExtensionHost().list()) {
+      if(handle.extensionId!==EXT_ID || handle.moduleId!==MODULE_ID || handle.state.status!=='running') continue;
+      const workspace=handle.workspacePath;
+      let pending=this.sessionPending.get(workspace);
+      if(!pending) {pending={ids:new Set(),deferred:new Set(),timer:null};this.sessionPending.set(workspace,pending);}
+      pending.ids.add(change.sessionId);
+      if(change.kind==='output' && getSessionStateManager().getSessionState(change.sessionId)?.status==='running') {
+        pending.deferred.add(change.sessionId);continue;
+      }
+      pending.deferred.delete(change.sessionId);
+      if(pending.timer) clearTimeout(pending.timer);
+      pending.timer=setTimeout(()=>{
+        const ids=[...pending!.ids].filter(id=>!pending!.deferred.has(id));
+        pending!.timer=null;
+        for(const id of ids)pending!.ids.delete(id);
+        if(!pending!.ids.size)this.sessionPending.delete(workspace);
+        if(!ids.length)return;
+        const generation=this.sessionGenerations.get(workspace)??0;
+        runWhenFirstUsable('live-session-projection',()=>{
+          if(!this.sessionPassCurrent(workspace,generation))return;
+          const previous=this.sessionOperations.get(workspace)??Promise.resolve();
+          const operation=previous.catch(()=>{}).then(()=>this.updateSessions(workspace,generation,ids));
+          this.sessionOperations.set(workspace,operation);
+          return operation.catch(()=>{this.sessionErrors.set(workspace,'Session content could not be indexed. Retry Rebuild.');});
+        });
+      },FLUSH_DEBOUNCE_MS);
+      pending.timer.unref?.();
+    }
+  }
+
+  private async updateSessions(workspace: string,generation: number,ids:string[]): Promise<void> {
+    if(!this.sessionPassCurrent(workspace,generation)) return;
+    if(getPrivilegedExtensionHost().getState(EXT_ID,MODULE_ID,workspace)?.status!=='running') return;
+    const metas=new Map((await AISessionsRepository.list(workspace)).map(meta=>[meta.id,meta]));
+    const failures:string[]=[];
+    for(const id of ids) {
+      if(!this.sessionPassCurrent(workspace,generation)) return;
+      const meta=metas.get(id);
+      try {
+        const record=meta&&!meta.isArchived?await this.buildSessionRecord(meta):null;
+        if(!this.sessionPassCurrent(workspace,generation)) return;
+        if(record) await this.ingest(workspace,[record]);
+        else await this.removeSessionSource(workspace,id);
+      } catch {
+        await this.removeSessionSource(workspace,id);failures.push(id);
+      }
+    }
+    if(!this.sessionPassCurrent(workspace,generation)) return;
+    const parents=Object.fromEntries([...metas.values()].filter(meta=>!meta.isArchived).map(meta=>[`session:${meta.id}`,meta.parentSessionId??null]));
+    await getPrivilegedExtensionHost().request({extensionId:EXT_ID,moduleId:MODULE_ID,workspacePath:workspace,
+      method:'completeSessionProjection',params:{parents},requiredPermission:null});
+    if(failures.length) throw new Error('Session content unavailable ('+failures.length+' session(s))');
+    this.sessionErrors.delete(workspace);
+  }
+
+  private async removeSessionSource(workspace: string,id:string): Promise<void> {
+    await getPrivilegedExtensionHost().request({extensionId:EXT_ID,moduleId:MODULE_ID,workspacePath:workspace,
+      method:'removeRecords',params:{ids:[`session:${id}`]},requiredPermission:null});
+  }
+
+  async rebuildSessions(workspacePath:string): Promise<void> { await this.reconcileSessions(workspacePath); }
 
   private onModuleState(handle: ModuleHandle): void {
     if (handle.extensionId !== EXT_ID || handle.moduleId !== MODULE_ID) return;
@@ -241,10 +326,15 @@ export class SemanticCatalogService {
     if (handle.state.status === 'running') {
       this.wireWorkspace(handle.workspacePath);
       void this.refreshReadiness(handle.workspacePath, generation);
-      void this.reconcileSessions(handle.workspacePath).catch((err: unknown) =>
-        console.error('[SemanticCatalog] session reconciliation failed:', String(err))
-      );
+      const reconcile=()=>{
+        if(this.currentGeneration(handle.workspacePath)!==generation)return;
+        return this.reconcileSessions(handle.workspacePath).catch(()=>console.error('[SemanticCatalog] session reconciliation failed'));
+      };
+      if(this.sessionsEnabled())runWhenFirstUsable('memory-session-backfill',reconcile);
+      else void reconcile();
     } else {
+      invalidateSessionMemoryReads(handle.workspacePath);
+      this.cancelSessionTimer(handle.workspacePath);
       this.sessionGenerations.set(handle.workspacePath,
         (this.sessionGenerations.get(handle.workspacePath) ?? 0) + 1);
       this.unwireWorkspace(handle.workspacePath);
@@ -556,6 +646,9 @@ export class SemanticCatalogService {
   /** Toggle session indexing and (un)backfill every wired workspace to match. */
   async setSessionsEnabled(enabled: boolean): Promise<void> {
     setAppSetting(SESSIONS_SETTING_KEY, enabled);
+    if(!enabled)invalidateSessionMemoryReads();
+    if(!enabled)invalidateMemorySessionContent();
+    if(!enabled) for(const workspace of this.sessionPending.keys()) this.cancelSessionTimer(workspace);
     const running = getPrivilegedExtensionHost().list()
       .filter((h) => h.extensionId === EXT_ID && h.moduleId === MODULE_ID && h.state.status === 'running')
       .map((h) => h.workspacePath);
@@ -598,37 +691,17 @@ export class SemanticCatalogService {
     return this.sessionsEnabled() && this.sessionGenerations.get(workspacePath) === generation;
   }
 
-  /** Build the indexable record for a session: title + tags + prompts + replies.
-   *  Never the raw transcript — user inputs are plain text; assistant outputs are
-   *  included only when not raw tool/structured JSON. */
+  /** Normalized chronological dialogue, using the same projection as the UI. */
   private async buildSessionRecord(meta: SessionMeta): Promise<VirtualRecord | null> {
-    let messages: Array<{ direction: string; content: unknown }> = [];
-    try {
-      messages = (await AgentMessagesRepository.list(meta.id, {
-        limit: SESSION_MSG_LIMIT,
-        includeHidden: false,
-      })) as Array<{ direction: string; content: unknown }>;
-    } catch {
-      messages = [];
-    }
-    const prompts: string[] = [];
-    const replies: string[] = [];
-    for (const m of messages) {
-      const content = typeof m.content === 'string' ? m.content.slice(0, PER_MESSAGE_CAP) : '';
-      if (!content.trim()) continue;
-      if (m.direction === 'input') prompts.push(content);
-      else if (m.direction === 'output' && !looksLikeJson(content)) replies.push(content);
-    }
+    const content = await this.readSession(meta);
     const tags = meta.tags?.length ? `Tags: ${meta.tags.join(', ')}` : '';
     const text = [
       meta.phase ? `Phase: ${meta.phase}` : '',
       tags,
-      prompts.length ? `Prompts:\n${prompts.join('\n')}` : '',
-      replies.length ? `Responses:\n${replies.join('\n')}` : '',
+      content.text,
     ]
       .filter(Boolean)
-      .join('\n\n')
-      .slice(0, SESSION_TEXT_CAP);
+      .join('\n\n');
     if (!text.trim() && !meta.title) return null;
     return {
       id: `session:${meta.id}`,
@@ -637,28 +710,38 @@ export class SemanticCatalogService {
       refId: meta.id,
       title: meta.title || 'Untitled session',
       text,
+      parentSessionId: content.parentSessionId,
     };
   }
 
   private async backfillSessions(workspacePath: string, generation: number): Promise<void> {
     const metas = await AISessionsRepository.list(workspacePath);
-    const active = metas.filter((m) => !m.isArchived).slice(0, MAX_SESSIONS);
+    const active = metas.filter((m) => !m.isArchived);
     let batch: VirtualRecord[] = [];
     let count = 0;
+    const parents:Record<string,string|null>={};
+    const failures:string[]=[];
     for (const meta of active) {
       if (!this.sessionPassCurrent(workspacePath, generation)) return;
-      const rec = await this.buildSessionRecord(meta);
+      let rec:VirtualRecord|null;
+      try { rec=await this.buildSessionRecord(meta); }
+      catch { await this.removeSessionSource(workspacePath,meta.id);failures.push(meta.id);continue; }
       if (!this.sessionPassCurrent(workspacePath, generation)) return;
       if (!rec) continue;
       batch.push(rec);
+      parents[rec.id]=rec.parentSessionId??null;
       count++;
-      if (batch.length >= INGEST_BATCH) {
+      if (batch.length >= 10) {
         await this.ingest(workspacePath, batch);
         batch = [];
       }
     }
     if (!this.sessionPassCurrent(workspacePath, generation)) return;
     if (batch.length) await this.ingest(workspacePath, batch);
+    if(!this.sessionPassCurrent(workspacePath,generation)) return;
+    await getPrivilegedExtensionHost().request({extensionId:EXT_ID,moduleId:MODULE_ID,workspacePath,
+      method:'completeSessionProjection',params:{version:failures.length?0:2,parents},requiredPermission:null});
+    if(failures.length) throw new Error('Session content unavailable ('+failures.length+' session(s))');
     console.log('[SemanticCatalog] backfilled ' + count + ' session(s) for ' + workspacePath);
   }
 

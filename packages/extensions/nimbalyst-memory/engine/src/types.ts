@@ -88,6 +88,7 @@ export interface StoredChunk extends Chunk {
  * `removeRecords`.
  */
 export interface VirtualRecord {
+  parentSessionId?: string | null;
   id: string;
   /** Free-form coverage tag (e.g. `'trackers'`, `'sessions'`). */
   sourceClass: string;
@@ -187,6 +188,7 @@ export interface EngineConfig {
 
 /** A retrieval hit returned to callers. */
 export interface SearchHit {
+  parentSessionId?: string | null;
   sourcePath: string;
   sourceClass: string;
   /** Openable-entity kind for this hit (`'doc-file'` | `'tracker'` | `'session'` | …). */

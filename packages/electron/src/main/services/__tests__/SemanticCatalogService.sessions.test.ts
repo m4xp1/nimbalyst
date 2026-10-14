@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../startupMaintenanceGate',()=>({runWhenFirstUsable:(_label:string,fn:()=>unknown)=>{void fn();}}));
 const h = vi.hoisted(() => ({
   setting: false, states: new Map<string, { status: string }>(),
   listeners: [] as Array<(handle: any) => void>, records: new Map<string, Map<string, any>>(),
@@ -23,10 +24,15 @@ vi.mock('../../utils/store', () => ({
 vi.mock('@nimbalyst/runtime/storage/repositories/AISessionsRepository', () => ({
   AISessionsRepository: { list: h.sessions },
 }));
-vi.mock('@nimbalyst/runtime/storage/repositories/AgentMessagesRepository', () => ({
-  AgentMessagesRepository: { list: h.messages },
+vi.mock('@nimbalyst/runtime/storage/repositories/TranscriptMigrationRepository', () => ({
+  TranscriptMigrationRepository: { getService: () => ({getViewMessages:h.messages}) },
+}));
+vi.mock('../sessionMemoryContent',()=>({
+  readMemorySessionContent:async(meta:any)=>({text:(await h.messages()).map((m:any)=>m.text??'').join('\n'),parentSessionId:meta.parentSessionId??null}),
+  invalidateMemorySessionContent:()=>{},
 }));
 import { SemanticCatalogService } from '../SemanticCatalogService';
+const activeServices:SemanticCatalogService[]=[];
 function records(ws: string) {
   if (!h.records.has(ws)) h.records.set(ws, new Map());
   return h.records.get(ws)!;
@@ -55,7 +61,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 async function startOff(ws = '/project') {
-  const service = new SemanticCatalogService(); service.start(); event(ws, 'running');
+  const service = new SemanticCatalogService(); activeServices.push(service); service.start(); event(ws, 'running');
   await vi.waitFor(() => expect(h.request.mock.calls.some(([a]) =>
     a.method === 'clearSessionRecords' && a.workspacePath === ws)).toBe(true));
   return service;
@@ -68,7 +74,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => {for(const service of activeServices.splice(0))service.stop();vi.restoreAllMocks();});
 describe('session index reconciliation', () => {
   it('purges stale sessions at startup without a document service, preserving other records', async () => {
     records('/project').set('orphan', { refType: 'session' });

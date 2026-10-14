@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.80.6+m4xp1.4] - 2026-10-14
+
+### Changed
+- Find complete session conversations in Memory and read their current dialogue in pages.
+
 ## [0.80.6+m4xp1.3] - 2026-10-12
 
 ### Changed

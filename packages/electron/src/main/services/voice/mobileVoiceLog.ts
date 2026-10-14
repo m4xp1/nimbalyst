@@ -11,6 +11,7 @@
  */
 
 import { getDatabase } from '../../database/initialize';
+import {notifySessionMemoryChange} from '../sessionMemoryEvents';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { isSessionInWorkspace } from './voiceIpcAuthorization';
 import type { MobileLiveRequest, MobileLiveResult } from './mobileLiveRelay';
@@ -89,6 +90,7 @@ export async function appendMobileVoiceLog(request: MobileLiveRequest): Promise<
   }
   if (appended > 0) {
     await db.query('UPDATE ai_sessions SET updated_at = NOW() WHERE id = $1', [parsed.conversationId]);
+    notifySessionMemoryChange(parsed.conversationId,'metadata');
   }
   return { success: true, result: JSON.stringify({ accepted: parsed.entries.map(e => e.entryId), appended }) };
 }

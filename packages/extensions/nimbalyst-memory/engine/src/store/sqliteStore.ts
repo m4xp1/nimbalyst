@@ -165,6 +165,20 @@ export class SqliteStore {
       .run(String(version));
   }
 
+  getSessionProjection(): {version:number;parents:Record<string,string|null>} {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key='session_projection'").get() as {value:string}|undefined;
+    if (!row) return {version:0,parents:{}};
+    try {
+      const value=JSON.parse(row.value);
+      if(typeof value.version==='number' && value.parents && typeof value.parents==='object')return value;
+    } catch { /* Derived metadata can be reconstructed from the session catalogue. */ }
+    return {version:0,parents:{}};
+  }
+  setSessionProjection(value: {version:number;parents:Record<string,string|null>}): void {
+    this.db.prepare("INSERT INTO meta(key,value) VALUES('session_projection',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify(value));
+  }
+
   /** Wipe all chunks (used when the embedder changes — vectors are non-comparable). */
   reset(): void {
     this.db.exec(`DELETE FROM chunks;`);

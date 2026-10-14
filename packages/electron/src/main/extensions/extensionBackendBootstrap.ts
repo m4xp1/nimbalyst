@@ -165,6 +165,7 @@ export interface BackendServices {
    * Requires: `secrets-read`.
    */
   getApiKey(providerId: string): Promise<BrokerResults['getApiKey']>;
+  memorySessions(payload:BrokerPayloads['memorySessions']):Promise<BrokerResults['memorySessions']>;
 
   /**
    * Read a file rooted at workspacePath. Main-side enforces the workspace
@@ -372,6 +373,7 @@ function buildServices(ctx: BackendRuntimeContext, send: SendToHost): BackendSer
       assert('secrets-read' as ExtensionPermissionId);
       return makeBrokerCall(send, 'getApiKey', { providerId });
     },
+    memorySessions: (payload) => makeBrokerCall(send,'memorySessions',payload),
 
     readWorkspaceFile: (path) => {
       assert('workspace-files' as ExtensionPermissionId);

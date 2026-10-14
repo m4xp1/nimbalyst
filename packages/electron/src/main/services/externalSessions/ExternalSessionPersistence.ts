@@ -3,6 +3,7 @@ import type { AppDatabase } from '../../database/PGLiteDatabaseWorker';
 import type { TransactionStatement } from '../../database/transactionStatements';
 import { providerSessionAliases, resolveProviderSessionId } from '../PGLiteSessionStore';
 import type { ExternalCursor, ExternalSessionRef } from './types';
+import {notifySessionMemoryChange} from '../sessionMemoryEvents';
 
 export type ExternalSessionIdentity = Pick<ExternalSessionRef, 'providerId' | 'externalId' | 'workspacePath'> & {
   /** Owning workspace for DB/list visibility; workspacePath remains the verified log cwd. */
@@ -102,6 +103,7 @@ export class ExternalSessionPersistence {
     });
     await this.ensureReady();
     await this.db.runTransaction(statements);
+    if(messages.length)notifySessionMemoryChange(sessionId,messages.some(message=>message.direction==='output')?'output':'input');
   }
 }
 
