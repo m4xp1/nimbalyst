@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Guide agents to choose indexed evidence or current session dialogue and disclose partial reading.
 
 ### Fixed
 <!-- Bug fixes go here -->
