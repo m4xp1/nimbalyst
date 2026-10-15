@@ -19,7 +19,7 @@ vi.mock('../../../main/services/localWiki/personalPagesExportIpc', () => ({
 }));
 vi.mock('../../../main/utils/workspaceDetection', () => ({ resolveProjectPath: (p: string) => p }));
 
-import { createPageTool, deletePageTool, listPagesTool, renamePageTool } from '@nimbalyst/collab-client/docs/pageTreeToolCore';
+import { createPageTool, deletePageTool, listPagesTool, renamePageTool, searchPagesTool } from '@nimbalyst/collab-client/docs/pageTreeToolCore';
 import { pruneCollabDocsSession } from '@nimbalyst/collab-client/docs';
 import { LocalWikiService } from '../../../main/services/localWiki/LocalWikiService';
 import { getPersonalCollabDocsSession } from '../../store/atoms/collabDocuments';
@@ -88,4 +88,14 @@ describe('section: personal agent tools', () => {
     expect(fs.existsSync(path.join(root, 'Roadmap.md'))).toBe(false);
     expect(fs.readdirSync(path.join(root, '.trash'))).toHaveLength(1);
   });
+});
+
+it('desktop MCP searches Local forms and opens the current file body', async () => {
+  const created = await service.command(project,{type:'register-document',title:'Интерфейс',parentFolderId:null,body:'😀 На русском языке. Ёлки.'});
+  const env = createDesktopPageTreeEnv(project);
+  const result = await searchPagesTool(env,{section:'personal',query:'ёлками языками интерфейсами'});
+  expect(result.success).toBe(true); const hits = (result as any).results;
+  expect(hits).toHaveLength(1); expect(hits[0]).toMatchObject({id:created.id,keywordMatch:'stem'});
+  expect(hits[0].highlights.map((r:any)=>hits[0].snippet.slice(r.start,r.end))).toEqual(['языке','Ёлки']);
+  expect(await readPersonalPageForAgent(hits[0].uri,project)).toBe('😀 На русском языке. Ёлки.');
 });

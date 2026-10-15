@@ -57,3 +57,13 @@ describe('usePagesBodyHits', () => {
     expect(searchPages).toHaveBeenCalledTimes(2);
   });
 });
+
+it('a delayed old response cannot replace the current Local query', async () => {
+  let resolveOld!: (r: PageSearchResponse) => void;
+  const search = vi.fn((r: PageSearchRequest) => r.query === 'старый' ? new Promise<PageSearchResponse>(resolve => {resolveOld=resolve;}) : Promise.resolve(response('ready')));
+  const {result,rerender} = renderHook(({query}) => usePagesBodyHits(query,search,{typeIds:[],pagesRevision:'1'}),{initialProps:{query:'старый'}});
+  await settle(500); rerender({query:'новый'}); await settle(500);
+  expect(result.current?.status).toBe('ready');
+  await act(async()=>resolveOld(response('partial')));
+  expect(result.current?.status).toBe('ready');
+});

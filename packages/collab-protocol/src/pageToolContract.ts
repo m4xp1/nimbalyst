@@ -708,6 +708,9 @@ export interface ListPagesResult {
 
 /** One `searchPages` result. `kind`, `id` and `link` match the `listPages` node it names. */
 export interface SearchPagesResultEntry {
+  /** Optional Local search provenance and UTF-16 snippet ranges. */
+  keywordMatch?: 'exact' | 'stem';
+  highlights?: Array<{ start: number; end: number }>;
   kind: 'page' | 'typedPage' | 'type';
   id: string;
   title: string;

@@ -152,7 +152,7 @@ export function PagesSearchView({
   const body = usePagesBodyHits(state.query, searchPages, { typeIds: pagesBodySearchTypeIds(placedTypeIds, state.filters), pagesRevision });
   // Filter options come from the rows the query keeps, before any clause, so
   // every value the typeahead offers still has rows behind it.
-  const queried = useMemo(() => matchPagesQuery(rows, state.query, body?.hits ?? null), [rows, state.query, body]);
+  const queried = useMemo(() => matchPagesQuery(rows, state.query, body?.hits ?? null, lane), [rows, state.query, body, lane]);
   const fields = useMemo(() => buildPagesFilterFields(queried.map((match) => match.row), { type: typeLabel, author: authorLabel }, narrowed
     ? { typeId: narrowed, fields: globalRegistry.get(narrowed)?.fields ?? [], titleOf }
     : null), [queried, typeLabel, authorLabel, narrowed, titleOf]);

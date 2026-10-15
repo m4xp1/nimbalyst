@@ -614,6 +614,9 @@ importers:
 
   packages/electron:
     dependencies:
+      '@nimbalyst/search-text':
+        specifier: workspace:*
+        version: link:../search-text
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
         version: 0.3.293(@anthropic-ai/sdk@0.115.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.3.6))(zod@4.3.6)

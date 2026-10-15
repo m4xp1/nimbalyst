@@ -161,3 +161,10 @@ describe('pages search text request', () => {
     expect(bodyHitsHiddenByFilters(hits, 3, new Set(['typed:a', 'typed:b', 'typed:c']))).toBe(false);
   });
 });
+
+it('Local title/key forms rank after exact bodies while Team title behavior stays literal', () => {
+  const local = buildPagesSearchRows([{documentId:'form',title:'Интерфейс',updatedAt:2,createdBy:'local'},{documentId:'body',title:'Other',updatedAt:1,createdBy:'local'}], [], { inSection:()=>true, itemTitle:()=>'' });
+  const hit: PageSearchHit = {kind:'page',id:'body',documentId:'body',title:'Other',issueKey:null,snippet:'интерфейсами',highlights:[{start:0,end:13}],updatedAt:1,score:1,keywordMatch:'exact'};
+  expect(matchPagesQuery(local, 'интерфейсами', [hit], 'personal').map(m=>m.row.id)).toEqual(['body','form']);
+  expect(matchPagesQuery(local, 'интерфейсами', [hit]).map(m=>m.row.id)).toEqual(['body']);
+});

@@ -2,7 +2,7 @@ import { normalizeSearchText, projectSearchText, stemSearchToken, type KeywordMa
 export interface SearchRange { start: number; end: number }
 export interface TermSearchField { ranges: SearchRange[]; counts: number[] }
 export interface AllTermsMatch { keywordMatch: KeywordMatch; fields: TermSearchField[] }
-const WORD = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
+const WORD = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./\\-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
 const RUSSIAN = /^[а-я]+$/u;
 const EDGE_PUNCTUATION = /^[,!?;:'"«»()[\]{}—–]+|[,!?;:'"«»()[\]{}—–]+$/gu;
 function terms(query: string): string[] {
@@ -26,6 +26,8 @@ function fieldsFor(query: string, texts: readonly string[]): { fields: TermSearc
       const stem = stemSearchToken(q);
       for (const token of tokens) {
         if (!RUSSIAN.test(token[0]) || stemSearchToken(token[0]) !== stem) continue;
+        const before = p.text[token.index! - 1] ?? '', after = p.text[token.index! + token[0].length] ?? '';
+        if (/[/\\_]/u.test(before) || /[/\\_]/u.test(after)) continue;
         const r = sourceRange(p, token.index!, token.index! + token[0].length);
         // Preserve technical camelCase identifiers even when entirely Cyrillic.
         if (/[а-яё][А-ЯЁ]/u.test(text.slice(r.start, r.end))) continue;

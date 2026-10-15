@@ -9,6 +9,7 @@
  * the runtime's `matchesFilterSet`, so the omnibox drives them unchanged.
  * Pure: hosts map their documents and records in, the view renders the rows.
  */
+import { matchAllSearchTerms } from '@nimbalyst/search-text';
 import { PAGE_SEARCH_MAX_TYPE_IDS, type PageSearchHighlight, type PageSearchHit } from '@nimbalyst/collab-protocol';
 import type { FieldDefinition } from '@nimbalyst/tracker-schema';
 import { matchesFilterSet, type TrackerFilterSet } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerFilters';
@@ -219,7 +220,9 @@ export function matchPagesQuery(
   rows: readonly PagesSearchRow[],
   query: string,
   hits: readonly PageSearchHit[] | null,
+  lane: 'team' | 'personal' = 'team',
 ): PagesSearchMatch[] {
+  if (lane === 'personal') return matchLocalPagesQuery(rows, query, hits);
   if (!query.trim()) return rows.map((row) => ({ row, snippet: null }));
   const key = (kind: string, id: string) => `${kind}:${id}`;
   const byKey = new Map(rows.map((row) => [key(row.kind, row.id), row]));
@@ -386,4 +389,19 @@ export function pagesSearchQuery(state: Partial<PagesSearchState>): string {
   if (state.query?.trim()) params.set('q', state.query);
   if (state.filters?.clauses.length) params.set('filters', JSON.stringify(state.filters));
   return params.toString();
+}
+
+/** Local-only title/key word forms and exact-before-stem ordering. */
+function matchLocalPagesQuery(rows: readonly PagesSearchRow[], query: string, hits: readonly PageSearchHit[] | null): PagesSearchMatch[] {
+  if (!query.trim()) return rows.map(row => ({ row, snippet: null }));
+  const byKey = new Map((hits ?? []).filter(hit => hit.kind !== 'typePage').map(hit => [hit.kind + ':' + hit.id, hit]));
+  return rows.flatMap((row, index) => {
+    const title = matchAllSearchTerms(query, [row.title, row.issueKey ?? '']);
+    const hit = byKey.get(row.kind + ':' + row.id);
+    if (!title && !hit) return [];
+    const keywordMatch = title?.keywordMatch === 'exact' || hit?.keywordMatch === 'exact' ? 'exact' : title?.keywordMatch ?? hit?.keywordMatch ?? 'exact';
+    return [{ row, snippet: hit?.snippet.trim() ? { text: hit.snippet, highlights: hit.highlights } : null,
+      stem: keywordMatch === 'stem', title: !!title, score: hit?.score ?? 0, index }];
+  }).sort((a,b) => Number(a.stem)-Number(b.stem) || Number(b.title)-Number(a.title) || (a.title ? a.index-b.index : b.score-a.score))
+    .map(({ row, snippet }) => ({ row, snippet }));
 }

@@ -57,7 +57,7 @@ export function getCollabIndexToolSchemas() {
     {
       name: "searchPages",
       description:
-        "Search a Wiki section by the text in page bodies and titles: pages, typed pages and type pages. Every word must match; the last also matches as a word start. Returns the best matches first, each with kind, id, title, the uri to read with readCollabDoc, the https link to write in page content, and a snippet of the matching text. Use it to find what the pages say about a topic (for example what was decided about X) instead of reading pages one by one. Pass `project` to search another project of the team.",
+        "Search a Wiki section by the text in page bodies and titles: pages, typed pages and type pages. Every word must match; the last also matches as a word start. Returns the best matches first, each with kind, id, title, the uri to read with readCollabDoc, the https link to write in page content, and a snippet of the matching text. Use it to find what the pages say about a topic (for example what was decided about X) instead of reading pages one by one. Pass `project` to search another project of the team. In the Local section (section personal), every word must match in any order across title, body or fields; NFC, case and е/ё are equivalent, Russian word forms are supported, and exact matches precede stems. Local snippets may include keywordMatch and UTF-16 highlights; quotes do not add phrase syntax.",
       inputSchema: {
         type: "object",
         properties: {

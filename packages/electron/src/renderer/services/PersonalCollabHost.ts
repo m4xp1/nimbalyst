@@ -25,6 +25,7 @@ import {
 import {
   getSharedDocumentDisplayName,
   getSharedDocumentsForScopeKey,
+  type CollabDocsDataSource,
   type CollabDocsCommand,
   type CollabDocsCommandResult,
   type SharedDocument,
@@ -157,8 +158,10 @@ export class PersonalCollabHost implements CollabHost<PersonalDocsCapability> {
    * on unmount and a disposed `PersonalPagesDataSource` never watches again.
    * Each dispose drops the instance so the next session gets a fresh one.
    */
-  private createDataSource(): PersonalDocsCapability['dataSource'] {
+  private createDataSource(): PersonalDocsCapability['dataSource'] & Pick<CollabDocsDataSource, 'searchPages' | 'searchPolicy'> {
     return {
+      searchPolicy: 'local',
+      searchPages: request => this.source().searchPages(request),
       snapshot: () => this.source().snapshot(),
       subscribe: (cb) => this.source().subscribe(cb),
       command: (command) => this.source().command(command),

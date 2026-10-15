@@ -41,3 +41,10 @@ describe('section page search', () => {
     expect((await searchSectionPages({}, documents, { query: 'modules' }))!.hits).toMatchObject([{ kind: 'typePage', id: 'module', title: 'Modules' }]);
   });
 });
+
+it('Local sessions retain exact-before-stem order and add Russian titles without altering Team', async () => {
+  const docs = [doc('form','Интерфейс'),doc('exact','Other')];
+  const source = {searchPolicy:'local' as const,searchPages:async()=>({status:'ready' as const,hits:[{...hit('exact','page','exact',1),keywordMatch:'exact' as const}]})};
+  expect((await searchSectionPages(source,docs,{query:'интерфейсами'}))!.hits.map(h=>[h.id,h.keywordMatch])).toEqual([['exact','exact'],['form','stem']]);
+  expect((await searchSectionPages({...source,searchPolicy:undefined},docs,{query:'интерфейсами'}))!.hits.map(h=>h.id)).toEqual(['exact']);
+});

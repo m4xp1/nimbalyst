@@ -16,11 +16,12 @@ describe('Local Wiki Russian AND search', () => {
     expect(searchDocs(docs, 'интерфейс отсутствует', 20)).toEqual([]);
   });
   it('keeps Latin substrings and technical identifiers, without stemming inside them', () => {
-    for (const marker of ['src/языке.md', 'языке_2', 'языке2', 'uiязыке', 'языке-ui', 'loadSessionContext', '123']) {
+    for (const marker of ['src/языке.md', '/языке', 'https://языке', 'C:\\языке', 'src\\языке\\file.md', 'языке_2', 'языке2', 'uiязыке', 'языке-ui', 'loadSessionContext', '123']) {
       expect(searchDocs([doc('x', marker)], marker.toUpperCase(), 20)).toHaveLength(1);
       expect(searchDocs([doc('x', marker)], 'языками', 20)).toEqual([]);
     }
     expect(searchDocs([doc('x', 'Automation.md')], 'utom', 20)).toHaveLength(1);
+    expect(searchDocs([doc('nfc','Café')], 'CAFE\u0301', 20)).toHaveLength(1);
   });
   it('snippets point to real word forms with intact combining marks and UTF-16 ranges', () => {
     const hit = searchDocs([doc('x', 'Other', '😀 '.repeat(100) + 'Ёлками и е\u0308лка возле русского языка ' + 'tail '.repeat(60))], 'елка языками', 20)[0];

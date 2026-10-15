@@ -199,3 +199,12 @@ describe('PersonalPagesDataSource', () => {
     }
   });
 });
+
+it('merges Local exact/stem tiers, deduplicating ids but not equal text', async () => {
+  const source = new PersonalPagesDataSource(WORKSPACE); await source.snapshot();
+  const hit = (id:string, keywordMatch:'exact'|'stem') => ({kind:'page',id,documentId:id,title:id,snippet:'same text',highlights:[],score:1,updatedAt:1,keywordMatch});
+  invoke.mockImplementation(async (channel:string) => channel === 'local-wiki:search' ? {hits:[hit('w1','stem'),hit('p1','stem')],status:'ready'} : {hits:[hit('p1','exact')],status:'ready'});
+  const result = await source.searchPages({query:'языками',limit:5});
+  expect(result!.hits.map(h=>[h.id,h.keywordMatch])).toEqual([['p1','exact'],['w1','stem']]);
+  expect(invoke).toHaveBeenCalledWith('personal-pages:search',WORKSPACE,expect.objectContaining({localDocumentIds:['p1']}));
+});

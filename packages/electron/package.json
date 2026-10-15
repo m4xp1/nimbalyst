@@ -142,7 +142,8 @@
     "web-streams-polyfill": "^4.2.0",
     "ws": "^8.19.0",
     "zod": "^4.0.0",
-    "zustand": "^5.0.9"
+    "zustand": "^5.0.9",
+    "@nimbalyst/search-text": "workspace:*"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",

@@ -560,3 +560,8 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Per-project usage breakdown
 - Per-tool usage tracking (local counters for built-in and MCP/extension tools) surfaced as a Tools section in the AI usage report (top tools, built-in vs MCP split, over-time, per-provider) and as a targeting signal for contextual tips; backfill from past claude-code and codex sessions
 - Developer Dashboard Renders tab for inspecting component re-render counts and causes
+
+### Fork: Local Wiki Russian search
+
+- Local Wiki UI, desktop agents and repository CLI/MCP require every query word across title, body or available fields, in any order. NFC, case and е/ё normalize; whole Russian words gain Snowball forms. Literal matches precede stem matches, with title/source ordering inside each tier. Markdown, CSV rows and still-visible legacy database pages keep their existing access and opening routes.
+- Snippets preserve source Unicode and expose optional `keywordMatch` and UTF-16 highlights. Technical tokens retain literal matching, and legacy database search retains accent/prefix matches. Team search and Memory source inclusion/ranking are unchanged. The desktop release does not publish a new npm CLI.

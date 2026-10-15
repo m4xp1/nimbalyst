@@ -40,7 +40,8 @@ export default defineConfig({
         ...builtinModules,
         'better-sqlite3',
         '@huggingface/transformers',
-        /^@nimbalyst\//,
+        // Bundle pure lexical helpers too: packaged utility processes have no workspace links.
+        /^@nimbalyst\/(?!search-text$)/,
       ],
       output: { inlineDynamicImports: true },
     },

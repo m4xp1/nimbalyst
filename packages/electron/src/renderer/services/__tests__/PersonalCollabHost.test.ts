@@ -14,6 +14,7 @@ vi.mock('../PersonalPagesDataSource', () => ({
     disposed = false;
     watching = false;
     constructor() { dataSources.push(this); }
+    async searchPages(request: {query:string}) { return {status:'ready',hits:[{id:request.query,keywordMatch:'stem'}]}; }
     // `legacy-*` ids stand for database pages not exported yet; the rest are wiki files.
     isLegacyDocument(id: string) { return id.startsWith('legacy-'); }
     async pageFilePath(id: string) { return `/workspace/history/nimbalyst-local/wiki/${id}.md`; }
@@ -104,4 +105,13 @@ describe('PersonalCollabHost history', () => {
     expect(store.get(historyDialogFileAtom)).toBe('personal-doc://type-page:idea');
     expect(opened).toHaveBeenCalledTimes(4);
   });
+});
+
+it('forwards Local search and policy through the host wrapper, including after dispose', async () => {
+  const host = new PersonalCollabHost('/workspace/search');
+  const source = host.documents.dataSource as unknown as {searchPolicy:string;searchPages:(r:{query:string})=>Promise<any>;dispose:()=>void};
+  expect(source.searchPolicy).toBe('local');
+  expect(await source.searchPages({query:'языками'})).toMatchObject({hits:[{id:'языками',keywordMatch:'stem'}]});
+  source.dispose();
+  expect(await source.searchPages({query:'елками'})).toMatchObject({hits:[{id:'елками',keywordMatch:'stem'}]});
 });
