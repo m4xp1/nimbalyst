@@ -1,7 +1,6 @@
 import { getClaudePluginEnabled, getExtensionEnabled } from '../../utils/store';
 
-/** The extension that ships the wiki skills (/wiki:setup, /wiki:update). Its id predates the rename. */
-const WIKI_EXTENSION_ID = 'com.nimbalyst.knowledge';
+import { WIKI_EXTENSION_ID } from '../../../shared/wikiAvailability';
 
 /**
  * Whether agents have the wiki skills: the extension is on (off by default)

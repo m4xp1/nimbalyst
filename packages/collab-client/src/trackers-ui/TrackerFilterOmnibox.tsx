@@ -72,6 +72,8 @@ export interface TrackerFilterOmniboxProps {
   /** The persisted per-type column filters. */
   filters: TrackerFilterSet | null;
   onFiltersChange: (filters: TrackerFilterSet) => void;
+  /** Use when the host stores text and clauses together (for example in one URL). */
+  onSearchAndFiltersChange?: (searchQuery: string, filters: TrackerFilterSet) => void;
   /** Tags offered after `#`, with the active ones already removed. */
   tagOptions?: TagTokenOption[];
   /** Tags currently filtering the view. Their own list, not filter clauses. */
@@ -117,6 +119,7 @@ export function TrackerFilterOmnibox({
   fields,
   filters,
   onFiltersChange,
+  onSearchAndFiltersChange,
   tagOptions,
   tagFilter,
   onTagFilterChange,
@@ -210,14 +213,18 @@ export function TrackerFilterOmnibox({
     (clause: TrackerFieldFilter) => {
       // Replace rather than append this field's clauses, matching the filter
       // dropdown -- two clauses on one field read as an unsatisfiable AND.
-      onFiltersChange(withFieldClauses(filters, clause.field, [clause]));
-      onSearchQueryChange(searchTextWithoutToken);
+      const nextFilters = withFieldClauses(filters, clause.field, [clause]);
+      if (onSearchAndFiltersChange) onSearchAndFiltersChange(searchTextWithoutToken, nextFilters);
+      else {
+        onFiltersChange(nextFilters);
+        onSearchQueryChange(searchTextWithoutToken);
+      }
       setDraftToken('');
       setMenuOpen(false);
       setHighlightIndex(null);
       inputRef.current?.focus();
     },
-    [filters, onFiltersChange, onSearchQueryChange, searchTextWithoutToken]
+    [filters, onFiltersChange, onSearchQueryChange, onSearchAndFiltersChange, searchTextWithoutToken]
   );
 
   const addTag = useCallback(
@@ -286,8 +293,12 @@ export function TrackerFilterOmnibox({
 
   const clearAll = useCallback(() => {
     setDraftToken('');
-    onSearchQueryChange('');
-    onFiltersChange({ combinator: filters?.combinator ?? 'and', clauses: [] });
+    const nextFilters: TrackerFilterSet = { combinator: filters?.combinator ?? 'and', clauses: [] };
+    if (onSearchAndFiltersChange) onSearchAndFiltersChange('', nextFilters);
+    else {
+      onSearchQueryChange('');
+      onFiltersChange(nextFilters);
+    }
     if (activeTags.length > 0) onTagFilterChange?.([]);
     setMenuOpen(false);
     setHighlightIndex(null);
@@ -296,6 +307,7 @@ export function TrackerFilterOmnibox({
     filters?.combinator,
     onFiltersChange,
     onSearchQueryChange,
+    onSearchAndFiltersChange,
     onTagFilterChange,
   ]);
 

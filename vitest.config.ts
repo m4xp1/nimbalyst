@@ -25,6 +25,7 @@ const monacoStub = path.resolve(__dirname, './test-utils/monacoStub.ts');
 const electronLogStub = path.resolve(__dirname, './test-utils/electronLogStub.ts');
 
 const alias = [
+  { find: /^@nimbalyst\/search-text$/, replacement: path.resolve(__dirname, './packages/search-text/src/index.ts') },
   {
     find: '@nimbalyst/tracker-engine',
     replacement: path.resolve(__dirname, './packages/tracker-engine/src'),

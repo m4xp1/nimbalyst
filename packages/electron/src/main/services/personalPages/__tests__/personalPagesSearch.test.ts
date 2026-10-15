@@ -32,6 +32,8 @@ function seeds(json: (value: unknown) => unknown, bool: (value: boolean) => unkn
     page('doc-2', 'Old', 'Yjs in a trashed page.', true),
     page('type-page:module', 'Modules', 'A module wraps Yjs documents.'),
     page('doc-3', 'Elsewhere', 'Nothing relevant.'),
+    page('ru', 'Интерфейс', '😀 На русском языке. Ёлки.'),
+    page('ru-exact', 'Other', 'языками интерфейсами'),
     item('a', { markdown: 'Module a body about yjs merges.' }),
     // A newer cached room body wins over the stale row.
     item('b', 'stale body', { bodyVersion: 3 }),
@@ -45,6 +47,15 @@ function seeds(json: (value: unknown) => unknown, bool: (value: boolean) => unkn
 }
 
 async function summarize(db: PersonalSearchDb) {
+  const ru = await searchPersonalPages(db, WS, { query: 'языками интерфейсами' });
+  expect(ru.hits.map(h => [h.id,h.keywordMatch])).toEqual([['ru-exact','exact'],['ru','stem']]);
+  const form = ru.hits.find(h => h.id === 'ru')!;
+  expect(form.highlights.map(r => form.snippet.slice(r.start,r.end))).toContain('языке');
+  expect((await searchPersonalPages(db, WS, { query: 'языками', limit: 1, localDocumentIds: ['ru'] })).hits.map(h => h.id)).toEqual(['ru']);
+  await db.query('UPDATE personal_page_documents SET body = $1, fields = $2 WHERE document_id = $3', ['Другой текст', JSON.stringify({note:'Ёлками'}), 'ru']);
+  expect((await searchPersonalPages(db, WS, { query: 'интерфейсами елки', localDocumentIds:['ru'] })).hits.map(h => h.id)).toEqual(['ru']);
+  expect((await searchPersonalPages(db, WS, { query: 'языками', localDocumentIds:['ru'] })).hits).toEqual([]);
+  await db.query('UPDATE personal_page_documents SET body = $1, fields = NULL WHERE document_id = $2', ['😀 На русском языке. Ёлки.', 'ru']);
   const yjs = await searchPersonalPages(db, WS, { query: 'yjs' });
   expect(yjs.status).toBe('ready');
   const doc = yjs.hits.find((hit) => hit.id === 'doc-1')!;
@@ -94,10 +105,15 @@ describe('searchPersonalPages', () => {
       CREATE TABLE tracker_body_cache (item_id TEXT NOT NULL, body_version BIGINT NOT NULL, content TEXT NOT NULL,
         cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (item_id, body_version));
       CREATE TABLE personal_page_documents (workspace_path TEXT NOT NULL, document_id TEXT NOT NULL, title TEXT NOT NULL,
-        body TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL, trashed_at TIMESTAMPTZ, PRIMARY KEY (workspace_path, document_id));
+        body TEXT NOT NULL DEFAULT '', fields TEXT, updated_at TIMESTAMPTZ NOT NULL, trashed_at TIMESTAMPTZ, PRIMARY KEY (workspace_path, document_id));
     `);
     for (const seed of seeds((v) => JSON.stringify(v), (v) => v)) await pglite.query(seed.sql, seed.params);
   }, 30_000);
+
+  it('preserves Russian and legacy search after reopening PGLite', async () => {
+    await pglite.close(); pglite = new PGlite({dataDir:dir});
+    expect(await summarize(pglite as unknown as PersonalSearchDb)).toEqual(EXPECTED);
+  });
 
   afterAll(async () => {
     await pglite?.close();
@@ -110,7 +126,7 @@ describe('searchPersonalPages', () => {
 
   it('finds the same pages on SQLite after dialect translation', async () => {
     const BetterSqlite = (await import('better-sqlite3')).default;
-    const sqlite = new BetterSqlite(':memory:');
+    let sqlite = new BetterSqlite(join(dir,'search.sqlite'));
     try {
       sqlite.exec(`
         CREATE TABLE tracker_items (id TEXT PRIMARY KEY, type TEXT NOT NULL, issue_key TEXT, data TEXT NOT NULL,
@@ -119,7 +135,7 @@ describe('searchPersonalPages', () => {
         CREATE TABLE tracker_body_cache (item_id TEXT NOT NULL, body_version INTEGER NOT NULL, content TEXT NOT NULL,
           cached_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), PRIMARY KEY (item_id, body_version));
         CREATE TABLE personal_page_documents (workspace_path TEXT NOT NULL, document_id TEXT NOT NULL, title TEXT NOT NULL,
-          body TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, trashed_at TEXT, PRIMARY KEY (workspace_path, document_id));
+          body TEXT NOT NULL DEFAULT '', fields TEXT, updated_at TEXT NOT NULL, trashed_at TEXT, PRIMARY KEY (workspace_path, document_id));
       `);
       const db: PersonalSearchDb = {
         async query(sql, params = []) {
@@ -131,6 +147,8 @@ describe('searchPersonalPages', () => {
         },
       };
       for (const seed of seeds((v) => JSON.stringify(v), (v) => (v ? 1 : 0))) await db.query(seed.sql, seed.params);
+      expect(await summarize(db)).toEqual(EXPECTED);
+      sqlite.close(); sqlite = new BetterSqlite(join(dir,'search.sqlite'));
       expect(await summarize(db)).toEqual(EXPECTED);
     } finally {
       sqlite.close();

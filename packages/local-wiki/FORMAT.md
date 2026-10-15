@@ -207,3 +207,7 @@ For an editor page, `entries` names `file` and `sidecar` instead of `md`, and th
 ## Not part of the format
 
 Backlinks, search indexes, saved views, kanban positions and read state are caches. The app may keep them in its database; `nim` builds what it needs in memory. Comments on local items are not supported in version 1.
+
+## Search behavior (not stored in the format)
+
+Local search requires all whitespace-separated query words across titles, body and field values, in any order. It compares NFC, case and е/ё equivalently and adds Russian Snowball word forms for whole Russian words. Technical tokens retain literal matching. Exact matches precede stem matches; titles keep their weight within each tier. Returned snippet highlights are UTF-16 offsets into the original snippet text, preserving combining marks and Unicode. Failed body reads do not use a saved database body.

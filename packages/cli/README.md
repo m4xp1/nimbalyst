@@ -183,3 +183,5 @@ pnpm run build       # tsc -> dist/
 pnpm run typecheck
 pnpm test            # vitest (DirectGateway fixture tests)
 ```
+
+Local Wiki search requires every query word, in any order across title, body and fields. Case, Unicode NFC and е/ё are equivalent; Russian word forms use the bundled Snowball stemmer. Existing literal matches come before matches requiring stems, then titles retain priority. Technical identifiers and paths are matched literally. JSON results optionally include `keywordMatch` and UTF-16 `highlights` relative to the displayed `snippet`. Quotes do not introduce phrase syntax. Team search keeps its existing rules. This fork release does not separately publish the CLI to npm.

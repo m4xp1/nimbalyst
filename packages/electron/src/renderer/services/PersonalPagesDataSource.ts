@@ -75,6 +75,7 @@ function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 export class PersonalPagesDataSource implements CollabDocsDataSource {
+  readonly searchPolicy = 'local' as const;
   private readonly listeners = new Set<(change: CollabDocsDataChange) => void>();
   private revisionUnsubscribe: Unsubscribe | null = null;
   private refreshInFlight: Promise<void> | null = null;
@@ -246,13 +247,17 @@ export class PersonalPagesDataSource implements CollabDocsDataSource {
     const [wiki, database] = await Promise.all([
       invoke<PageSearchResponse>('local-wiki:search', this.workspacePath, request),
       legacy.documents.size > 0
-        ? invoke<PageSearchResponse>('personal-pages:search', this.workspacePath, request).catch(() => null)
+        ? invoke<PageSearchResponse>('personal-pages:search', this.workspacePath, { ...request, localDocumentIds: [...legacy.documents].filter(id => !id.startsWith('type-page:')) }).catch(() => null)
         : Promise.resolve(null),
     ]);
     const databaseHits = (database?.hits ?? []).filter((hit) => hit.kind === 'page' && legacy.documents.has(hit.id));
-    if (databaseHits.length === 0) return wiki;
-    // Scores from the two indexes do not compare, so the wiki's hits come first.
-    const hits = [...wiki.hits, ...databaseHits].slice(0, request.limit ?? 20);
+    if (databaseHits.length === 0) return legacy.documents.size > 0 && !database ? { ...wiki, status: 'partial' } : wiki;
+    // Stable literal/stem tiers; within each tier retain each source's ranking, Wiki first.
+    const seen = new Set<string>();
+    const hits = [...wiki.hits, ...databaseHits]
+      .sort((a,b) => Number(a.keywordMatch === 'stem') - Number(b.keywordMatch === 'stem'))
+      .filter(hit => { const key = hit.kind + ':' + hit.id; if (seen.has(key)) return false; seen.add(key); return true; })
+      .slice(0, request.limit ?? 20);
     return { hits, status: wiki.status === 'ready' && database?.status !== 'partial' ? 'ready' : 'partial' };
   }
 

@@ -12,6 +12,7 @@
  * `local-wiki:changed { workspacePath }` to the central renderer listener.
  */
 import * as fs from 'node:fs';
+import { searchTermRanges } from '@nimbalyst/search-text';
 import * as path from 'node:path';
 import { BrowserWindow } from 'electron';
 import {
@@ -137,20 +138,6 @@ export function emptyLocalWikiSnapshot(location: LocalWikiLocation): LocalWikiSn
   };
 }
 
-/** Where each query word sits in a snippet, for the search result highlight. */
-function highlightsIn(snippet: string, query: string): PageSearchHit['highlights'] {
-  const lower = snippet.toLowerCase();
-  const out: PageSearchHit['highlights'] = [];
-  for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
-    let from = 0;
-    for (let at = lower.indexOf(word, from); at !== -1; at = lower.indexOf(word, from)) {
-      out.push({ start: at, end: at + word.length });
-      from = at + word.length;
-    }
-  }
-  return out.sort((a, b) => a.start - b.start);
-}
-
 export function toPageSearchHit(hit: LocalSearchHit, query: string): PageSearchHit {
   return {
     kind: hit.type ? 'typed' : 'page',
@@ -159,7 +146,8 @@ export function toPageSearchHit(hit: LocalSearchHit, query: string): PageSearchH
     title: hit.title,
     issueKey: null,
     snippet: hit.snippet,
-    highlights: highlightsIn(hit.snippet, query),
+    highlights: hit.highlights ?? searchTermRanges(query, hit.snippet),
+    keywordMatch: hit.keywordMatch,
     updatedAt: null,
     score: hit.score,
   };
@@ -371,12 +359,9 @@ export class LocalWikiService {
     const query = typeof request?.query === 'string' ? request.query : '';
     const wiki = await this.wikiFor(ws);
     if (!wiki || !query.trim()) return { hits: [], status: 'ready' };
-    const typeIds = Array.isArray(request.typeIds) ? new Set(request.typeIds) : null;
-    const hits = (await wiki.search(query, { limit: Math.min(request.limit ?? 20, 50) * 2 }))
-      .filter((hit) => !isTypePageProse(hit.id))
-      .filter((hit) => !hit.type || !typeIds || typeIds.has(hit.type))
-      .slice(0, Math.min(request.limit ?? 20, 50))
-      .map((hit) => toPageSearchHit(hit, query));
+    const excludeIds = (await wiki.snapshot()).pages.filter(page => isTypePageProse(page.id)).map(page => page.id);
+    const hits = (await wiki.search(query, { limit: Math.min(request.limit ?? 20, 50), typeIds: request.typeIds, excludeIds }))
+      .map(hit => toPageSearchHit(hit, query));
     return { hits, status: 'ready' };
   }
 

@@ -1,3 +1,4 @@
+import { matchAllSearchTerms } from '@nimbalyst/search-text';
 /**
  * Agent tools for the one page tree (Pages mode), for the Team and the
  * Personal section alike: list the tree, create a page under a page or a typed
@@ -29,7 +30,7 @@ import {
   type SearchPagesResult,
   type SearchPagesResultEntry,
 } from '@nimbalyst/collab-protocol';
-import { mergePageSearchHits, nameTypedHits, pageSearchTitleHits } from './pageSearch';
+import { mergePageSearchHits, mergeLocalPageSearchHits, localPageSearchTitleHits, nameTypedHits, pageSearchTitleHits } from './pageSearch';
 import { pageTreeListing } from './pageTreeListing';
 
 // For a worker session's `searchPages`; `pageSearch.ts` has no package entry of its own.
@@ -542,7 +543,7 @@ export async function setPageTypeTool(env: PageTreeToolEnv, args: Record<string,
 export async function searchPagesTool(env: PageTreeToolEnv, args: Record<string, unknown>): Promise<PageTreeToolResult> {
   const query = typeof args.query === 'string' ? args.query.trim() : '';
   if (!query) return { success: false, error: 'searchPages needs the words to find in `query`.' };
-  if (pageSearchQueryTerms(query).terms.length === 0) {
+  if (args.section !== 'personal' && pageSearchQueryTerms(query).terms.length === 0) {
     return { success: false, error: 'searchPages matches words of two or more letters or digits; `query` has none.' };
   }
   const section: PageTreeSection = args.section === 'personal' ? 'personal' : 'team';
@@ -569,13 +570,15 @@ export async function searchPagesTool(env: PageTreeToolEnv, args: Record<string,
   const typedTitles = pageSearchTitleHits(query, [...typed.values()].map((node) => ({
     documentId: `tracker-content/${node.id}`, title: node.title, issueKey: node.issueKey ?? null,
   })));
-  const hits = mergePageSearchHits(named, typedTitles, limit);
+  const hits = section === 'personal'
+    ? mergeLocalPageSearchHits(named, localPageSearchTitleHits(query, [...typed.values()].map(node => ({documentId:'tracker-content/'+node.id,title:node.title,issueKey:node.issueKey??null}))), limit)
+    : mergePageSearchHits(named, typedTitles, limit);
 
   const parsed = pageSearchQueryTerms(query);
   const results: SearchPagesResultEntry[] = hits.map((hit) => {
     const node = hit.kind === 'page' ? pages.get(hit.id) : hit.kind === 'typePage' ? types.get(hit.id) : typed.get(hit.id);
     const title = hit.title ?? node?.title ?? hit.id;
-    const inTitle = pageSearchMatches(title, parsed);
+    const inTitle = section === 'personal' ? !!matchAllSearchTerms(query, [title, hit.issueKey ?? '']) : pageSearchMatches(title, parsed);
     const uri = hit.kind === 'page' && node?.kind === 'page'
       ? node.uri
       : section === 'team' && hit.kind === 'typed' ? `collab://${hit.documentId}` : env.pageUri(section, hit.documentId);
@@ -587,6 +590,7 @@ export async function searchPagesTool(env: PageTreeToolEnv, args: Record<string,
       uri,
       ...(node?.link ? { link: node.link } : {}),
       snippet: hit.snippet,
+      ...(section === 'personal' ? { keywordMatch: hit.keywordMatch, highlights: hit.highlights } : {}),
       matchedIn: !hit.snippet ? 'title' : inTitle ? 'both' : 'body',
       updatedAt: hit.updatedAt,
     };

@@ -1,3 +1,5 @@
+import { WIKI_EXTENSION_ID, WIKI_TOOL_NAMES, WIKI_AVAILABILITY_CHANNEL } from '../../shared/wikiAvailability';
+import { getExtensionEnabled, onExtensionSettingsChanged } from '../utils/store';
 import { handleConsumeSessionInbox } from './tools/consumeSessionInbox';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -207,6 +209,17 @@ setBackendToolsChangeNotifier((_workspacePath: string) => {
       });
     }
   }
+});
+
+// Both the UI toggle and settings-agent tool change this persisted state.
+onExtensionSettingsChanged(() => {
+  const enabled = getExtensionEnabled(WIKI_EXTENSION_ID, false);
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(WIKI_AVAILABILITY_CHANNEL, enabled);
+  }
+  const servers = new Set([...serversByWorkspace.values()].flatMap(group => [...group]));
+  for (const server of serverByNimbalystSession.values()) servers.add(server);
+  for (const server of servers) void server.sendToolListChanged().catch(() => {});
 });
 
 // ---- Server Lifecycle ----
@@ -500,7 +513,10 @@ function createSharedMcpServer(
       allTools = [];
     }
 
-    return { tools: dedupeAndWarn(allTools, serverName) };
+    return { tools: dedupeAndWarn(
+      getExtensionEnabled(WIKI_EXTENSION_ID, false) ? allTools : allTools.filter(tool => !WIKI_TOOL_NAMES.has(tool.name)),
+      serverName,
+    ) };
   });
 
   // Register tool execution handler. Tracker schema lookups are process-global
@@ -524,6 +540,9 @@ function createSharedMcpServer(
     const toolName = name.replace(/^mcp__nimbalyst__/, "");
 
     try {
+      if (WIKI_TOOL_NAMES.has(toolName) && !getExtensionEnabled(WIKI_EXTENSION_ID, false)) {
+        return { isError: true, content: [{ type: 'text', text: 'Wiki is disabled. Enable the Wiki extension to use its tools.' }] };
+      }
       switch (toolName) {
         case 'consume_session_inbox':
           if (extra.requestId === undefined) throw new Error('Inbox request identity is required');

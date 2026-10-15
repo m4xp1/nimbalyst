@@ -4,9 +4,9 @@
  * The Team section asks the TeamRoom (`pageSearchQuery`), which keeps a search
  * index of every team page body, typed-page body (`tracker-content/<itemId>`)
  * and type-page prose (`type-page:<typeId>`). The Personal section answers
- * the same question from the desktop's local pages store. Both use the
- * helpers here, so a query matches the same pages and shows the same snippet
- * whichever section answers it.
+ * the same wire contract from the desktop's local pages store. Local Wiki
+ * adds Russian normalization and word forms in its own opt-in path; Team
+ * matching below remains unchanged.
  *
  * Matching: every query term must appear in the body (or the title) as the
  * start of a word; the last term also matches as a prefix while it is being
@@ -26,6 +26,8 @@ export interface PageSearchHighlight {
 
 /** One page whose text matches a query. */
 export interface PageSearchHit {
+  /** Local Wiki only: literal normalization or Russian word forms. */
+  keywordMatch?: 'exact' | 'stem';
   kind: PageSearchHitKind;
   /** The page's id: a document id (page), item id (typed page) or type id (type page). */
   id: string;

@@ -131,3 +131,13 @@ describe('LocalWikiService', () => {
     expect(fs.readFileSync(path.join(project, 'nimbalyst-local', 'wiki', 'Globex.md'), 'utf8')).toMatch(new RegExp(`^---\\nid: ${created.id}\\ntype: competitor\\n`));
   });
 });
+
+it('returns Russian snippet ranges and filters service/type pages before limit', async () => {
+  const wiki = await service.wikiFor(project,true);
+  for(let i=0;i<6;i++) await wiki!.command({type:'register-document',documentId:'type-page:hidden'+i,title:'интерфейсами',parentFolderId:null,body:'языками языками'});
+  const {id} = await service.command(project,{type:'register-document',title:'Интерфейс',parentFolderId:null,body:'😀 На русском языке. Ёлки.'});
+  const result = await service.search(project,{query:'ёлками языками интерфейсами',limit:1});
+  expect(result.hits.map(h=>h.id)).toEqual([id]);
+  expect(result.hits[0].highlights.map(r=>result.hits[0].snippet.slice(r.start,r.end))).toEqual(['языке','Ёлки']);
+  expect((await service.search(project,{query:'интерфейсами',limit:1})).hits.map(h=>h.id)).toEqual([id]);
+});

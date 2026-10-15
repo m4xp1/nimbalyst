@@ -1,0 +1,27 @@
+{
+  "name": "@nimbalyst/search-text",
+  "version": "0.1.0",
+  "description": "Pure lexical normalization, Russian Snowball and source-position mapping for Nimbalyst search.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/snowball"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

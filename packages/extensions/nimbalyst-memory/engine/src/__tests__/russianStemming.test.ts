@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { Bm25Index, termFrequencies, tokenize } from '../retrieval/bm25.js';
-import RussianStemmer from '../retrieval/snowball/russian-stemmer.js';
+import { RussianStemmer } from '@nimbalyst/search-text';
 import { FactsStore } from '../facts/facts.js';
 import { MemoryEngine } from '../engine.js';
 import { SqliteStore } from '../store/sqliteStore.js';

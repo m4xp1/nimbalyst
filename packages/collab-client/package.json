@@ -97,6 +97,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@nimbalyst/search-text": "workspace:*",
     "@floating-ui/react": "^0.27.19",
     "@nimbalyst/collab-protocol": "workspace:*",
     "@nimbalyst/tracker-schema": "workspace:*",

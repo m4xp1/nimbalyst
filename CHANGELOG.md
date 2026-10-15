@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.80.6+m4xp1.6] - 2026-10-15
+
+### Changed
+- Local Wiki search supports Russian word forms, е/ё, matching words across fields and highlighting.
+
+### Fixed
+- Wiki field filters retain their selection and search text.
+- Disabling Wiki now hides its navigation button and agent tools, including tools cached by an existing session.
+
 ## [0.80.6+m4xp1.5] - 2026-10-14
 
 ### Changed

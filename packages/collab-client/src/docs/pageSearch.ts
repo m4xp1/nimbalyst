@@ -1,3 +1,4 @@
+import { matchAllSearchTerms } from '@nimbalyst/search-text';
 /**
  * Page search for a Pages section: the section's body search (its data
  * source's `searchPages`, the server index for Team or the local store for
@@ -23,6 +24,8 @@ import type { SharedDocument } from './types';
 
 /** The body search a section offers (`CollabDocsDataSource.searchPages`); absent when it has none. */
 export interface PageBodySearch {
+  /** Opt-in only for a local file Wiki data source. Team retains the original path. */
+  searchPolicy?: 'local';
   searchPages?(request: PageSearchRequest): Promise<PageSearchResponse | null>;
 }
 
@@ -118,7 +121,28 @@ export async function searchSectionPages(
     return entry ? [{ ...hit, title: hit.title ?? entry.title }] : [];
   });
   return {
-    hits: mergePageSearchHits(bodyHits, pageSearchTitleHits(request.query, entries), request.limit),
+    hits: dataSource.searchPolicy === 'local'
+      ? mergeLocalPageSearchHits(bodyHits, localPageSearchTitleHits(request.query, entries.filter(e => !e.documentId.startsWith('type-page:'))), request.limit)
+      : mergePageSearchHits(bodyHits, pageSearchTitleHits(request.query, entries), request.limit),
     status: body?.status ?? 'ready',
   };
+}
+
+export function localPageSearchTitleHits(query: string, entries: readonly PageSearchTitleEntry[]): PageSearchHit[] {
+  return entries.flatMap(entry => {
+    const match = matchAllSearchTerms(query, [entry.title, entry.issueKey ?? '']);
+    return match ? [{ ...pageSearchSource(entry.documentId), documentId: entry.documentId, title: entry.title,
+      issueKey: entry.issueKey ?? null, snippet: '', highlights: [], updatedAt: entry.updatedAt ?? null,
+      score: PAGE_SEARCH_TITLE_BOOST, keywordMatch: match.keywordMatch }] : [];
+  });
+}
+export function mergeLocalPageSearchHits(bodyHits: readonly PageSearchHit[], titleHits: readonly PageSearchHit[], limit?: number): PageSearchHit[] {
+  const byId = new Map<string,PageSearchHit>(), titles = new Set<string>();
+  for (const hit of bodyHits) if (hit.kind !== 'typePage' && !byId.has(hit.documentId)) byId.set(hit.documentId,hit);
+  for (const hit of titleHits) {
+    const body = byId.get(hit.documentId); titles.add(hit.documentId);
+    byId.set(hit.documentId, body ? {...body, keywordMatch: body.keywordMatch === 'exact' || hit.keywordMatch === 'exact' ? 'exact' : 'stem'} : hit);
+  }
+  return [...byId.values()].sort((a,b) => Number(a.keywordMatch === 'stem')-Number(b.keywordMatch === 'stem') || Number(titles.has(b.documentId))-Number(titles.has(a.documentId)))
+    .slice(0,pageSearchLimit(limit));
 }

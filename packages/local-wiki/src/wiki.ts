@@ -78,7 +78,10 @@ export class LocalWiki extends WikiTables {
   }
 
   async readBody(id: string): Promise<ReadBodyResult> {
-    return this.exclusive(async () => {
+    return this.exclusive(() => this.readBodyCurrent(id));
+  }
+
+  private async readBodyCurrent(id: string): Promise<ReadBodyResult> {
       const page = this.state.pages.get(id);
       let rel: string | null;
       let raw: boolean;
@@ -99,7 +102,6 @@ export class LocalWiki extends WikiTables {
       const parsed = parseMarkdownFile(text);
       if (!parsed.ok) return { markdown: text, version: contentVersion(text), malformed: true };
       return { markdown: parsed.body, version: contentVersion(parsed.body) };
-    });
   }
 
   async trackerSnapshot(typeId: string): Promise<LocalTrackerSnapshot> {
@@ -146,11 +148,14 @@ export class LocalWiki extends WikiTables {
     });
   }
 
-  async search(query: string, options: { limit?: number } = {}): Promise<LocalSearchHit[]> {
+  async search(query: string, options: { limit?: number; typeIds?: string[]; excludeIds?: string[] } = {}): Promise<LocalSearchHit[]> {
     return this.exclusive(async () => {
       const docs: SearchDoc[] = [];
       for (const page of this.state.pages.values()) {
-        docs.push({ id: page.id, title: page.title, kind: 'page', type: page.type, path: page.path, body: page.body, fields: page.fields });
+        // Read through the same file route as opening the page; a failed file is not a stale hit.
+        let body: string;
+        try { body = (await this.readBodyCurrent(page.id)).markdown; } catch { continue; }
+        docs.push({ id: page.id, title: page.title, kind: 'page', type: page.type, path: page.path, body, fields: page.fields });
       }
       for (const table of this.state.tables.values()) {
         const def = this.types.get(table.typeId);
@@ -160,7 +165,9 @@ export class LocalWiki extends WikiTables {
           docs.push({ id, title, kind: 'row', type: table.typeId, path: table.path, body: '', fields });
         }
       }
-      return searchDocs(docs, query, options.limit ?? 50);
+      const types = options.typeIds ? new Set(options.typeIds) : null;
+      const excluded = new Set(options.excludeIds ?? []);
+      return searchDocs(docs.filter(doc => !excluded.has(doc.id) && (!doc.type || !types || types.has(doc.type))), query, options.limit ?? 50);
     });
   }
 
