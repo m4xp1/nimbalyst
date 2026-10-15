@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Disabling Wiki now hides its navigation button and agent tools, including tools cached by an existing session.
 
 ### Removed
 <!-- Removed features go here -->

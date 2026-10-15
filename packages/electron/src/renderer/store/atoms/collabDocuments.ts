@@ -27,6 +27,7 @@ import {
 } from '@nimbalyst/collab-client/docs';
 import { ElectronCollabHost } from '../../services/ElectronCollabHost';
 import { PersonalCollabHost } from '../../services/PersonalCollabHost';
+import { wikiEnabledAtom } from './wikiAvailability';
 import { activeWorkspacePathAtom } from './openProjects';
 import { atomFamily } from '../debug/atomFamilyRegistry';
 import { pendingDocRegistrations } from './pendingDocRegistrations';
@@ -75,9 +76,9 @@ const hostsByScope = new Map<string, ElectronCollabHost | PersonalCollabHost>();
 
 /**
  * Pages mode has a Personal section that needs no account or team, so the
- * mode is available whenever a workspace is open.
+ * mode requires a workspace and the Wiki extension's explicit opt-in.
  */
-export const pagesAvailableAtom = atom((get) => get(activeWorkspacePathAtom) != null);
+export const pagesAvailableAtom = atom((get) => get(activeWorkspacePathAtom) != null && get(wikiEnabledAtom));
 
 function getOrCreateElectronHost(scopeKey: string): ElectronCollabHost {
   if (isPersonalCollabScopeKey(scopeKey)) {

@@ -33,10 +33,20 @@ test.describe.serial('Built Local Wiki Russian search', () => {
   const {port}=await invoke('mcp:get-server-port'),{token}=await invoke('mcp:get-auth-token');
   client=new Client({name:'fake-wiki-search-agent',version:'1'},{capabilities:{}});
   await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+port+'/mcp/situational?workspacePath='+encodeURIComponent(workspace)),{requestInit:{headers:{Authorization:'Bearer '+token}}}));
-  await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(t=>t.name.endsWith('searchPages'));},{timeout:30000}).toBe(true);
+  tools=(await client.listTools()).tools;
  },60000);
  test.afterEach(async({},info)=>{if(page&&info.status!==info.expectedStatus)await page.screenshot({path:info.outputPath('wiki-search-failure.png')});});
  test.afterAll(async()=>{await client?.close();if(app){const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);}}});
+ test('disabled Wiki hides search/read/write tools and navigation before explicit opt-in',async()=>{
+  expect(await invoke('extensions:get-enabled','com.nimbalyst.knowledge',false)).toBe(false);
+  expect(tools.some(t=>t.name.endsWith('searchPages'))).toBe(false);
+  await expect(page.getByTestId('collab-mode-button')).toHaveCount(0);
+  const denied=await client.callTool({name:'searchPages',arguments:{section:'personal',query:'WIKIPROBE624'}});
+  expect(denied.isError).toBe(true);expect(JSON.stringify(denied.content)).toContain('Wiki is disabled');
+  await invoke('extensions:set-enabled','com.nimbalyst.knowledge',true);
+  await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(t=>t.name.endsWith('searchPages'));}).toBe(true);
+  await expect(page.getByTestId('collab-mode-button')).toBeVisible();
+ });
  test('real MCP returns exact before forms and reads the matched current file',async()=>{
   const found=await call('searchPages',{section:'personal',query:'ёлками языками интерфейсами WIKIPROBE624'});
   expect(found.results.map((h:any)=>[h.id,h.keywordMatch])).toEqual([['wiki-exact','exact'],['wiki-form','stem']]);
@@ -78,6 +88,38 @@ test.describe.serial('Built Local Wiki Russian search', () => {
   await view.getByTestId('tracker-filter-omnibox-clear').click();
   await expect(rows).toHaveCount(2);await expect(input).toHaveValue('');
   await expect(view.getByTestId('tracker-active-filter-pill-0')).toHaveCount(0);
+ });
+
+ test('disabling Wiki refreshes the connected client, denies cached tools and preserves files',async()=>{
+  const names=['listPages','searchPages','readCollabDoc','applyCollabDocEdit','createSharedDoc','createSharedFolder','importFileToPages','renameSharedItem','moveSharedItem','deleteSharedItem','setPageFields','setPageType','readCollabDocComments','createCollabDocComment','replyToCollabDocComment'];
+  let notifications=0;const {ToolListChangedNotificationSchema}=await import('@modelcontextprotocol/sdk/types.js');
+  client.setNotificationHandler(ToolListChangedNotificationSchema,()=>{notifications++;});
+  await invoke('extensions:set-enabled','com.nimbalyst.knowledge',false);
+  await expect.poll(()=>notifications).toBeGreaterThan(0);
+  for(const name of names){
+   const denied=await client.callTool({name,arguments:{section:'personal',query:'WIKIPROBE624',filePath:'personal://wiki-form'}});
+   expect(denied.isError,name).toBe(true);expect(JSON.stringify(denied.content),name).toContain('Wiki is disabled');
+  }
+  tools=(await client.listTools()).tools;
+  expect(tools.filter(t=>names.includes(t.name))).toEqual([]);
+  await expect(page.getByTestId('collab-mode-button')).toHaveCount(0);
+  await page.reload();await page.getByTestId('tracker-mode-button').waitFor();
+  await expect(page.getByTestId('collab-mode-button')).toHaveCount(0);
+  // Settings-agent route writes the same persisted setting as the UI toggle.
+  const {port}=await invoke('mcp:get-server-port'),{token}=await invoke('mcp:get-auth-token');
+  const host=new Client({name:'fake-wiki-settings-agent',version:'1'},{capabilities:{}});
+  try{
+   await host.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+port+'/mcp/host?workspacePath='+encodeURIComponent(workspace)),{requestInit:{headers:{Authorization:'Bearer '+token}}}));
+   const name=(await host.listTools()).tools.find(t=>t.name.endsWith('extension_set_enabled'))!.name;
+   const enabled=await host.callTool({name,arguments:{extensionId:'com.nimbalyst.knowledge',enabled:true}});expect(enabled.isError).not.toBe(true);
+   await expect(page.getByTestId('collab-mode-button')).toBeVisible();
+   await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(t=>t.name==='searchPages');}).toBe(true);
+   const found=await call('searchPages',{section:'personal',query:'WIKIPROBE624'});expect(found.results).toHaveLength(2);
+   await host.callTool({name,arguments:{extensionId:'com.nimbalyst.knowledge',enabled:false}});
+   await expect(page.getByTestId('collab-mode-button')).toHaveCount(0);
+   expect((await client.listTools()).tools.some(t=>t.name==='searchPages')).toBe(false);
+  }finally{await host.close();}
+  expect(await fs.readFile(path.join(workspace,'nimbalyst-local/wiki/Интерфейс.md'),'utf8')).toContain('WIKIPROBE624');
  });
 
 });

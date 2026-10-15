@@ -2238,8 +2238,15 @@ export function getExtensionSettings(): Record<string, ExtensionSettings> {
   return structuredClone(_extensionSettingsCache);
 }
 
+const extensionSettingsListeners = new Set<() => void>();
+/** Observe both Settings UI and agent writes after successful persistence. */
+export function onExtensionSettingsChanged(listener: () => void): () => void {
+  extensionSettingsListeners.add(listener);
+  return () => { extensionSettingsListeners.delete(listener); };
+}
+
 export function setExtensionSettings(settings: Record<string, ExtensionSettings>): void {
-  getAppStore().set('extensionSettings', settings);
+  setAppSetting('extensionSettings', settings);
 }
 
 /**
@@ -2832,6 +2839,11 @@ export function getAppSetting<T>(key: string): T | undefined {
  */
 export function setAppSetting<T>(key: string, value: T): void {
   getAppStore().set(key as keyof AppStoreSchema, value as any);
+  if (key === 'extensionSettings') {
+    for (const listener of extensionSettingsListeners) {
+      try { listener(); } catch (error) { logger.main.error('[store] Extension settings listener failed:', error); }
+    }
+  }
 }
 
 /**

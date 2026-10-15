@@ -18,6 +18,7 @@ import { selectedOrgIdAtom } from '../../../store/atoms/orgScope';
 import { EMPTY_TEAM_INBOX_SNAPSHOT, teamInboxSnapshotAtom } from '../../../store/atoms/teamInbox';
 import { activeExtensionPanelAtom } from '../../../store/atoms/extensionPanels';
 import { windowModeAtom, setWindowModeAtom } from '../../../store/atoms/windowMode';
+import { wikiEnabledAtom } from '../../../store/atoms/wikiAvailability';
 import { activeWorkspacePathAtom } from '../../../store/atoms/openProjects';
 
 const projectOrg = vi.hoisted(() => ({ current: null as { orgId: string; name: string } | null }));
@@ -94,13 +95,17 @@ describe('Org mode gutter item', () => {
     expect(screen.queryByTestId('org-mode-button')).toBeNull();
   });
 
-  it('offers Pages with a workspace open even without a team, since Personal pages need none', () => {
+  it('offers Wiki only with both a workspace and extension opt-in, without requiring a team', () => {
     const store = createStore();
     renderGutter(store);
     expect(screen.queryByTestId('collab-mode-button')).toBeNull();
     cleanup();
 
     store.set(activeWorkspacePathAtom, '/workspace');
+    renderGutter(store);
+    expect(screen.queryByTestId('collab-mode-button')).toBeNull();
+    cleanup();
+    store.set(wikiEnabledAtom, true);
     renderGutter(store);
     screen.getByTestId('collab-mode-button');
   });

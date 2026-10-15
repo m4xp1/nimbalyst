@@ -26,6 +26,7 @@ import posthog from "posthog-js";
 import {PostHogProvider} from "posthog-js/react";
 import { initMonacoEditor } from './utils/monacoConfig';
 import { store } from '@nimbalyst/runtime/store';
+import { initWikiAvailability } from './store/atoms/wikiAvailability';
 import { initAgentFilePlacement } from './store/atoms/agentFilePlacement';
 import { registerLocalAssetUrlConverter } from '@nimbalyst/runtime';
 import { nimAssetUrl } from './utils/assetUrl';
@@ -205,6 +206,7 @@ await Promise.allSettled([
     store.set(aiProviderSettingsAtom, settings);
   }),
   initAgentFilePlacement(),
+  initWikiAvailability(),
   initAgentModeSettings().then((settings) => {
     store.set(agentModeSettingsAtom, settings);
   }),

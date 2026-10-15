@@ -182,9 +182,10 @@ export const NavigationGutter: React.FC<NavigationGutterProps> = ({
   // Check if terminal feature is available (developer mode + feature enabled)
   const isTerminalAvailable = useAtomValue(terminalFeatureAvailableAtom);
 
-  // Pages has a Personal section that needs no team, so it shows whenever a
-  // workspace is open.
   const pagesAvailable = useAtomValue(pagesAvailableAtom);
+  useEffect(() => {
+    if (!pagesAvailable && contentMode === 'collab') onContentModeChange('files');
+  }, [pagesAvailable, contentMode, onContentModeChange]);
 
   // Only show the PR review button when the active workspace has a GitHub
   // remote (detected by pullRequestListeners). Guard on workspacePath so a
