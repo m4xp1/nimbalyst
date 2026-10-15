@@ -18,7 +18,7 @@ import { runLocalTracker } from '../trackerLocal.js';
 
 const dirs: string[] = [];
 function scratch(): string {
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'nim-wiki-')));
+  const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'nim-wiki-')));
   dirs.push(dir);
   return dir;
 }
