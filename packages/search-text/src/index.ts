@@ -97,3 +97,4 @@ export function filterSearchText<T>(items: readonly T[], query: string, texts: (
   }
   return [...exact, ...stem];
 }
+export { matchAllSearchTerms, searchTermRanges, searchTextSnippet, mergeSearchRanges, type SearchRange, type AllTermsMatch } from './allTerms.js';

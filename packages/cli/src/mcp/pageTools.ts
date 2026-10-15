@@ -72,7 +72,7 @@ export function pageTools(context: LocalWikiContext): McpTool[] {
     localTool(
       contractDefinition(
         'searchPages',
-        "Search the local wiki's pages and table rows by title, body and field text. Every word must match; title matches rank first. Returns kind, id, title, type, the uri to read with readCollabDoc, the file path and a snippet.",
+        "Search the local wiki's pages and table rows by title, body and field text. Every word must match across fields, in any order. Ignores case, NFC and е/ё; Russian word forms also match. Exact forms rank before stems, then title matches. Returns kind, id, title, type, the uri to read with readCollabDoc, the file path and a snippet.",
       ),
       context,
       async ({ wiki }, args) => {
@@ -87,6 +87,8 @@ export function pageTools(context: LocalWikiContext): McpTool[] {
             ...(hit.kind === 'page' ? { uri: localPageUri(hit.id) } : {}),
             path: hit.path,
             snippet: hit.snippet,
+            keywordMatch: hit.keywordMatch,
+            highlights: hit.highlights,
           })),
         };
       },

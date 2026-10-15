@@ -61,7 +61,7 @@ describe('nim wiki over a local folder', () => {
     const repo = scratch();
     execFileSync('git', ['init', '-q'], { cwd: repo });
     // Guard: every git command below must act on the sandbox, not this checkout.
-    expect(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(repo);
+    expect(path.resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, encoding: 'utf8' }).trim())).toBe(path.resolve(repo));
     const ws = ['--workspace', repo];
 
     const init = await nim('wiki', 'init', ...ws, '--json');
@@ -185,4 +185,17 @@ describe('nim wiki over a local folder', () => {
     expect(await runLocalTracker(parseArgs(['tracker', 'get', 'NIM-12', ...ws]))).toBeNull();
     expect(await runLocalTracker(parseArgs(['tracker', 'list', ...ws]))).toBeNull();
   });
+});
+
+it('searches Russian forms through the CLI with Unicode snippet positions', async () => {
+  const repo = scratch(); execFileSync('git', ['init', '-q'], { cwd: repo });
+  const dir = path.join(repo, 'wiki'); await initWiki(dir);
+  const wiki = await openWiki(dir);
+  const id = (await wiki.command({ type: 'register-document', title: 'Интерфейс', parentFolderId: null, body: '😀 На русском языке, ёлки.' })).id!;
+  wiki.close();
+  const result = await nim('wiki', 'search', 'ЁЛКАМИ', 'языками', 'интерфейсами', '--json', '--location', dir, '--workspace', repo);
+  expect(result.code).toBe(0); const hits = JSON.parse(result.out);
+  expect(hits.map((h: { id: string }) => h.id)).toEqual([id]);
+  expect(hits[0].keywordMatch).toBe('stem');
+  expect(hits[0].highlights.map((r: { start: number; end: number }) => hits[0].snippet.slice(r.start,r.end))).toEqual(['языке', 'ёлки']);
 });

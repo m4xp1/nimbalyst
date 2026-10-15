@@ -237,6 +237,9 @@ export type LocalTrackerCommand =
   | { type: 'delete-item'; itemId: string };
 
 export interface LocalSearchHit {
+  keywordMatch?: 'exact' | 'stem';
+  /** UTF-16 ranges in snippet. */
+  highlights?: Array<{ start: number; end: number }>;
   id: string;
   title: string;
   kind: 'page' | 'row';

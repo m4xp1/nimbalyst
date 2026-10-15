@@ -224,3 +224,18 @@ describe('tool calls', () => {
     });
   });
 });
+
+it('finds Russian forms through MCP and reads the actual matched file', async () => {
+  const project = realpathSync(mkdtempSync(path.join(tmpdir(), 'nim-mcp-russian-')));
+  try {
+    const dir = path.join(project, 'nimbalyst-local', 'wiki'); await initWiki(dir);
+    const wiki = await openWiki(dir);
+    const id = (await wiki.command({ type: 'register-document', title: 'Интерфейс', parentFolderId: null, body: '😀 На русском языке, ёлки.' })).id!; wiki.close();
+    const { stdout, code } = await runNimMcp([call(1, 'searchPages', { query: 'ёлками языками интерфейсами' }), call(2, 'readCollabDoc', { filePath: id })], project);
+    expect(code).toBe(0);
+    const results = stdout.trim().split('\n').map(line => JSON.parse(JSON.parse(line).result.content[0].text));
+    expect(results[0].results).toMatchObject([{ id, keywordMatch: 'stem', uri: 'local-wiki://' + id }]);
+    const hit = results[0].results[0]; expect(hit.highlights.map((r: {start:number;end:number}) => hit.snippet.slice(r.start,r.end))).toEqual(['языке','ёлки']);
+    expect(results[1].markdown).toBe('😀 На русском языке, ёлки.');
+  } finally { rmSync(project, { recursive: true, force: true }); }
+});
