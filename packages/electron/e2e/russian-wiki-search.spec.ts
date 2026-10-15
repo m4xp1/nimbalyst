@@ -19,8 +19,8 @@ test.describe.serial('Built Local Wiki Russian search', () => {
   const wiki=path.join(workspace,'nimbalyst-local/wiki'); await fs.mkdir(wiki,{recursive:true}); await fs.mkdir(path.join(temp,'user'));
   execFileSync('git',['init',workspace],{stdio:'ignore',windowsHide:true});
   await fs.writeFile(path.join(wiki,'.nimbalyst-wiki.yaml'),'formatVersion: 1\n');
-  await fs.writeFile(path.join(wiki,'Интерфейс.md'),'---\nid: wiki-form\n---\n😀 Прие\u0308мка на русском языке. Ёлки. WIKIPROBE624\n');
-  await fs.writeFile(path.join(wiki,'Наблюдение.md'),'---\nid: wiki-exact\n---\nинтерфейсами языками ёлками WIKIPROBE624\n');
+  await fs.writeFile(path.join(wiki,'Интерфейс.md'),'---\nid: wiki-form\nstatus: draft\n---\n😀 Прие\u0308мка на русском языке. Ёлки. WIKIPROBE624\n');
+  await fs.writeFile(path.join(wiki,'Наблюдение.md'),'---\nid: wiki-exact\nstatus: done\n---\nинтерфейсами языками ёлками WIKIPROBE624\n');
   const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
   await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(mainPath))+');require('+JSON.stringify(mainPath)+');');
   const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
@@ -59,4 +59,25 @@ test.describe.serial('Built Local Wiki Russian search', () => {
   await expect(page.locator('[contenteditable=true]').filter({visible:true}).filter({hasText:'WIKIPROBE624'}).first()).toBeVisible();
   expect(await app.evaluate(()=>(globalThis as any).__wikiOpenAI)).toBe(0);
  });
+ test('Wiki FILTER BY FIELD: pointer and keyboard choices retain clauses, text and clear',async()=>{
+  const button=page.getByTestId('collab-mode-button'); if(await button.getAttribute('aria-pressed')!=='true')await button.click();
+  await page.getByTestId('collab-sidebar-personal').getByText('Search',{exact:true}).click();
+  const view=page.getByTestId('pages-search-view'),input=view.getByTestId('tracker-filter-omnibox-input'),rows=view.locator('tbody tr');
+  await input.fill('');await input.focus();
+  await page.getByTestId('tracker-filter-omnibox-option-field:status').click();
+  await expect(input).toHaveValue('status:');
+  await page.getByTestId('tracker-filter-omnibox-option-value:draft').click();
+  await expect(view.getByTestId('tracker-active-filter-pill-0')).toBeVisible();
+  await expect(rows).toHaveCount(1);await expect(rows.first()).toHaveAttribute('data-row-id','wiki-form');
+  await input.fill('WIKIPROBE624');await expect(rows).toHaveCount(1);await input.press('Escape');
+  await view.getByRole('button',{name:'Remove Status filter',exact:true}).click();
+  await expect(rows).toHaveCount(2);await expect(input).toHaveValue('WIKIPROBE624');
+  await input.fill('WIKIPROBE624 status:done');await input.press('Enter');
+  await expect(rows).toHaveCount(1);await expect(rows.first()).toHaveAttribute('data-row-id','wiki-exact');
+  await expect(view.getByTestId('tracker-active-filter-pill-0')).toBeVisible();
+  await view.getByTestId('tracker-filter-omnibox-clear').click();
+  await expect(rows).toHaveCount(2);await expect(input).toHaveValue('');
+  await expect(view.getByTestId('tracker-active-filter-pill-0')).toHaveCount(0);
+ });
+
 });

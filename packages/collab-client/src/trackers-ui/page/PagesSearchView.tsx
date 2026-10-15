@@ -198,6 +198,7 @@ export function PagesSearchView({
           fields={fields}
           filters={state.filters}
           onFiltersChange={setFilters}
+          onSearchAndFiltersChange={(query, filters) => update({ query, filters })}
           showPills={false}
         />
         {headerActions}
