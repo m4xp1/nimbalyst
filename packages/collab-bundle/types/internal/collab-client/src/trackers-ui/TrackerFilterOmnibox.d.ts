@@ -34,6 +34,8 @@ export interface TrackerFilterOmniboxProps {
     /** The persisted per-type column filters. */
     filters: TrackerFilterSet | null;
     onFiltersChange: (filters: TrackerFilterSet) => void;
+    /** Use when the host stores text and clauses together (for example in one URL). */
+    onSearchAndFiltersChange?: (searchQuery: string, filters: TrackerFilterSet) => void;
     /** Tags offered after `#`, with the active ones already removed. */
     tagOptions?: TagTokenOption[];
     /** Tags currently filtering the view. Their own list, not filter clauses. */
@@ -48,4 +50,4 @@ export interface TrackerFilterOmniboxProps {
     className?: string;
     placeholder?: string;
 }
-export declare function TrackerFilterOmnibox({ searchQuery, onSearchQueryChange, fields, filters, onFiltersChange, tagOptions, tagFilter, onTagFilterChange, showPills, className, placeholder, }: TrackerFilterOmniboxProps): JSX.Element;
+export declare function TrackerFilterOmnibox({ searchQuery, onSearchQueryChange, fields, filters, onFiltersChange, onSearchAndFiltersChange, tagOptions, tagFilter, onTagFilterChange, showPills, className, placeholder, }: TrackerFilterOmniboxProps): JSX.Element;

@@ -1,14 +1,3 @@
-/**
- * A Pages section's Search table as data: one row per page and typed page in
- * the section, the filter fields the Trackers omnibox and pills read (type,
- * tags, author, updated, and the chosen type's own fields), the title query,
- * the page-text hits the section's search index returns, and the URL state
- * that carries all of it.
- *
- * Filters are the tracker filter language (`TrackerFilterSet`), evaluated by
- * the runtime's `matchesFilterSet`, so the omnibox drives them unchanged.
- * Pure: hosts map their documents and records in, the view renders the rows.
- */
 import { type PageSearchHighlight, type PageSearchHit } from '@nimbalyst/collab-protocol';
 import type { FieldDefinition } from '../../../../tracker-schema/src/browser';
 import { type TrackerFilterSet } from '../../../../runtime/src/plugins/TrackerPlugin/models/trackerFilters';
@@ -113,7 +102,7 @@ export declare function titleMatches(row: PagesSearchRow, query: string): boolea
  * it the snippet. A hit with no row in this section is dropped: an archived
  * typed page, one not synced yet, or a type page.
  */
-export declare function matchPagesQuery(rows: readonly PagesSearchRow[], query: string, hits: readonly PageSearchHit[] | null): PagesSearchMatch[];
+export declare function matchPagesQuery(rows: readonly PagesSearchRow[], query: string, hits: readonly PageSearchHit[] | null, lane?: 'team' | 'personal'): PagesSearchMatch[];
 /**
  * The `typeIds` the index searches typed pages of (it filters before its
  * limit): the placed types, only the one the filters narrow to, or none when

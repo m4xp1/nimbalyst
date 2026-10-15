@@ -13,6 +13,8 @@ import { type PageSearchHit, type PageSearchRequest, type PageSearchResponse } f
 import type { SharedDocument } from './types';
 /** The body search a section offers (`CollabDocsDataSource.searchPages`); absent when it has none. */
 export interface PageBodySearch {
+    /** Opt-in only for a local file Wiki data source. Team retains the original path. */
+    searchPolicy?: 'local';
     searchPages?(request: PageSearchRequest): Promise<PageSearchResponse | null>;
 }
 /** A page the caller shows, as title search reads it. */
@@ -48,3 +50,5 @@ export declare function sessionTitleEntries(documents: readonly SharedDocument[]
  * section cannot search now; a source with no body search answers titles only.
  */
 export declare function searchSectionPages(dataSource: PageBodySearch, documents: readonly SharedDocument[], request: PageSearchRequest): Promise<PageSearchResponse | null>;
+export declare function localPageSearchTitleHits(query: string, entries: readonly PageSearchTitleEntry[]): PageSearchHit[];
+export declare function mergeLocalPageSearchHits(bodyHits: readonly PageSearchHit[], titleHits: readonly PageSearchHit[], limit?: number): PageSearchHit[];
