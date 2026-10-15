@@ -4,7 +4,7 @@
  * which is exactly where pure dense retrieval is weak.
  */
 
-import RussianStemmer from './snowball/russian-stemmer.js';
+import { RussianStemmer, normalizeSearchText } from '@nimbalyst/search-text';
 
 export const LEXICAL_INDEX_VERSION = 3;
 const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
@@ -12,7 +12,7 @@ const K1 = 1.5;
 const B = 0.75;
 
 export function tokenize(text: string): string[] {
-  const matches = text.normalize('NFC').toLowerCase().normalize('NFC').replace(/ё/g, 'е').match(TOKEN_RE);
+  const matches = normalizeSearchText(text).match(TOKEN_RE);
   if (!matches) return [];
   return matches.filter((t) => t.length >= 2 || /[0-9]/.test(t));
 }

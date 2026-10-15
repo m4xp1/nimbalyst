@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build": "pnpm --dir packages/runtime run build",
-    "build:workspace-deps": "pnpm --filter @nimbalyst/tracker-core --filter @nimbalyst/extension-sdk --filter @nimbalyst/collab-protocol --filter @nimbalyst/tracker-schema --filter @nimbalyst/tracker-engine run build",
+    "build:workspace-deps": "pnpm --filter @nimbalyst/search-text run build && pnpm --filter @nimbalyst/tracker-core --filter @nimbalyst/extension-sdk --filter @nimbalyst/collab-protocol --filter @nimbalyst/tracker-schema --filter @nimbalyst/tracker-engine run build",
     "typecheck": "node scripts/run-workspace-script.mjs typecheck",
     "typecheck:prepush": "node scripts/run-validation.mjs typecheck",
     "test": "pnpm run test:unit",
@@ -35,7 +35,7 @@
     "test:unit:coverage": "vitest --coverage",
     "test:provider:integration": "cross-env RUN_AI_PROVIDER_TESTS=true vitest --run",
     "prepare": "node scripts/remove-stale-npm-lockfile.mjs && node scripts/install-git-hooks.mjs && pnpm run build:tracker-packages",
-    "build:tracker-packages": "pnpm --filter @nimbalyst/tracker-core run build && pnpm --filter @nimbalyst/tracker-schema run build && pnpm --filter @nimbalyst/tracker-engine run build && pnpm --filter @nimbalyst/local-wiki run build",
+    "build:tracker-packages": "pnpm --filter @nimbalyst/search-text run build && pnpm --filter @nimbalyst/tracker-core run build && pnpm --filter @nimbalyst/tracker-schema run build && pnpm --filter @nimbalyst/tracker-engine run build && pnpm --filter @nimbalyst/local-wiki run build",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "check:override-sync": "node scripts/check-override-sync.mjs",
     "build:wiki-plugin": "node scripts/build-wiki-plugin.mjs",

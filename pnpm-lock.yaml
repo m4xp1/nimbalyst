@@ -559,6 +559,9 @@ importers:
 
   packages/collab-client:
     dependencies:
+      '@nimbalyst/search-text':
+        specifier: workspace:*
+        version: link:../search-text
       '@floating-ui/react':
         specifier: ^0.27.19
         version: 0.27.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1650,6 +1653,9 @@ importers:
 
   packages/extensions/nimbalyst-memory/engine:
     dependencies:
+      '@nimbalyst/search-text':
+        specifier: workspace:*
+        version: link:../../../search-text
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(supports-color@10.2.2)(zod@4.3.6)
@@ -1894,6 +1900,9 @@ importers:
 
   packages/local-wiki:
     dependencies:
+      '@nimbalyst/search-text':
+        specifier: workspace:*
+        version: link:../search-text
       js-yaml:
         specifier: ^4.3.2
         version: 4.3.2
@@ -1959,6 +1968,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@nimbalyst/search-text':
+        specifier: workspace:*
+        version: link:../search-text
       '@agentclientprotocol/sdk':
         specifier: ^0.20.0
         version: 0.20.0(zod@4.3.6)
@@ -2227,6 +2239,8 @@ importers:
       vite-plugin-static-copy:
         specifier: ^3.1.4
         version: 3.2.0(vite@7.3.6(@types/node@20.19.43)(jiti@2.7.0)(terser@5.46.1)(yaml@2.8.3))
+
+  packages/search-text: {}
 
   packages/tracker-core:
     devDependencies:
