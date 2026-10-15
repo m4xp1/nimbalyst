@@ -157,6 +157,8 @@ export type CollabDocsDataChange = Exclude<CollabDataChange<SharedDocument, Shar
     snapshot: CollabDocsSnapshot;
 };
 export interface CollabDocsDataSource extends Omit<CollabDataSource<SharedDocument, SharedFolder, CollabDocsCommand, CollabDocsCommandResult>, 'snapshot' | 'subscribe'> {
+    /** Local file Wiki title/morphology policy; omitted by Team sources. */
+    searchPolicy?: 'local';
     snapshot(): Promise<CollabDocsSnapshot>;
     subscribe(cb: (change: CollabDocsDataChange) => void): Unsubscribe;
     /**

@@ -67,7 +67,11 @@ export const COLLAB_BUNDLE_EAGER_GZIP_BUDGET_BYTES = {
   // 2026-10-04: 88,122 bytes after Pages became per project (the session keeps
   // other projects' pages in a separate link-only index and refuses writes to
   // them). Raised with ~4% headroom.
-  'docs-ui': 92_000,
+  // 2026-10-15 fork: 95,140 bytes with synchronous Local Wiki AND matching,
+  // NFC/source mapping and Russian Snowball 3.1.1. A measurement-only build
+  // without Snowball is 92,538 bytes (2,602 bytes for the stemmer); no editor
+  // or transport became eager. Reset just this entry with <1% headroom.
+  'docs-ui': 96_000,
   // Sep 5 privacy-aware document transport graph measured 35,049 bytes.
   // Keep a narrow allowance for the supported response/refresh contract.
   'feedback-ui': 35_500,
