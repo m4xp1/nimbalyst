@@ -61,7 +61,7 @@ describe('nim wiki over a local folder', () => {
     const repo = scratch();
     execFileSync('git', ['init', '-q'], { cwd: repo });
     // Guard: every git command below must act on the sandbox, not this checkout.
-    expect(path.resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, encoding: 'utf8' }).trim())).toBe(path.resolve(repo));
+    expect(realpathSync.native(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, encoding: 'utf8' }).trim())).toBe(realpathSync.native(repo));
     const ws = ['--workspace', repo];
 
     const init = await nim('wiki', 'init', ...ws, '--json');
