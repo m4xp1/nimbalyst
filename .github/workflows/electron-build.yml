@@ -145,7 +145,7 @@ jobs:
           node -e "const fs=require('fs'); const asar=require('@electron/asar'); const expected=JSON.parse(fs.readFileSync('packages/electron/package.json','utf8')).version; const actual=JSON.parse(asar.extractFile('packages/electron/release/win-unpacked/resources/app.asar','package.json').toString()).version; if(actual!==expected) throw new Error('Packaged app version mismatch: '+actual); console.log('Packaged version: '+actual)"
           if ($LASTEXITCODE -ne 0) { throw 'Packaged version validation failed' }
           foreach ($name in @('COPYING', 'SOURCE.md', 'base-stemmer.js', 'russian-stemmer.js')) {
-            $original = Get-FileHash -LiteralPath "packages/extensions/nimbalyst-memory/engine/src/retrieval/snowball/$name" -Algorithm SHA256
+            $original = Get-FileHash -LiteralPath "packages/search-text/src/snowball/$name" -Algorithm SHA256
             $packaged = Get-FileHash -LiteralPath "packages/electron/release/win-unpacked/resources/legal/snowball-russian-3.1.1/$name" -Algorithm SHA256
             if ($original.Hash -ne $packaged.Hash) { throw "Snowball shipped source/license mismatch: $name" }
           }
