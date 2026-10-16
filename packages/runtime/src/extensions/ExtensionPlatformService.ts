@@ -89,11 +89,12 @@ export interface ExtensionPlatformService {
 
   /**
    * Check if an extension should be visible based on its required release channel.
-   * Extensions with requiredReleaseChannel: 'alpha' are only visible to alpha users.
+   * The host applies channel requirements and any extension-specific fork policy.
    * @param requiredChannel - The channel required by the extension (undefined means 'stable')
+   * @param extensionId - Optional manifest ID for host-specific channel policy
    * @returns true if the extension should be visible, false otherwise
    */
-  isExtensionVisibleForChannel(requiredChannel: string | undefined): Promise<boolean>;
+  isExtensionVisibleForChannel(requiredChannel: string | undefined, extensionId?: string): Promise<boolean>;
 }
 
 // ============================================================================

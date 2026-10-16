@@ -1,3 +1,4 @@
+import { isExtensionVisibleForChannel } from '../../shared/extensionChannelPolicy';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { homedir } from 'os';
@@ -252,19 +253,6 @@ function dedupePlugins(plugins: Array<{ type: 'local'; path: string }>): Array<{
   return deduped;
 }
 
-function isExtensionVisibleForChannel(
-  manifest: { requiredReleaseChannel?: ReleaseChannel },
-  currentChannel: ReleaseChannel
-): boolean {
-  const requiredChannel = manifest.requiredReleaseChannel;
-  if (!requiredChannel || requiredChannel === 'stable') {
-    return true;
-  }
-  if (requiredChannel === 'alpha') {
-    return currentChannel === 'alpha';
-  }
-  return true;
-}
 
 async function pathExists(targetPath: string): Promise<boolean> {
   try {

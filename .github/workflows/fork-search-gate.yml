@@ -32,8 +32,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Workspace dependency build failed' }
           pnpm --dir packages/extensions/nimbalyst-memory run build
           if ($LASTEXITCODE -ne 0) { throw 'Memory build failed' }
+          pnpm --dir packages/extensions/git run build
+          if ($LASTEXITCODE -ne 0) { throw 'Git extension build failed' }
       - name: Mandatory lexical and hybrid regression tests
         run: pnpm run test:fork-search
+      - name: Mandatory Stable Git policy and operation regressions
+        run: >-
+          pnpm exec vitest run
+          packages/electron/src/shared/__tests__/extensionChannelPolicy.test.ts
+          packages/runtime/src/extensions/__tests__/ExtensionLoader.channelPolicy.test.ts
+          packages/runtime/src/extensions/__tests__/ExtensionLoader.settingsRoutes.test.ts
+          packages/runtime/src/extensions/__tests__/ExtensionLoader.filesystem.test.ts
+          packages/extensions/git/src/__tests__
+          packages/electron/src/main/services/__tests__/GitCommitService.test.ts
+          packages/electron/src/main/services/__tests__/GitCommitService.multiRepo.test.ts
+          packages/electron/src/main/ipc/__tests__/GitHandlers.operands.test.ts
       - name: Build isolated Electron application
         run: pnpm --filter @nimbalyst/electron run build
       - name: Verify native runtime

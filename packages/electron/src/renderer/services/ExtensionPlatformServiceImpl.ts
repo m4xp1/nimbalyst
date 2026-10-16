@@ -555,15 +555,15 @@ CHECK:
 
   /**
    * Check if an extension should be visible based on its required release channel.
-   * Extensions with requiredReleaseChannel: 'alpha' are only visible to alpha users.
+   * The host applies channel requirements and any extension-specific fork policy.
    */
-  async isExtensionVisibleForChannel(requiredChannel: string | undefined): Promise<boolean> {
+  async isExtensionVisibleForChannel(requiredChannel: string | undefined, extensionId?: string): Promise<boolean> {
     const electronAPI = (window as any).electronAPI;
     if (!electronAPI) {
       // If we can't check, default to visible (fail open)
       return true;
     }
 
-    return electronAPI.invoke('extensions:is-visible-for-channel', requiredChannel);
+    return electronAPI.invoke('extensions:is-visible-for-channel', requiredChannel, extensionId);
   }
 }

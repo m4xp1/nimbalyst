@@ -7,7 +7,6 @@
   "main": "dist/index.js",
   "styles": "dist/index.css",
   "apiVersion": "1.0.0",
-  "requiredReleaseChannel": "alpha",
   "marketplace": {
     "changelog": "1.0.2: Keep command output across reloads, search Git history more effectively, and group Windows paths consistently.\n1.0.1: Redesigned Changes pane with inline diff peek, per-workspace tab memory, detached-HEAD handling, and Output log fixes.",
     "categories": ["developer-tools"],

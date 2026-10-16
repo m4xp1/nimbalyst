@@ -424,7 +424,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Developer Tools
 - Excalidraw
 - Extension Dev Kit
-- Git -- commit history, diffs, push/pull, and branch operations
+- Git -- commit history, diffs, push/pull, and branch operations; available on Stable in this fork, including Marketplace copies; explicit extension disable is respected
 - GitHub Issues Importer
 - Image Generation
 - iOS Dev Tools
