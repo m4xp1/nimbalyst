@@ -40,6 +40,7 @@ export type ClientMessage =
   | VoiceToolRequestMessage
   | VoiceToolResponseMessage
   | SessionControlCommandMessage
+  | SessionContextUpdateMessage
   | RegisterPushTokenMessage
   | UnregisterPushTokenMessage
   | RegisterLiveActivityTokenMessage
@@ -274,6 +275,27 @@ export interface SessionControlMessage {
   sentByDeviceId?: string;
   /** Deliver to this device only. Absent preserves legacy broadcast routing. */
   targetDeviceId?: string;
+}
+
+/**
+ * A session's live context-window usage, relayed to the user's other devices
+ * and never stored. Every assistant step changes it; persisting each value
+ * cost an index row rewrite plus a replication journal entry. The stored
+ * index row still gets the last value at the turn boundary.
+ *
+ * `encryptedContext` decrypts to client-metadata JSON holding only
+ * `currentContext: { tokens, contextWindow }`. `at` orders updates.
+ */
+export interface LiveSessionContext {
+  sessionId: string;
+  encryptedContext: string;
+  contextIv: string;
+  at: number;
+}
+
+export interface SessionContextUpdateMessage {
+  type: 'sessionContextUpdate';
+  update: LiveSessionContext;
 }
 
 /** Register a push notification token for this device */
@@ -537,6 +559,7 @@ export type ServerMessage =
   | VoiceToolRequestBroadcastMessage
   | VoiceToolResponseBroadcastMessage
   | SessionControlBroadcastMessage
+  | SessionContextBroadcastMessage
   | SettingsSyncBroadcastMessage
   | ReadReceiptSyncBroadcastMessage
   | TrackerPersonalStateSyncBroadcastMessage
@@ -681,6 +704,13 @@ export interface CreateWorktreeResponseBroadcastMessage {
 export interface SessionControlBroadcastMessage {
   type: 'sessionControlBroadcast';
   message: SessionControlMessage;
+  fromConnectionId?: string;
+}
+
+/** Relay of a `sessionContextUpdate` to the user's other devices. */
+export interface SessionContextBroadcastMessage {
+  type: 'sessionContextBroadcast';
+  update: LiveSessionContext;
   fromConnectionId?: string;
 }
 

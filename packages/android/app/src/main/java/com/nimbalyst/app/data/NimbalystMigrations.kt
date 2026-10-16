@@ -64,5 +64,20 @@ internal object NimbalystMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+    /** The project's Local wiki folder and types from its config. Null until the next config arrives. */
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `projects` ADD COLUMN `localWikiFolder` TEXT")
+            db.execSQL("ALTER TABLE `projects` ADD COLUMN `localWikiTypesJson` TEXT")
+        }
+    }
+
+    /** #1711: column is no longer read or written, but builds at version 7 may be installed, so it stays. */
+    val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `messages` ADD COLUMN `projectionJson` TEXT")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 }

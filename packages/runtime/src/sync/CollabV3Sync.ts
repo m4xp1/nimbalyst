@@ -1,6 +1,10 @@
+import { encryptSessionMessage as encryptMessage } from './encryptSessionMessage';
 import { applyReplicatedSessionRows, createIndexChangeSubscriptions, createHierarchySnapshotDispatch, dispatchIndexChange, reconcileFetchedIndex } from './indexChangeDispatch';
 import { createPendingIndexPublications } from './pendingIndexPublications';
+import { warnIfUnpublished } from './pushOutcome';
+import { describeSocketClose, socketErrorMessage, type SocketCloseNext } from './socketCloseLog';
 import { createSessionQueueReconciler, mergeSessionIndexMetadata, type CachedSessionIndex } from './sessionIndexMetadata';
+import { buildClientMetadataFromCacheEntry, buildClientMetadataFromRaw, buildSessionRoomClientMetadata, changeCarriesClientMetadata, decryptClientMetadata, encryptClientMetadata, mergeBulkClientMetadata, mergePendingMetadataUpdate, resolveTranscriptSyncFlag } from './sessionClientMetadata';
 import { isRetainedSession, sessionActivityAt, SESSION_TRANSCRIPT_TTL_MS } from '@nimbalyst/collab-protocol';
 /**
  * CollabV3 Sync Provider
@@ -22,8 +26,8 @@ import { isRetainedSession, sessionActivityAt, SESSION_TRANSCRIPT_TTL_MS } from 
 
 import type { AgentMessage } from '../ai/server/types';
 import type { PersonalJwt, PersonalMemberId } from '../auth/jwtScopes';
-import { shouldSyncMessageForSessionRoom, truncateContentForSync } from './syncContentTruncator';
-import { appendSyncClientParams, redactSyncUrl } from './syncClientInfo';
+import { shouldSyncMessageForSessionRoom } from './syncContentTruncator';
+import { appendSyncClientParams } from './syncClientInfo';
 import { decodeNodeAccessTokenClaims, isNodeAccessToken } from './nodeCredentialToken';
 import {
   base64ToUint8Array,
@@ -34,6 +38,8 @@ import {
   uint8ArrayToBase64,
 } from './collabV3Crypto';
 import { buildSyncedSessionIndexFields } from './sessionIndexEntryFields';
+import { encryptStable } from './stableCiphertext';
+import { createLiveContextPublisher } from './liveSessionContext';
 import { resolveIndexSortTimestamp } from './sessionSortTimestamp';
 import {
   createIndexPublicationGate,
@@ -58,7 +64,6 @@ import { writeSessionMessagesOverTransientSocket, type TransientSessionMetadata,
 import {
   IndexProtocolUnsupportedError,
   type ClientMessage,
-  type ClientMetadata,
   type DecryptedSessionIndexEntry,
   type EncryptedCreateSessionRequest,
   type EncryptedCreateSessionResponse,
@@ -163,13 +168,10 @@ const MOBILE_PUSH_ACK_TIMEOUT_MS = 10_000;
  * Encrypt queued prompts for wire transmission.
  * Each prompt's text is encrypted individually.
  */
-async function encryptQueuedPrompts(
-  prompts: PlaintextQueuedPrompt[],
-  key: CryptoKey
-): Promise<EncryptedQueuedPrompt[]> {
+async function encryptQueuedPrompts(prompts: PlaintextQueuedPrompt[], key: CryptoKey, sessionId: string): Promise<EncryptedQueuedPrompt[]> {
   return Promise.all(
     prompts.map(async (prompt) => {
-      const { encrypted, iv } = await encrypt(prompt.prompt, key);
+      const { encrypted, iv } = await encryptStable(`queued:${sessionId}:${prompt.id}`, prompt.prompt, key);
       return {
         id: prompt.id,
         encryptedPrompt: encrypted,
@@ -211,11 +213,9 @@ async function decryptQueuedPrompts(
 /**
  * Encrypt a session title for wire transmission.
  */
-async function encryptTitle(
-  title: string,
-  key: CryptoKey
-): Promise<{ encryptedTitle: string; titleIv: string }> {
-  const { encrypted, iv } = await encrypt(title, key);
+/** With a scope (index: session id; session room: `session:` + id), an unchanged title keeps its ciphertext. */
+async function encryptTitle(title: string, key: CryptoKey, sessionId?: string): Promise<{ encryptedTitle: string; titleIv: string }> {
+  const { encrypted, iv } = sessionId ? await encryptStable(`title:${sessionId}`, title, key) : await encrypt(title, key);
   return {
     encryptedTitle: encrypted,
     titleIv: iv,
@@ -231,45 +231,6 @@ async function decryptTitle(
   key: CryptoKey
 ): Promise<string> {
   return decrypt(encryptedTitle, titleIv, key);
-}
-
-/**
-
-/**
- * Extract ClientMetadata from raw PGLite metadata.
- * This is the single place that maps database schema -> encrypted client metadata.
- */
-function buildClientMetadataFromRaw(
-  metadata?: Record<string, any>,
-  options: { hasBeenNamed?: boolean } = {}
-): ClientMetadata | undefined {
-  const tokenUsage = metadata?.tokenUsage;
-  const phase = metadata?.phase as string | undefined;
-  const tags = metadata?.tags as string[] | undefined;
-  const draftInput = metadata?.draftInput as string | undefined;
-  const draftUpdatedAt = metadata?.draftUpdatedAt as number | undefined;
-  const hasBeenNamed = options.hasBeenNamed;
-  const hasTokenUsage = tokenUsage?.totalTokens && tokenUsage?.contextWindow;
-  const hasPhaseOrTags = phase || (tags && tags.length > 0);
-  // draftInput can be "" (explicit clear) - treat as meaningful
-  const hasDraftField = draftInput !== undefined;
-  const hasNamingMarker = hasBeenNamed !== undefined;
-
-  if (!hasTokenUsage && !hasPhaseOrTags && !hasDraftField && !hasNamingMarker) return undefined;
-
-  const result: ClientMetadata = {};
-  if (hasTokenUsage) {
-    result.currentContext = {
-      tokens: tokenUsage.totalTokens,
-      contextWindow: tokenUsage.contextWindow,
-    };
-  }
-  if (phase) result.phase = phase;
-  if (tags && tags.length > 0) result.tags = tags;
-  if (hasDraftField) result.draftInput = draftInput;
-  if (draftUpdatedAt) result.draftUpdatedAt = draftUpdatedAt;
-  if (hasNamingMarker) result.hasBeenNamed = hasBeenNamed;
-  return result;
 }
 
 // Why: the lightweight `indexClientMetadataPatch` wire message added in
@@ -299,32 +260,6 @@ function isIndexClientMetadataOnlyUpdate(metadata: Partial<SyncedSessionMetadata
 // `__tests__/CollabV3Sync.routing.test.ts` pins its classification.
 export { isIndexClientMetadataOnlyUpdate as isIndexClientMetadataOnlyUpdateForTest };
 
-function buildClientMetadataFromCacheEntry(entry: Pick<
-  CachedSessionIndex,
-  'currentContext' | 'hasPendingPrompt' | 'phase' | 'tags' | 'draftInput' | 'draftUpdatedAt' | 'hasBeenNamed'
->): ClientMetadata | undefined {
-  if (
-    !entry.currentContext &&
-    entry.hasPendingPrompt === undefined &&
-    !entry.phase &&
-    !entry.tags &&
-    entry.draftInput === undefined &&
-    entry.hasBeenNamed === undefined
-  ) {
-    return undefined;
-  }
-
-  return {
-    currentContext: entry.currentContext,
-    hasPendingPrompt: entry.hasPendingPrompt,
-    phase: entry.phase,
-    tags: entry.tags,
-    draftInput: entry.draftInput,
-    draftUpdatedAt: entry.draftUpdatedAt,
-    hasBeenNamed: entry.hasBeenNamed,
-  };
-}
-
 /**
  * Signature of everything an `indexClientMetadataPatch` would actually put on
  * the wire for this entry. Computed from plaintext, before encryption: AES-GCM
@@ -337,29 +272,6 @@ function indexPatchSignatureForEntry(entry: CachedSessionIndex): string {
     lastReadAt: entry.lastReadAt,
     clientMetadata: buildClientMetadataFromCacheEntry(entry) as Record<string, unknown> | undefined,
   });
-}
-
-/**
- * Encrypt client metadata for wire transmission.
- */
-async function encryptClientMetadata(
-  metadata: ClientMetadata,
-  key: CryptoKey
-): Promise<{ encryptedClientMetadata: string; clientMetadataIv: string }> {
-  const { encrypted, iv } = await encrypt(JSON.stringify(metadata), key);
-  return { encryptedClientMetadata: encrypted, clientMetadataIv: iv };
-}
-
-/**
- * Decrypt client metadata received from wire.
- */
-async function decryptClientMetadata(
-  encryptedClientMetadata: string,
-  clientMetadataIv: string,
-  key: CryptoKey
-): Promise<ClientMetadata> {
-  const json = await decrypt(encryptedClientMetadata, clientMetadataIv, key);
-  return JSON.parse(json);
 }
 
 /**
@@ -422,7 +334,7 @@ async function decryptProjectId(
 async function decryptSessionIndexEntry(
   entry: SessionIndexEntry,
   key: CryptoKey | undefined,
-): Promise<{ decrypted: DecryptedSessionIndexEntry; cacheEntry: CachedSessionIndex }> {
+): Promise<{ decrypted: DecryptedSessionIndexEntry & { transcriptSyncDisabled?: boolean }; cacheEntry: CachedSessionIndex }> {
   let projectId: string;
   if (entry.encryptedProjectId && entry.projectIdIv && key) {
     try {
@@ -463,6 +375,7 @@ async function decryptSessionIndexEntry(
   let draftInput: string | undefined;
   let draftUpdatedAt: number | undefined;
   let hasBeenNamed: boolean | undefined;
+  let transcriptSyncDisabled: boolean | undefined;
   if (entry.encryptedClientMetadata && entry.clientMetadataIv && key) {
     try {
       const clientMeta = await decryptClientMetadata(entry.encryptedClientMetadata, entry.clientMetadataIv, key);
@@ -475,12 +388,13 @@ async function decryptSessionIndexEntry(
       draftInput = clientMeta.draftInput;
       draftUpdatedAt = clientMeta.draftUpdatedAt;
       hasBeenNamed = clientMeta.hasBeenNamed;
+      transcriptSyncDisabled = clientMeta.transcriptSyncDisabled === true || undefined;
     } catch {
       throw new IndexEntryDecryptionError(`Cannot decrypt client metadata for session ${entry.sessionId}`);
     }
   }
 
-  const decrypted: DecryptedSessionIndexEntry = {
+  const decrypted: DecryptedSessionIndexEntry & { transcriptSyncDisabled?: boolean } = {
     sessionId: entry.sessionId,
     projectId,
     title,
@@ -509,6 +423,7 @@ async function decryptSessionIndexEntry(
     hasPendingPrompt: hasPendingPrompt ?? entry.hasPendingPrompt,
     currentContext,
     lastReadAt: entry.lastReadAt,
+    transcriptSyncDisabled,
   };
 
   const cacheEntry: CachedSessionIndex = {
@@ -723,6 +638,19 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     config.getDeviceInfo?.() ?? config.deviceInfo;
   const localDeviceId = (): string | undefined => localDeviceInfo()?.deviceId;
 
+  /** The entry as this device publishes it now: the transcript-sync flag is decided at send time (NIM-7545). */
+  function withTranscriptSyncFlag(entry: CachedSessionIndex): CachedSessionIndex {
+    const transcriptSyncDisabled = resolveTranscriptSyncFlag({
+      isTranscriptSyncDisabled: config.isTranscriptSyncDisabled,
+      projectId: entry.projectId,
+      sessionId: entry.sessionId,
+      hostDeviceId: entry.hostDeviceId,
+      localDeviceId: localDeviceId(),
+      current: entry.transcriptSyncDisabled,
+    });
+    return transcriptSyncDisabled === entry.transcriptSyncDisabled ? entry : { ...entry, transcriptSyncDisabled };
+  }
+
   /**
    * The single place this provider constructs a socket. Hosts without a usable
    * global `WebSocket` (or that need one proxied) pass `config.createWebSocket`.
@@ -845,6 +773,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
   }
 
   const indexPublishQueue = createKeyedSerialQueue();
+  const liveContext = createLiveContextPublisher({
+    serialize: indexPublishQueue.run, getCached: (id) => sessionIndexCache.get(id), setCached: (id, entry) => { sessionIndexCache.set(id, entry); },
+    encryptionKey: () => config.encryptionKey, send: (frame) => !!indexWs && indexConnected && indexWs.readyState === WS_OPEN && (indexWs.send(frame), true),
+    fallback: async (id, currentContext) => (await provider.pushChange(id, { type: 'metadata_updated', metadata: { currentContext } })) ?? { published: true },
+  });
   /**
    * Guards the window between reading the cache and sending. The bulk
    * reconciliation path encrypts hundreds of entries outside the per-session
@@ -986,6 +919,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         console.error('[CollabV3] connectionGeneration listener threw:', err);
       }
     }
+    drainPendingMetadataUpdates();
   }
 
   function isMessageSyncDisabled(sessionId: string): boolean {
@@ -1055,11 +989,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * schedule a reconnect at all. Recovery happens only via an explicit
    * `reconnectIndex()` call (network change, user toggles sync, app focus).
    */
-  function scheduleIndexReconnect(options?: { preOpenFailure?: boolean }): void {
+  function scheduleIndexReconnect(options?: { preOpenFailure?: boolean; quiet?: boolean }): number | null {
     if (indexAuthBlocked) {
       // Don't keep hammering a connection the server will hard-reject. Wait for
       // an explicit reconnect trigger that resets indexAuthBlocked.
-      return;
+      return null;
     }
 
     const preOpenFailure = options?.preOpenFailure ?? false;
@@ -1078,7 +1012,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       delay = Math.min(2000 * Math.pow(2, indexReconnectAttempts), 30000);
       indexReconnectAttempts++;
     }
-    console.log(`[CollabV3] Scheduling index reconnect attempt ${indexReconnectAttempts}${preOpenFailure ? ` (pre-open #${indexPreOpenFailures})` : ''} in ${delay}ms`);
+    if (!options?.quiet) console.log(`[CollabV3] Scheduling index reconnect attempt ${indexReconnectAttempts}${preOpenFailure ? ` (pre-open #${indexPreOpenFailures})` : ''} in ${delay}ms`);
 
     if (indexReconnectTimer) clearTimeout(indexReconnectTimer);
     indexReconnectTimer = setTimeout(() => {
@@ -1101,6 +1035,16 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         });
       }
     }, delay);
+    return delay;
+  }
+
+  /** What happens after a session socket closes, for its close line. Sessions reconnect on demand, not on a timer. */
+  function sessionReconnectPlan(sessionId: string, reachedOpen: boolean): SocketCloseNext {
+    if (sessionWritesClosed) return { notReconnecting: 'sync was shut down' };
+    if (isMessageSyncDisabled(sessionId)) return { notReconnecting: 'message sync disabled after a server rejection' };
+    if (!reachedOpen) return { notReconnecting: 'never opened; the pending connect() rejects to its caller' };
+    if (!wantedSessions.has(sessionId)) return { notReconnecting: 'session no longer wanted' };
+    return { reconnect: 'on the next write or index reconnect' };
   }
 
   // Listeners for index changes (session updates broadcast to all connected clients)
@@ -1164,7 +1108,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     publish: doSyncSessionsToIndex,
     warn: error => console.warn('[CollabV3] Index publication retained for retry:', error),
   });
-  personalSyncWriteGate.onChange(() => { void pendingPublications.drain(); });
+  personalSyncWriteGate.onChange(() => { void pendingPublications.drain(); drainPendingMetadataUpdates(); });
 
   // Queue for partial metadata updates waiting for the session to be cached
   // Key: sessionId, Value: partial metadata to merge when session is cached
@@ -1187,10 +1131,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     if (!config.encryptionKey) {
       throw new Error('[CollabV3] Cannot send queued prompts: no encryption key available');
     }
-    indexEntry.encryptedQueuedPrompts = await encryptQueuedPrompts(queuedPrompts, config.encryptionKey);
+    indexEntry.encryptedQueuedPrompts = await encryptQueuedPrompts(queuedPrompts, config.encryptionKey, indexEntry.sessionId);
   }
 
-  async function sendIndexUpdate(baseEntry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
+  async function sendIndexUpdate(entry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
+    const baseEntry = withTranscriptSyncFlag(entry);
     if (!isRetainedSession(sessionActivityAt(baseEntry)) || wasIndexActivityRejected(baseEntry.sessionId, sessionActivityAt(baseEntry))) return { published: false, reason: 'session outside index retention', retryable: false };
     if (!indexWs || !config.encryptionKey) {
       console.error('[CollabV3] Cannot send session update: index socket or encryption key missing');
@@ -1233,7 +1178,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     };
 
     if (baseEntry.title) {
-      const { encryptedTitle, titleIv } = await encryptTitle(baseEntry.title, config.encryptionKey);
+      const { encryptedTitle, titleIv } = await encryptTitle(baseEntry.title, config.encryptionKey, baseEntry.sessionId);
       indexEntry.encryptedTitle = encryptedTitle;
       indexEntry.titleIv = titleIv;
     }
@@ -1244,9 +1189,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       baseEntry.queuedPromptCount,
     );
 
-    const clientMeta = buildClientMetadataFromCacheEntry(baseEntry);
+    const clientMeta = buildClientMetadataFromCacheEntry(liveContext.overlay(baseEntry));
     if (clientMeta) {
-      const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey);
+      const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey, baseEntry.sessionId);
       indexEntry.encryptedClientMetadata = encryptedClientMetadata;
       indexEntry.clientMetadataIv = clientMetadataIv;
     }
@@ -1272,7 +1217,8 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     return { published: true };
   }
 
-  async function sendIndexClientMetadataPatch(baseEntry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
+  async function sendIndexClientMetadataPatch(entry: CachedSessionIndex, options?: PushChangeOptions): Promise<PushChangeOutcome> {
+    const baseEntry = withTranscriptSyncFlag(entry);
     if (!isRetainedSession(sessionActivityAt(baseEntry)) || wasIndexActivityRejected(baseEntry.sessionId, sessionActivityAt(baseEntry))) return { published: false, reason: 'session outside index retention', retryable: false };
     if (!indexWs || !config.encryptionKey) {
       console.error('[CollabV3] Cannot send index metadata patch: index socket or encryption key missing');
@@ -1310,9 +1256,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       lastReadAt: publishedEntry.lastReadAt,
     };
 
-    const clientMeta = shouldSend ? buildClientMetadataFromCacheEntry(publishedEntry) : undefined;
+    const clientMeta = shouldSend ? buildClientMetadataFromCacheEntry(liveContext.overlay(publishedEntry)) : undefined;
     if (clientMeta) {
-      const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey);
+      const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey, baseEntry.sessionId);
       patch.encryptedClientMetadata = encryptedClientMetadata;
       patch.clientMetadataIv = clientMetadataIv;
     }
@@ -1348,15 +1294,15 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
    * Apply any pending metadata updates for a session that was just cached.
    * This handles the case where isExecuting is pushed before the session is in the cache.
    */
-  async function applyPendingMetadataUpdates(sessionId: string): Promise<void> {
+  async function applyPendingMetadataUpdates(sessionId: string): Promise<PushChangeOutcome | undefined> {
     const generation = indexConnectionGeneration;
-    await indexPublishQueue.run(sessionId, async () => {
-      if (generation !== indexConnectionGeneration) return;
+    return indexPublishQueue.run(sessionId, async () => {
+      if (generation !== indexConnectionGeneration) return undefined;
       const pending = pendingMetadataUpdates.get(sessionId);
-      if (!pending) return;
+      if (!pending) return undefined;
 
       const cached = sessionIndexCache.get(sessionId);
-      if (!cached || !indexWs || !indexConnected) return;
+      if (!cached || !indexWs || !indexConnected) return undefined;
 
       const updatedCache = mergeSessionIndexMetadata(cached, pending);
       // Pending control updates must not invent message activity.
@@ -1368,7 +1314,27 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       if (outcome.published && pendingMetadataUpdates.get(sessionId) === pending) {
         pendingMetadataUpdates.delete(sessionId);
       }
+      return outcome;
     });
+  }
+
+  function deferMetadataUpdate(sessionId: string, meta: Partial<SyncedSessionMetadata>): void {
+    const next = mergePendingMetadataUpdate(pendingMetadataUpdates.get(sessionId), meta);
+    if (next) pendingMetadataUpdates.set(sessionId, next);
+  }
+
+  /**
+   * Resend deferred updates for cached sessions once the index is usable. An
+   * update that still does not publish stays queued for the next reconnect or
+   * write-gate change; uncached sessions wait for their first bulk publish.
+   */
+  function drainPendingMetadataUpdates(): void {
+    for (const sessionId of [...pendingMetadataUpdates.keys()]) {
+      if (!sessionIndexCache.has(sessionId)) continue;
+      applyPendingMetadataUpdates(sessionId)
+        .then(outcome => warnIfUnpublished(message => console.warn(message), sessionId, '[CollabV3] Deferred metadata update still unpublished', outcome))
+        .catch(err => console.error('[CollabV3] Error applying pending metadata updates:', err));
+    }
   }
 
   // Pending fetch index request (resolves when index_sync_response is received)
@@ -1897,68 +1863,6 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     session.statusListeners.forEach((cb) => cb(session.status));
   }
 
-  async function encryptMessage(
-    message: AgentMessage,
-    key: CryptoKey
-  ): Promise<EncryptedMessage> {
-    // Trim large tool_result payloads before encryption so the SessionRoom
-    // doesn't store full Bash/Read/Grep output for every step. Local raw log
-    // keeps the unmodified content -- this only changes what crosses the wire.
-    const { content: truncatedContent } = truncateContentForSync(
-      message.content,
-      message.source,
-    );
-
-    // Include hidden flag in encrypted content so it syncs to mobile
-    const content = JSON.stringify({
-      content: truncatedContent,
-      metadata: message.metadata,
-      hidden: message.hidden ?? false,
-    });
-
-    const { encrypted, iv } = await encrypt(content, key);
-
-    // Use provider-assigned message ID if available (e.g., SDK uuid)
-    // This is the most reliable deduplication method as the provider guarantees uniqueness
-    // Fall back to hash-based ID for older messages or non-SDK providers
-    let syncId: string;
-    if (message.providerMessageId) {
-      syncId = message.providerMessageId;
-    } else {
-      // Generate a STABLE sync ID from message content + timestamp
-      // This prevents duplicate messages when the same message is synced multiple times
-      // We hash: sessionId + timestamp + first 100 chars of content + direction
-      const timestamp = message.createdAt instanceof Date
-        ? message.createdAt.getTime()
-        : typeof message.createdAt === 'number'
-          ? message.createdAt
-          : Date.now();
-      const contentPreview = message.content.substring(0, 100);
-      const hashInput = `${message.sessionId}:${timestamp}:${message.direction}:${contentPreview}`;
-
-      // Use SubtleCrypto to generate a stable hash
-      const encoder = new TextEncoder();
-      const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(hashInput));
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      syncId = hashArray.slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    return {
-      id: syncId,
-      sequence: 0, // Server assigns sequence
-      createdAt: message.createdAt instanceof Date
-        ? message.createdAt.getTime()
-        : typeof message.createdAt === 'number'
-          ? message.createdAt
-          : Date.now(),
-      source: message.source as EncryptedMessage['source'],
-      direction: message.direction as EncryptedMessage['direction'],
-      encryptedContent: encrypted,
-      iv,
-      metadata: {},
-    };
-  }
-
   async function decryptMessage(
     encrypted: EncryptedMessage,
     key: CryptoKey
@@ -2054,14 +1958,10 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
     // Decrypt and emit messages as remote changes
     if (session.encryptionKey && response.messages.length > 0) {
-      // Collapse per-message decrypt failures into one summary. A burst here
-      // means the server holds messages written under a PRIOR personal-key
-      // seed epoch (keychain reset / reinstall / an unpaired device): the seed
-      // is a local random 32 bytes (CredentialService) and the key is
-      // PBKDF2(seed, 'nimbalyst:'+personalUserId) -- a different seed/user can't
-      // authenticate them (AES-GCM OperationError). Unrecoverable without the
-      // old seed. Record sessionId + createdAt range so the affected session and
-      // epoch boundary are identifiable instead of 45 anonymous error lines.
+      // A row that fails to decrypt was written under a prior personal-key
+      // seed epoch (keychain reset / reinstall / an unpaired device), or was
+      // blanked by the server when chunked rows were retired (#1711). Neither
+      // can ever be read: skip it and keep paging. Report a bounded summary.
       let decryptFailures = 0;
       let oldestFailedAt: number | null = null;
       let newestFailedAt: number | null = null;
@@ -2087,7 +1987,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       if (decryptFailures > 0) {
         console.warn(
           `[CollabV3] ${decryptFailures}/${response.messages.length} messages undecryptable for session ${sessionId} ` +
-          `(prior personal-key seed epoch; unrecoverable). firstId=${firstFailedId} ` +
+          `(unrecoverable). firstId=${firstFailedId} ` +
           `createdAt=${oldestFailedAt ? new Date(oldestFailedAt).toISOString() : '?'}..${newestFailedAt ? new Date(newestFailedAt).toISOString() : '?'}`,
         );
       }
@@ -2267,9 +2167,12 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
      * backoff-worthy failure.
      */
     let reachedOpen = false;
+    let openedAt: number | undefined;
+    let lastError: string | undefined;
 
     indexWs.onopen = () => {
       reachedOpen = true;
+      openedAt = Date.now();
       indexConnected = true;
       indexReconnectAttempts = 0;
       indexPreOpenFailures = 0;
@@ -2323,30 +2226,25 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       clearIndexReady();
       stopDeviceAnnounceInterval();
 
-      // Server rejections (bad/expired JWT, policy violations) arrive as a
-      // close frame, not an error event. Log code/reason so auth failures
-      // aren't opaque next time. 1006 is a synthetic "abnormal closure"
-      // emitted by the WS client when the underlying socket dies; that's
-      // network/transport, not server policy.
-      console.log(
-        `[CollabV3] Disconnected from index (code=${event?.code ?? 'unknown'}, reason="${event?.reason ?? ''}", wasClean=${event?.wasClean ?? 'unknown'}, reachedOpen=${reachedOpen})`,
-      );
       // Pre-open failure: the network likely isn't actually up yet. Keep
       // reconnect attempts fast by not letting the failure bump the backoff
       // exponent. If we're in a flaky post-wake window we want to keep probing
       // quickly instead of slipping to the 30s cap.
-      scheduleIndexReconnect({ preOpenFailure: !reachedOpen });
+      const delay = scheduleIndexReconnect({ preOpenFailure: !reachedOpen, quiet: true });
+      // Server rejections (bad/expired JWT, policy violations) arrive as a
+      // close frame, not an error event. 1006 is a synthetic "abnormal
+      // closure" emitted by the WS client when the underlying socket dies;
+      // that's network/transport, not server policy.
+      console.log(describeSocketClose('Disconnected from index', {
+        code: event?.code, reason: event?.reason, wasClean: event?.wasClean, openedAt, closedAt: Date.now(), error: lastError,
+        next: delay === null ? { notReconnecting: 'JWT/personal-member mismatch; waiting for an explicit reconnect' } : { reconnectInMs: delay },
+      }));
     };
 
     indexWs.onerror = (event) => {
-      // WS `onerror` carries almost no info -- the actionable signal (close
-      // code / reason) arrives on `onclose`, which always fires after error.
-      // Log a stable summary here and let `onclose` add the close-frame
-      // details so we never get the previous "[object Object]" placeholder.
-      const errorInfo = typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent
-        ? { message: event.message, error: event.error }
-        : { type: event.type };
-      console.error('[CollabV3] Index WebSocket error:', errorInfo, 'URL:', redactSyncUrl(wsUrl));
+      // `onclose` always follows and logs the close in one line; keep only
+      // whatever message the error carried for it.
+      lastError = socketErrorMessage(event) ?? lastError;
     };
 
     indexWs.onmessage = async (event) => {
@@ -2942,6 +2840,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     sessionsData: SessionIndexData[],
     messageSyncRequests?: Array<{ sessionId: string; sinceTimestamp: number }>,
     getMessagesForSync?: (requests: Array<{ sessionId: string; sinceTimestamp: number }>) => Promise<Map<string, any[]>>,
+    onTranscriptSynced: (sessionId: string, outcome: PushChangeOutcome) => void = () => {},
   ): Promise<void> {
     const batchSize = 3;
     const delayMs = 1000;
@@ -2951,28 +2850,44 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       const requestMap = new Map(messageSyncRequests.map(r => [r.sessionId, r]));
       const sessionMap = new Map(sessionsData.map(s => [s.id, s]));
       const sessionIds = messageSyncRequests.map(r => r.sessionId).filter(id => sessionMap.has(id));
-
-      // console.log('[CollabV3] Lazy batch syncing messages for', sessionIds.length, 'sessions in batches of', batchSize);
+      // A requested session dropped from the batch (outside retention, not eligible) can never be delivered here.
+      for (const request of messageSyncRequests) {
+        if (!sessionMap.has(request.sessionId)) onTranscriptSynced(request.sessionId, { published: false, reason: 'not in the publish batch', retryable: false });
+      }
 
       for (let i = 0; i < sessionIds.length; i += batchSize) {
-        const batchIds = sessionIds.slice(i, i + batchSize).filter(id => isRetainedSession(sessionMap.get(id)?.updatedAt, Date.now(), SESSION_TRANSCRIPT_TTL_MS));
+        const batchIds: string[] = [];
+        for (const id of sessionIds.slice(i, i + batchSize)) {
+          if (isRetainedSession(sessionMap.get(id)?.updatedAt, Date.now(), SESSION_TRANSCRIPT_TTL_MS)) batchIds.push(id);
+          else onTranscriptSynced(id, { published: false, reason: 'session is outside transcript retention', retryable: false });
+        }
         if (!batchIds.length) continue;
         const batchRequests = batchIds.map(id => requestMap.get(id)!);
 
-        // Load messages for just this batch
-        const messagesBySession = await getMessagesForSync(batchRequests);
+        // Load messages for just this batch. A failed load fails only this
+        // batch; its sessions report a retryable outcome and the rest go on.
+        let messagesBySession: Map<string, any[]>;
+        try {
+          messagesBySession = await getMessagesForSync(batchRequests);
+        } catch (err) {
+          console.warn('[CollabV3] Failed to load transcript batch for sync:', err instanceof Error ? err.message : err);
+          for (const id of batchIds) onTranscriptSynced(id, { published: false, reason: 'transcript load failed', retryable: true });
+          continue;
+        }
 
         // Sync each session's messages
-        await Promise.all(batchIds.map(sessionId => {
+        await Promise.all(batchIds.map(async sessionId => {
           const msgs = messagesBySession.get(sessionId);
           const session = sessionMap.get(sessionId);
-          if (!msgs || msgs.length === 0 || !session) return Promise.resolve();
-          return syncSessionMessages(sessionId, msgs, {
+          // Nothing stored locally past the requested point: nothing to deliver.
+          if (!msgs || msgs.length === 0 || !session) return onTranscriptSynced(sessionId, { published: true });
+          const outcome = await syncSessionMessages(sessionId, msgs, {
             title: session.title,
             provider: session.provider,
             model: session.model,
             mode: session.mode,
-          });
+          }).catch((err): PushChangeOutcome => ({ published: false, reason: err instanceof Error ? err.message : String(err), retryable: true }));
+          onTranscriptSynced(sessionId, outcome);
         }));
 
         // Delay before next batch
@@ -3011,6 +2926,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     syncMessages?: boolean;
     messageSyncRequests?: Array<{ sessionId: string; sinceTimestamp: number }>;
     getMessagesForSync?: (requests: Array<{ sessionId: string; sinceTimestamp: number }>) => Promise<Map<string, any[]>>;
+    onTranscriptSynced?: (sessionId: string, outcome: PushChangeOutcome) => void;
   }): Promise<IndexPublishOutcome> {
     if (!indexWs || !indexConnected) {
       console.error('[CollabV3] doSyncSessionsToIndex called but not connected!');
@@ -3115,40 +3031,31 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
       // Encrypt title - encryption is required
       if (session.title) {
-        const { encryptedTitle, titleIv } = await encryptTitle(session.title, config.encryptionKey);
+        const { encryptedTitle, titleIv } = await encryptTitle(session.title, config.encryptionKey, session.id);
         entry.encryptedTitle = encryptedTitle;
         entry.titleIv = titleIv;
       }
 
       await attachQueuedPromptsToIndexEntry(entry, cachedQueuedPrompts, cachedQueuedPromptCount);
 
-      // Encrypt client metadata (context usage, pending prompt state, etc.)
-      const rawClientMeta = buildClientMetadataFromRaw(session.metadata, {
-        hasBeenNamed: session.hasBeenNamed,
+      // Encrypt client metadata (context usage, pending prompt state, etc.),
+      // with transient fields not reliably persisted before sync runs merged in.
+      const transcriptSyncDisabled = resolveTranscriptSyncFlag({
+        isTranscriptSyncDisabled: config.isTranscriptSyncDisabled,
+        projectId,
+        sessionId: session.id,
+        hostDeviceId: entry.hostDeviceId,
+        localDeviceId: localDeviceId(),
+        current: existingCache?.transcriptSyncDisabled,
       });
-      // Merge in transient fields that are not reliably persisted in PGLite before sync runs.
-      const clientMeta: ClientMetadata | undefined =
-        rawClientMeta ||
-        cachedHasPendingPrompt !== undefined ||
-        pending?.currentContext !== undefined ||
-        pending?.phase !== undefined ||
-        pending?.tags !== undefined ||
-        pending?.draftInput !== undefined ||
-        pending?.draftUpdatedAt !== undefined ||
-        pending?.hasBeenNamed !== undefined
-          ? {
-              ...rawClientMeta,
-              currentContext: pending?.currentContext ?? rawClientMeta?.currentContext,
-              hasPendingPrompt: cachedHasPendingPrompt,
-              phase: pending?.phase ?? rawClientMeta?.phase,
-              tags: pending?.tags ?? rawClientMeta?.tags,
-              draftInput: pending?.draftInput ?? rawClientMeta?.draftInput,
-              draftUpdatedAt: pending?.draftUpdatedAt ?? rawClientMeta?.draftUpdatedAt,
-              hasBeenNamed: pending?.hasBeenNamed ?? rawClientMeta?.hasBeenNamed,
-            }
-          : undefined;
+      const clientMeta = mergeBulkClientMetadata(
+        buildClientMetadataFromRaw(session.metadata, { hasBeenNamed: session.hasBeenNamed }),
+        pending,
+        cachedHasPendingPrompt,
+        transcriptSyncDisabled,
+      );
       if (clientMeta) {
-        const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey);
+        const { encryptedClientMetadata, clientMetadataIv } = await encryptClientMetadata(clientMeta, config.encryptionKey, session.id);
         entry.encryptedClientMetadata = encryptedClientMetadata;
         entry.clientMetadataIv = clientMetadataIv;
       }
@@ -3193,6 +3100,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         draftInput: clientMeta?.draftInput,
         draftUpdatedAt: clientMeta?.draftUpdatedAt,
         hasBeenNamed: clientMeta?.hasBeenNamed,
+        transcriptSyncDisabled,
       };
       built.push({
         sessionId: session.id,
@@ -3231,9 +3139,10 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       });
     }
 
-    // Sync messages if requested (fire-and-forget, catch errors to avoid unhandled rejections)
+    // Sync messages if requested. Runs in the background; each session's result
+    // reaches the caller through `onTranscriptSynced`.
     if (options?.syncMessages === true) {
-      doBatchSyncSessionMessages(sessionsData, options.messageSyncRequests, options.getMessagesForSync)
+      doBatchSyncSessionMessages(sessionsData, options.messageSyncRequests, options.getMessagesForSync, options.onTranscriptSynced)
         .catch(err => console.warn('[CollabV3] Batch message sync failed:', err?.message || err));
     }
 
@@ -3308,6 +3217,9 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           //   source: encrypted.source,
           //   direction: encrypted.direction,
           // });
+          if (generation !== indexConnectionGeneration || sessions.get(sessionId) !== session) {
+            return { published: false, reason: 'transcript write superseded', retryable: true };
+          }
           clientMessage = { type: 'appendMessage', message: encrypted };
         } catch (err) {
           console.error('[CollabV3] Failed to encrypt message:', err);
@@ -3322,7 +3234,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
         // Encrypt title
         if (change.metadata.title && config.encryptionKey) {
-          const { encryptedTitle, titleIv } = await encryptTitle(change.metadata.title, config.encryptionKey);
+          const { encryptedTitle, titleIv } = await encryptTitle(change.metadata.title, config.encryptionKey, `session:${sessionId}`);
           metadata.encryptedTitle = encryptedTitle;
           metadata.titleIv = titleIv;
         }
@@ -3342,41 +3254,21 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
             if (!config.encryptionKey) {
               throw new Error('[CollabV3] Cannot send queued prompts: no encryption key available');
             }
-            metadata.encryptedQueuedPrompts = await encryptQueuedPrompts(change.metadata.queuedPrompts, config.encryptionKey);
+            metadata.encryptedQueuedPrompts = await encryptQueuedPrompts(change.metadata.queuedPrompts, config.encryptionKey, `session:${sessionId}`);
           } else {
             metadata.encryptedQueuedPrompts = [];
           }
         }
         // Encrypt client metadata (context usage, pending prompt state, phase, tags, draft, etc.)
-        if ('draftInput' in change.metadata) {
-          // console.log('[CollabV3] metadata_updated has draftInput:', (change.metadata as any).draftInput?.substring(0, 50));
-        }
-        const hasClientMetaFields = ('currentContext' in change.metadata && change.metadata.currentContext) ||
-          ('hasPendingPrompt' in change.metadata) ||
-          ('phase' in change.metadata) ||
-          ('tags' in change.metadata) ||
-          ('draftInput' in change.metadata) ||
-          ('hasBeenNamed' in change.metadata);
-        if (hasClientMetaFields && config.encryptionKey) {
+        if (changeCarriesClientMetadata(change.metadata) && config.encryptionKey) {
           const cached = sessionIndexCache.get(sessionId);
-          const clientMeta: ClientMetadata = {
-            currentContext: ('currentContext' in change.metadata ? change.metadata.currentContext : cached?.currentContext) || undefined,
-            hasPendingPrompt: 'hasPendingPrompt' in change.metadata ? change.metadata.hasPendingPrompt : cached?.hasPendingPrompt,
-            phase: 'phase' in change.metadata ? (change.metadata as any).phase : cached?.phase,
-            tags: 'tags' in change.metadata ? (change.metadata as any).tags : cached?.tags,
-            draftInput: 'draftInput' in change.metadata ? (change.metadata as any).draftInput : cached?.draftInput,
-            draftUpdatedAt: 'draftUpdatedAt' in change.metadata ? (change.metadata as any).draftUpdatedAt : cached?.draftUpdatedAt,
-            hasBeenNamed: 'hasBeenNamed' in change.metadata ? (change.metadata as any).hasBeenNamed : cached?.hasBeenNamed,
-          };
-          if (clientMeta.draftInput !== undefined) {
-            // console.log('[CollabV3] Encrypting clientMeta with draftInput, sending to index');
-          }
-          const encrypted = await encryptClientMetadata(clientMeta, config.encryptionKey);
+          const clientMeta = buildSessionRoomClientMetadata(change.metadata, cached && withTranscriptSyncFlag(cached));
+          const encrypted = await encryptClientMetadata(clientMeta, config.encryptionKey, `session:${sessionId}`);
           metadata.encryptedClientMetadata = encrypted.encryptedClientMetadata;
           metadata.clientMetadataIv = encrypted.clientMetadataIv;
         }
-        // Only send to session room if connected; index-only updates skip this
-        if (sessionConnected) {
+        // Session room only when connected and a stored field changed: the per-message updatedAt push is index-only.
+        if (sessionConnected && Object.values(metadata).some(value => value !== undefined)) {
           clientMessage = { type: 'updateMetadata', metadata };
         }
         break;
@@ -3438,6 +3330,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         // Delete from index and cache
         sessionIndexCache.delete(sessionId);
         sessionQueueReconciler.delete(sessionId);
+        pendingMetadataUpdates.delete(sessionId);
         // A delete/recreate is not an ordinary metadata merge -- the recreated
         // row must publish in full, never be suppressed against the deleted
         // row's projection.
@@ -3524,52 +3417,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           // Queue the partial update to be applied when the session is cached.
           // This handles cases like isExecuting being set before syncSessionsToIndex runs,
           // or title updates from session naming that arrive before the session is indexed.
-          const hasPartialUpdate =
-            'isExecuting' in meta ||
-            'pendingExecution' in meta ||
-            meta.title !== undefined ||
-            'sessionType' in meta ||
-            'parentSessionId' in meta ||
-            'worktreeId' in meta ||
-            'hostDeviceId' in meta ||
-            'isArchived' in meta ||
-            'isPinned' in meta ||
-            'queuedPrompts' in meta ||
-            'currentContext' in meta ||
-            'hasPendingPrompt' in meta ||
-            'phase' in meta ||
-            'tags' in meta ||
-            'lastReadAt' in meta ||
-            'draftInput' in meta ||
-            'draftUpdatedAt' in meta ||
-            'hasBeenNamed' in meta ||
-            'updatedAt' in meta;
-          if (hasPartialUpdate) {
-            // console.log('[CollabV3] Queueing partial metadata update for session:', sessionId, { isExecuting: meta.isExecuting, pendingExecution: meta.pendingExecution, title: meta.title });
-            const existing = pendingMetadataUpdates.get(sessionId) || {};
-            if ('isExecuting' in meta) existing.isExecuting = meta.isExecuting;
-            if ('pendingExecution' in meta) existing.pendingExecution = meta.pendingExecution;
-            if (meta.title !== undefined) existing.title = meta.title;
-            if ('sessionType' in meta) existing.sessionType = meta.sessionType;
-            if ('parentSessionId' in meta) existing.parentSessionId = meta.parentSessionId;
-            if ('worktreeId' in meta) existing.worktreeId = (meta as any).worktreeId;
-            if ('hostDeviceId' in meta) existing.hostDeviceId = meta.hostDeviceId;
-            if ('isArchived' in meta) existing.isArchived = meta.isArchived;
-            if ('isPinned' in meta) existing.isPinned = (meta as any).isPinned;
-            if ('queuedPrompts' in meta) existing.queuedPrompts = meta.queuedPrompts;
-            if ('currentContext' in meta) existing.currentContext = meta.currentContext;
-            if ('hasPendingPrompt' in meta) existing.hasPendingPrompt = meta.hasPendingPrompt;
-            if ('phase' in meta) (existing as any).phase = (meta as any).phase;
-            if ('tags' in meta) (existing as any).tags = (meta as any).tags;
-            if ('lastReadAt' in meta) (existing as any).lastReadAt = (meta as any).lastReadAt;
-            if ('draftInput' in meta) (existing as any).draftInput = (meta as any).draftInput;
-            if ('draftUpdatedAt' in meta) (existing as any).draftUpdatedAt = (meta as any).draftUpdatedAt;
-            if ('hasBeenNamed' in meta) (existing as any).hasBeenNamed = (meta as any).hasBeenNamed;
-            if ('updatedAt' in meta) existing.updatedAt = meta.updatedAt;
-            pendingMetadataUpdates.set(sessionId, existing);
-          } else {
-            // console.log('[CollabV3] Skipping index update - no cached data and missing required fields for session:', sessionId);
-          }
+          deferMetadataUpdate(sessionId, meta);
         }
       }
     }
@@ -3581,6 +3429,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
   }
 
   const provider: SyncProvider = {
+    publishLiveContext: liveContext.publish,
     async connect(sessionId: string): Promise<void> {
       const pending = sessionConnectionsInFlight.get(sessionId);
       if (pending) return pending;
@@ -3675,8 +3524,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           if (sessions.get(sessionId) === session) sessions.delete(sessionId);
         }, 10000);
 
+        let openedAt: number | undefined;
+        let lastError: string | undefined;
         ws.onopen = () => {
           clearTimeout(timeout);
+          openedAt = Date.now();
           updateStatus(sessionId, { connected: true, syncing: true });
 
           // Request initial sync
@@ -3691,11 +3543,11 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
           reject(new Error('Session connection closed before opening'));
           if (sessions.get(sessionId) !== session) return;
           // Auth rejections (expired/invalid JWT) arrive here as a close
-          // frame, not as an error event. Logging code/reason makes the
-          // root cause visible the next time something goes wrong.
-          console.log(
-            `[CollabV3] Session WebSocket closed for ${sessionId} (code=${event?.code ?? 'unknown'}, reason="${event?.reason ?? ''}", wasClean=${event?.wasClean ?? 'unknown'})`,
-          );
+          // frame, not as an error event, so this one line carries both.
+          console.log(describeSocketClose(`Session WebSocket closed for ${sessionId}`, {
+            code: event?.code, reason: event?.reason, wasClean: event?.wasClean, openedAt, closedAt: Date.now(), error: lastError,
+            next: sessionReconnectPlan(sessionId, openedAt !== undefined),
+          }));
           updateStatus(sessionId, { connected: false });
           sessions.delete(sessionId);
           if (!session.statusListeners.size) sessionStatusListeners.delete(sessionId);
@@ -3703,12 +3555,8 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
         };
 
         ws.onerror = (event) => {
-          // onerror itself carries little -- the close frame that follows has
-          // the actionable code/reason. Keep this log as a breadcrumb only.
-          const errorInfo = typeof ErrorEvent !== 'undefined' && event instanceof ErrorEvent
-            ? { message: event.message, error: event.error }
-            : { type: event.type, target: redactSyncUrl((event.target as WebSocket)?.url) };
-          console.error(`[CollabV3] WebSocket error for ${sessionId}:`, errorInfo, 'URL:', redactSyncUrl(wsUrl));
+          // The close that always follows logs it in one line; keep only the message.
+          lastError = socketErrorMessage(event) ?? lastError;
           updateStatus(sessionId, { connected: false, error: 'Connection error' });
         };
 
@@ -3824,6 +3672,17 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
     async pushChange(sessionId: string, change: SessionChange, options?: PushChangeOptions): Promise<PushChangeOutcome> {
       const generation = indexConnectionGeneration;
       const publish = async (): Promise<PushChangeOutcome> => {
+        const outcome = await publishOnce();
+        // Keep a metadata change that did not reach the index and resend it
+        // once the index is usable again (NIM-7546): an `isExecuting: false`
+        // dropped during an index drop pinned the phone's spinner for hours.
+        // Hierarchy publications (`isCurrent`) own a guarded retry instead.
+        if (change.type === 'metadata_updated' && !options?.isCurrent && !outcome.published && outcome.retryable !== false) {
+          deferMetadataUpdate(sessionId, change.metadata);
+        }
+        return outcome;
+      };
+      const publishOnce = async (): Promise<PushChangeOutcome> => {
         if (options?.isCurrent && !options.isCurrent()) return { published: false, reason: 'superseded hierarchy publication', retryable: false };
         if (generation !== indexConnectionGeneration) {
           return { published: false, reason: 'index connection changed before publication', retryable: true };
@@ -3874,6 +3733,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
       syncMessages?: boolean;
       messageSyncRequests?: Array<{ sessionId: string; sinceTimestamp: number }>;
       getMessagesForSync?: (requests: Array<{ sessionId: string; sinceTimestamp: number }>) => Promise<Map<string, any[]>>;
+      onTranscriptSynced?: (sessionId: string, outcome: PushChangeOutcome) => void;
     }): Promise<IndexPublishOutcome> {
       const syncableSessions = filterSessionsForPersonalSync(sessionsData);
       if (syncableSessions.length === 0) {
@@ -3948,7 +3808,7 @@ export function createCollabV3Sync(config: SyncConfig): SyncProvider {
 
       if (hasPublishableConfig(projectConfig)) {
         const configJson = JSON.stringify(projectConfig);
-        const { encrypted: encryptedConfig, iv: configIv } = await encrypt(configJson, config.encryptionKey);
+        const { encrypted: encryptedConfig, iv: configIv } = await encryptStable(`projectConfig:${projectId}`, configJson, config.encryptionKey);
         message.encryptedConfig = encryptedConfig;
         message.configIv = configIv;
       }

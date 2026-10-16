@@ -172,4 +172,60 @@ final class NavigationContinuityTests: XCTestCase {
         otherProject.tap()
         XCTAssertTrue(app.navigationBars["api-server"].waitForExistence(timeout: 5))
     }
+
+    /// The project chooser is swapped into the sidebar rather than pushed, so the
+    /// system back swipe does not apply; the session list provides its own.
+    @MainActor
+    func testEdgeSwipeReturnsFromSessionsToProjects() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--screenshot-mode", "--screenshot-screen=navigation", "-hasPromptedForNotifications", "YES"]
+        app.launch()
+        defer { app.terminate() }
+        let project = app.staticTexts["nimbalyst"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.tap()
+        XCTAssertTrue(app.buttons["Choose Project"].waitForExistence(timeout: 10))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)))
+        XCTAssertTrue(app.staticTexts["api-server"].firstMatch.waitForExistence(timeout: 5), "Swiping from the leading edge must return to the project chooser")
+    }
+
+    /// Team Wiki for a mapped project opens Pages; an unreachable console shows
+    /// the native error with Retry, and Back returns to the Team tab.
+    /// `--console-pages-fixture` maps every project to a fixture team and points
+    /// the console at an unreachable origin. Set
+    /// `TEST_RUNNER_NIMBALYST_UI_SCREENSHOT_DIR` to keep screenshots.
+    @MainActor
+    func testTeamWikiOpensPagesWithNativeErrorState() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--screenshot-mode", "--screenshot-screen=sessions", "--console-pages-fixture", "-hasPromptedForNotifications", "YES"]
+        app.launch()
+        defer { app.terminate() }
+        let screenshots = ProcessInfo.processInfo.environment["NIMBALYST_UI_SCREENSHOT_DIR"]
+        func capture(_ name: String) throws {
+            guard let screenshots else { return }
+            try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: screenshots).appendingPathComponent("\(name).png"))
+        }
+
+        let teamTab = app.buttons["Team"]
+        XCTAssertTrue(teamTab.waitForExistence(timeout: 10), app.debugDescription)
+        teamTab.tap()
+        let teamWiki = app.staticTexts["Team Wiki"].firstMatch
+        XCTAssertTrue(teamWiki.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Team Trackers"].firstMatch.exists)
+        try capture("team-tab")
+
+        teamWiki.tap()
+        let failure = app.descendants(matching: .any)["pages-failure"].firstMatch
+        XCTAssertTrue(failure.waitForExistence(timeout: 20), app.debugDescription)
+        try capture("pages-error")
+        XCTAssertTrue(app.buttons["Retry"].exists, app.debugDescription)
+
+        app.buttons["pages-back"].tap()
+        XCTAssertTrue(teamWiki.waitForExistence(timeout: 5), "Back must return to the Team tab")
+    }
 }

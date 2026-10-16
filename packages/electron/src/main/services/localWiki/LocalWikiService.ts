@@ -28,6 +28,7 @@ import {
   type LocalWikiCommandResult,
   type LocalWikiSnapshot,
   type ReadBodyResult,
+  type WikiIssue,
   type WriteBodyResult,
 } from '@nimbalyst/local-wiki';
 import type { PageSearchHit, PageSearchRequest, PageSearchResponse } from '@nimbalyst/collab-protocol';
@@ -38,6 +39,7 @@ import { logLegacyPersonalPagesHeartbeat, registerPersonalPagesExportIpc } from 
 import { forgetLocalWikiItemIds, rememberLocalWikiItemIds } from './localWikiItemIds';
 import { ensureWikiTypeStorage, readTypeStorage } from './localWikiTypeStorage';
 import { isTypePageProse } from './personalPagesExport';
+import { getTrackerSchemaLoadFailures, onTrackerSchemaLoadFailuresChanged } from '../tracker/trackerSchemaLoadFailures';
 
 export const LOCAL_WIKI_CHANGED_CHANNEL = 'local-wiki:changed';
 
@@ -93,6 +95,17 @@ function isDirectory(target: string): boolean {
   }
 }
 
+/** The deepest folder that exists on the way from `top` down to `target`. */
+function nearestExistingDir(target: string, top: string): string {
+  let dir = target;
+  while (dir !== top && !isDirectory(dir)) {
+    const parent = path.dirname(dir);
+    if (parent === dir) return top;
+    dir = parent;
+  }
+  return dir;
+}
+
 /**
  * A type page's description (`type-page:<typeId>`) lives in the database
  * Personal pages store, not in the wiki. Before that routing was fixed, giving
@@ -117,6 +130,23 @@ function withoutTypePageProse(snapshot: LocalWikiSnapshot, root: string): LocalW
     items: snapshot.items.filter((item) => !isTypePageProse(item.documentId)),
     pages: snapshot.pages.filter((page) => !isTypePageProse(page.id)),
   };
+}
+
+/**
+ * Type files the app could not load, as `malformed-type` issues carrying the
+ * type id, so the Local section shows the type as broken instead of dropping
+ * its table and typed pages (NIM-7437). The library reports a file that is not
+ * YAML at all, without an id; the app's report of the same file replaces it.
+ */
+function withSchemaLoadFailures<T extends LocalWikiSnapshot>(snapshot: T, workspacePath: string): T {
+  const failures = getTrackerSchemaLoadFailures(workspacePath);
+  if (failures.length === 0) return snapshot;
+  const failedPaths = new Set(failures.map((failure) => failure.filePath));
+  const issues: WikiIssue[] = [
+    ...failures.map((failure): WikiIssue => ({ code: 'malformed-type', path: failure.filePath, message: failure.message, id: failure.typeId })),
+    ...snapshot.issues.filter((issue) => !(issue.code === 'malformed-type' && failedPaths.has(issue.path))),
+  ];
+  return { ...snapshot, issues };
 }
 
 export function emptyLocalWikiSnapshot(location: LocalWikiLocation): LocalWikiSnapshotPayload {
@@ -155,6 +185,8 @@ export function toPageSearchHit(hit: LocalSearchHit, query: string): PageSearchH
 
 export class LocalWikiService {
   private readonly entries = new Map<string, Entry>();
+  /** Workspaces read before their wiki existed, watched until it appears (see `watchForWiki`). */
+  private readonly pending = new Map<string, () => void>();
   private readonly resolveLocation: (workspacePath: string) => LocalWikiLocation;
   private readonly broadcast: (workspacePath: string) => void;
   private readonly watchFiles: boolean;
@@ -236,6 +268,67 @@ export class LocalWikiService {
     }
   }
 
+  /**
+   * The library's watcher only runs once a wiki is open, so a wiki another
+   * process creates (`nim wiki init`, the wiki plugin) after an empty read was
+   * never announced (NIM-7510). Until the marker appears or `local-wiki.json`
+   * names another folder, watch the project root, `.nimbalyst`, and the
+   * deepest existing folder on the way to the wiki; then announce once.
+   */
+  private watchForWiki(workspacePath: string, initial: LocalWikiLocation): void {
+    if (!this.watchFiles || this.pending.has(workspacePath)) return;
+    const watchers = new Map<string, fs.FSWatcher>();
+    const stop = () => {
+      for (const watcher of watchers.values()) watcher.close();
+      watchers.clear();
+      this.pending.delete(workspacePath);
+    };
+    const check = () => {
+      let root: string | null = null;
+      try {
+        root = this.resolveLocation(workspacePath).root;
+      } catch {
+        // A config the app refuses: announce, so the next read reports it.
+      }
+      if (root === initial.root && !fs.existsSync(path.join(initial.root, MARKER_FILE))) {
+        arm();
+        return;
+      }
+      logger.main.info('[LocalWikiService] Local wiki appeared outside the app', { workspacePath, root });
+      stop();
+      this.broadcast(workspacePath);
+    };
+    const arm = () => {
+      const configDir = path.join(initial.projectRoot, '.nimbalyst');
+      const wanted = new Set([initial.projectRoot, nearestExistingDir(initial.root, initial.projectRoot)]);
+      if (isDirectory(configDir)) wanted.add(configDir);
+      for (const [dir, watcher] of watchers) {
+        if (!wanted.has(dir)) {
+          watcher.close();
+          watchers.delete(dir);
+        }
+      }
+      for (const dir of wanted) {
+        if (watchers.has(dir)) continue;
+        try {
+          const watcher = fs.watch(dir, { persistent: false }, check);
+          watcher.on('error', (error) => {
+            logger.main.warn('[LocalWikiService] Stopped watching for the local wiki folder', { dir, error });
+            watcher.close();
+            watchers.delete(dir);
+          });
+          watchers.set(dir, watcher);
+        } catch (error) {
+          logger.main.warn('[LocalWikiService] Could not watch for the local wiki folder', { dir, error });
+        }
+      }
+    };
+    this.pending.set(workspacePath, stop);
+    arm();
+    // The wiki may have appeared between the read and the first watcher.
+    check();
+  }
+
   private notify(entry: Entry): void {
     for (const ws of entry.workspaces) this.broadcast(ws);
   }
@@ -279,10 +372,16 @@ export class LocalWikiService {
     const ws = requireWorkspace(workspacePath);
     const location = this.resolveLocation(ws);
     const wiki = await this.wikiFor(ws);
-    if (!wiki) return emptyLocalWikiSnapshot(location);
+    if (!wiki) {
+      this.watchForWiki(ws, location);
+      return withSchemaLoadFailures(emptyLocalWikiSnapshot(location), ws);
+    }
     const snapshot = await wiki.snapshot();
     await this.rememberItemIds(wiki, snapshot);
-    return { ...withoutTypePageProse(snapshot, wiki.root), root: wiki.root, location: location.location, exists: true };
+    return withSchemaLoadFailures(
+      { ...withoutTypePageProse(snapshot, wiki.root), root: wiki.root, location: location.location, exists: true },
+      ws,
+    );
   }
 
   async command(workspacePath: string, command: LocalWikiCommand): Promise<LocalWikiCommandResult> {
@@ -373,8 +472,27 @@ export class LocalWikiService {
     return page?.path ? path.join(wiki.root, ...page.path.split('/')) : null;
   }
 
+  /**
+   * Stores a file dropped into the page whose markdown file is `pageFilePath`
+   * as an attachment beside it (`@nimbalyst/local-wiki` storeAttachment).
+   * Returns the link to write in the page.
+   */
+  async storeAttachment(workspacePath: string, pageFilePath: string, fileName: string, bytes: Uint8Array): Promise<{ link: string }> {
+    const ws = requireWorkspace(workspacePath);
+    requireId(pageFilePath, 'pageFilePath');
+    requireId(fileName, 'fileName');
+    if (!(bytes instanceof Uint8Array)) throw new Error('bytes must be a Uint8Array');
+    const wiki = await this.requireWiki(ws);
+    const page = (await wiki.snapshot()).pages.find((candidate) =>
+      candidate.path && candidate.trashedAt === null && path.join(wiki.root, ...candidate.path.split('/')) === pageFilePath);
+    if (!page) throw new Error(`${pageFilePath} is not a page of the local wiki`);
+    const { link } = await wiki.storeAttachment(page.id, fileName, bytes);
+    return { link };
+  }
+
   dispose(): void {
     this.disposed = true;
+    for (const stop of [...this.pending.values()]) stop();
     for (const entry of this.entries.values()) {
       entry.unwatch?.();
       entry.wiki?.close();
@@ -408,8 +526,14 @@ export function initLocalWikiService(): void {
     instance.trackerCommand(workspacePath, typeId, command));
   safeHandle('local-wiki:search', async (_event, workspacePath: string, request: PageSearchRequest) =>
     instance.search(workspacePath, request ?? { query: '' }));
-  safeHandle('local-wiki:set-editor-types', async (_event, table: Record<string, string>) => instance.setEditorTypes(table));
+  safeHandle(
+    'local-wiki:store-attachment',
+    async (_event, workspacePath: string, pageFilePath: string, fileName: string, bytes: Uint8Array) =>
+      instance.storeAttachment(workspacePath, pageFilePath, fileName, bytes),
+  );
+  safeHandle('local-wiki:set-editor-types',async (_event, table: Record<string, string>) => instance.setEditorTypes(table));
   registerPersonalPagesExportIpc(instance);
+  onTrackerSchemaLoadFailuresChanged((workspacePath) => instance.announceChange(workspacePath));
   void logLegacyPersonalPagesHeartbeat();
 }
 

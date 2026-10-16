@@ -1,3 +1,4 @@
+import type { LiveSessionContext } from '@nimbalyst/collab-protocol';
 /**
  * CollabV3 wire types.
  *
@@ -307,6 +308,7 @@ export type ClientMessage =
   | { type: 'voiceToolRequest'; request: EncryptedVoiceToolRequest }
   | { type: 'voiceToolResponse'; response: EncryptedVoiceToolResponse }
   | { type: 'sessionControl'; message: { sessionId: string; messageType: string; payload?: Record<string, unknown>; timestamp: number; sentBy: 'desktop' | 'mobile'; sentByDeviceId?: string; targetDeviceId?: string } }
+  | { type: 'sessionContextUpdate'; update: LiveSessionContext }
   | {
       type: 'requestMobilePush';
       sessionId: string;
@@ -442,6 +444,7 @@ export type ServerMessage =
   | { type: 'voiceToolRequestBroadcast'; request: EncryptedVoiceToolRequest; fromConnectionId?: string }
   | { type: 'voiceToolResponseBroadcast'; response: EncryptedVoiceToolResponse; fromConnectionId?: string }
   | { type: 'sessionControlBroadcast'; message: { sessionId: string; messageType: string; payload?: Record<string, unknown>; timestamp: number; sentBy: 'desktop' | 'mobile'; sentByDeviceId?: string; targetDeviceId?: string }; fromConnectionId?: string }
+  | { type: 'sessionContextBroadcast'; update: LiveSessionContext; fromConnectionId?: string }
   | { type: 'settingsSyncBroadcast'; settings: EncryptedSettingsPayload; fromConnectionId?: string }
   | { type: 'readReceiptBroadcast'; receipt: EncryptedReadReceiptPayload; fromConnectionId?: string }
   | { type: 'trackerPersonalStateBroadcast'; state: EncryptedTrackerPersonalStatePayload; fromConnectionId?: string }
@@ -476,4 +479,11 @@ export interface ClientMetadata {
   draftUpdatedAt?: number;
   /** Marker that the title was AI-chosen; prevents repeated rename attempts. */
   hasBeenNamed?: boolean;
+  /**
+   * True when the desktop lists this session but withholds its transcript rows
+   * because the session's project is not enabled in Settings > Sync. Phones
+   * show a "not synced" state instead of an empty transcript (NIM-7545).
+   * Absent or false means the transcript syncs normally.
+   */
+  transcriptSyncDisabled?: boolean;
 }

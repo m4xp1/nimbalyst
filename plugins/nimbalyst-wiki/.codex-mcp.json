@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "nimbalyst-session": {
+      "command": "node",
+      "cwd": ".",
+      "env_vars": ["PWD"],
+      "args": ["./scripts/session-inputs.mjs"]
+    },
+    "nimbalyst-local": {
+      "command": "node",
+      "cwd": ".",
+      "env_vars": ["PWD"],
+      "args": ["./scripts/nim-local-mcp.mjs"]
+    }
+  }
+}

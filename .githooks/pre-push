@@ -18,6 +18,9 @@ if ! command -v node >/dev/null 2>&1 || ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
+# Maintainer-only allowlist from local git config; a no-op for contributors.
+printf '%s\n' "$push_refs" | node scripts/check-push-destination.mjs "${2:-$remote_name}"
+
 # A release pushes main and then the tag on that same commit. The tag delivers no
 # commit the remote lacks, so every gate below would re-validate the tree the
 # branch push just proved. Skip it rather than spend the suite twice per release.
@@ -53,6 +56,13 @@ base=$(node scripts/resolve-prepush-base.mjs)
 # pre-push vitest run leaked "Test User" commits onto public main).
 echo "[pre-push] Checking outgoing commits for test-fixture authors..."
 run_stage authors node scripts/check-push-authors.mjs "$base..HEAD"
+
+# Re-apply the commit-safety policy to every outgoing commit, so a commit made
+# with --no-verify (or on a machine without the hooks) is still stopped here:
+# no nimbalyst-local/ or agent-mistakes.md, no commit over the file limit, no
+# octopus merges (2026-10-10 incident: a 2,800-file merge of a four-file PR).
+echo "[pre-push] Checking outgoing commits against the commit-safety policy..."
+run_stage commit-safety node scripts/check-push-range.mjs "$base..HEAD"
 
 # Hooks export repository-local GIT_* variables. In a linked worktree GIT_DIR
 # is absolute, so a real-Git test running in a temp directory can otherwise

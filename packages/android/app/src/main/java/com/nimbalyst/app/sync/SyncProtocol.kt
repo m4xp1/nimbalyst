@@ -227,7 +227,62 @@ data class ProjectConfig(
     /** Absent on desktops that predate action sync. */
     val actions: List<SyncedActionPrompt>? = null,
     val lastActionsUpdate: Long? = null,
+    /** Carried in the blob by the desktop; the entry's plaintext field is the one read. */
+    val gitRemoteHash: String? = null,
+    /** Absent when the project has no Local wiki or the desktop predates wiki sync. */
+    val localWiki: LocalWikiConfig? = null,
 )
+
+/**
+ * Where the project's Local wiki lives, relative to the project root, and the
+ * wiki's type definitions (their YAML does not sync as files).
+ */
+data class LocalWikiConfig(
+    val folder: String? = null,
+    val types: List<SyncedWikiType>? = null,
+)
+
+/** A wiki type definition (`.nimbalyst/trackers/<type>.yaml` with `storage:`), as `loadTypeDefs` reads it. */
+data class SyncedWikiType(
+    val typeId: String,
+    val displayName: String,
+    val displayNamePlural: String,
+    /** "pages" or "table". */
+    val storage: String,
+    /** Field holding the item title. */
+    val titleField: String,
+    val fields: List<SyncedWikiField> = emptyList(),
+)
+
+data class SyncedWikiField(
+    val name: String,
+    val type: String,
+    val itemType: String? = null,
+    val multiValue: Boolean? = null,
+)
+
+/**
+ * `localWiki.types` re-serialized from the raw blob rather than from
+ * [SyncedWikiType], so a field a newer desktop adds survives to the reader.
+ */
+fun rawLocalWikiTypes(configJson: String): String? = runCatching {
+    com.google.gson.JsonParser.parseString(configJson).asJsonObject
+        .getAsJsonObject("localWiki")?.get("types")
+        ?.takeIf { it.isJsonArray }?.toString()
+}.getOrNull()
+
+/**
+ * The wiki folder if it is a relative path inside the project: `/`-separated,
+ * no trailing slash. Absolute paths and `..` segments are dropped rather than
+ * trusted, since readers join the folder onto synced document paths.
+ */
+fun normalizeLocalWikiFolder(raw: String?): String? {
+    val folder = raw?.trim()?.trimEnd('/') ?: return null
+    if (folder.isEmpty() || folder.startsWith("/")) return null
+    val segments = folder.split("/")
+    if (segments.any { it.isEmpty() || it == "." || it == ".." }) return null
+    return folder
+}
 
 data class SyncedSlashCommand(
     val name: String,
@@ -309,6 +364,11 @@ data class ClientMetadata(
     val draftInput: String? = null,
     val draftUpdatedAt: Long? = null,
     val hasBeenNamed: Boolean? = null,
+    /**
+     * The desktop lists the session but withholds its transcript because its
+     * project is not enabled for sync. Absent means false.
+     */
+    val transcriptSyncDisabled: Boolean? = null,
 )
 
 data class ContextInfo(
@@ -319,6 +379,24 @@ data class ContextInfo(
 data class IndexBroadcast(
     val type: String,
     val session: ServerSessionEntry,
+    val fromConnectionId: String? = null,
+)
+
+/**
+ * A session's live context-window usage, relayed by the server and never
+ * stored. `encryptedContext`/`contextIv` decrypt to [ClientMetadata] JSON
+ * holding only `currentContext`.
+ */
+data class LiveSessionContext(
+    val sessionId: String,
+    val encryptedContext: String,
+    val contextIv: String,
+    val at: Long,
+)
+
+data class SessionContextBroadcast(
+    val type: String,
+    val update: LiveSessionContext,
     val fromConnectionId: String? = null,
 )
 

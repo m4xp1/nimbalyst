@@ -14,7 +14,7 @@
 
 import { BrowserWindow } from 'electron';
 import fs from 'node:fs';
-import simpleGit from 'simple-git';
+import { createGit } from '../services/gitClient';
 import log from 'electron-log/main';
 import { safeHandle, safeOn } from '../utils/ipcRegistry';
 import { ghCliDetector, type GhCliStatus } from '../services/GhCliDetector';
@@ -566,7 +566,7 @@ export function registerPullRequestHandlers(): void {
           workspacePath,
           'pr-fetch',
           async () => {
-            const git = simpleGit(workspacePath);
+            const git = createGit(workspacePath);
             const local = await git.branchLocal();
             let candidate = `pr-${number}`;
             let suffix = 2;

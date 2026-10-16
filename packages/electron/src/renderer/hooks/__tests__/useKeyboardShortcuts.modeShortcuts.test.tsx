@@ -7,11 +7,12 @@
  */
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
 import { store } from '@nimbalyst/runtime/store';
-import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
+import { isShortcutClaimedByTarget, useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { viewModeAtom } from '../../store/atoms/agentMode';
 import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
+import { titleBarCreateMenusAtom } from '../../store/atoms/titleBarCreate';
 import type { ContentMode } from '../../types/WindowModeTypes';
 
 vi.mock('posthog-js', () => ({ default: { capture: vi.fn() } }));
@@ -31,7 +32,6 @@ function Harness({ activeMode, isFullscreenPanelActive = false, orgModeAvailable
     setActiveMode,
     activeModeStateRef: { current: activeMode },
     editorModeRef: { current: null },
-    agentModeRef: { current: null },
     toggleAgentCollapsed: vi.fn(),
     toggleActiveLeftPane,
     openHistoryForCurrentDocument: vi.fn(),
@@ -141,6 +141,46 @@ describe('Cmd+B', () => {
   });
 });
 
+describe('shortcuts an editor claims', () => {
+  // A focused surface can opt out of an app chord with
+  // `data-claims-shortcuts="mod+k mod+b"` (the CSV grid: link and bold).
+  function pressInside(key: string): KeyboardEvent {
+    const isMac = navigator.platform.startsWith('Mac');
+    const event = new KeyboardEvent('keydown', { key, metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true });
+    document.querySelector('[data-testid="claimed-cell"]')!.dispatchEvent(event);
+    return event;
+  }
+
+  it('matches the nearest claiming ancestor, one chord at a time', () => {
+    const { container } = render(<div data-claims-shortcuts="mod+k"><span>cell</span></div>);
+    const span = container.querySelector('span');
+    expect(isShortcutClaimedByTarget(span, 'mod+k')).toBe(true);
+    expect(isShortcutClaimedByTarget(span, 'mod+b')).toBe(false);
+    expect(isShortcutClaimedByTarget(null, 'mod+k')).toBe(false);
+  });
+
+  it('leaves Cmd+K and Cmd+B to a claiming target', () => {
+    render(
+      <>
+        <Harness activeMode="files" />
+        <div data-claims-shortcuts="mod+k mod+b"><span data-testid="claimed-cell" /></div>
+      </>,
+    );
+    expect(pressInside('k').defaultPrevented).toBe(false);
+    expect(pressInside('b').defaultPrevented).toBe(false);
+    expect(setActiveMode).not.toHaveBeenCalled();
+    expect(toggleActiveLeftPane).not.toHaveBeenCalled();
+  });
+
+  it('still switches to Agent mode and toggles the pane everywhere else', () => {
+    render(<Harness activeMode="files" />);
+    pressAppModifier('k');
+    pressAppModifier('b');
+    expect(setActiveMode).toHaveBeenCalledWith('agent');
+    expect(toggleActiveLeftPane).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Cmd+Alt+M', () => {
   // Option rewrites the character on macOS (Option+M is "µ"), so the chord is
   // matched on `code` as well — a `key`-only match silently never fires.
@@ -160,13 +200,52 @@ describe('Cmd+Alt+M', () => {
 });
 
 describe('Cmd+Alt+W', () => {
+  // The chord is shown beside the title bar's "New Worktree" item and must do
+  // what that item does: open the create dialog, where the base branch, name and
+  // repositories are chosen -- not create a worktree with a generated name.
+  const openDialog = vi.fn();
+  const publishAgentMenu = (disabled = false) => store.set(titleBarCreateMenusAtom, {
+    agent: {
+      mode: 'agent',
+      items: [{ id: 'worktree', label: 'New Worktree', icon: 'account_tree', onSelect: openDialog, disabled }],
+    },
+  });
+
+  beforeEach(() => {
+    openDialog.mockReset();
+    store.set(titleBarCreateMenusAtom, {});
+  });
+
   // Same Option-rewrite trap as Cmd+Alt+M: macOS reports Option+W as "∑", so
   // requiring `key === 'w'` alongside `altKey` made the chord unreachable (#1415).
-  it('routes to agent mode for a new worktree session', () => {
-    render(<Harness activeMode="files" />);
+  it('opens the new-worktree dialog in agent mode', () => {
+    publishAgentMenu();
+    render(<Harness activeMode="agent" />);
     pressAppModifier('∑', { altKey: true, code: 'KeyW' });
 
+    expect(openDialog).toHaveBeenCalledTimes(1);
+    expect(setActiveMode).not.toHaveBeenCalled();
+  });
+
+  it('does nothing where the item is disabled, as outside a git repository', () => {
+    publishAgentMenu(true);
+    render(<Harness activeMode="agent" />);
+    pressAppModifier('w', { altKey: true, code: 'KeyW' });
+
+    expect(openDialog).not.toHaveBeenCalled();
+  });
+
+  it('from another mode, opens the dialog once agent mode publishes its menu, and only once', () => {
+    const { rerender } = render(<Harness activeMode="files" />);
+    pressAppModifier('w', { altKey: true, code: 'KeyW' });
     expect(setActiveMode).toHaveBeenCalledWith('agent');
+
+    rerender(<Harness activeMode="agent" />);
+    expect(openDialog).not.toHaveBeenCalled();
+
+    act(() => publishAgentMenu());
+    act(() => publishAgentMenu());
+    expect(openDialog).toHaveBeenCalledTimes(1);
   });
 });
 

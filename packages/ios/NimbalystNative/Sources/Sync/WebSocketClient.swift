@@ -34,6 +34,11 @@ final class WebSocketClient: @unchecked Sendable {
     private var serverUrl: String?
     private var authToken: String?
     private var roomId: String?
+    /// Read before every connect attempt, retries included. The JWT lives five
+    /// minutes; without this a socket keeps retrying with the token it was
+    /// first given, which the server answers with 401 indefinitely.
+    var freshToken: (@MainActor () async -> String?)?
+    var currentAuthToken: String? { authToken }
 
     /// Callback for received messages.
     var onMessage: ((Data) -> Void)?
@@ -139,7 +144,22 @@ final class WebSocketClient: @unchecked Sendable {
         self.authToken = authToken
         isIntentionallyClosed = false
 
-        performConnect()
+        connectWithFreshToken()
+    }
+
+    /// Fenced by generation: a disconnect or a newer connect while the token is
+    /// being read wins over this attempt.
+    @MainActor
+    private func connectWithFreshToken() {
+        guard let freshToken else { performConnect(); return }
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
+        Task { @MainActor [weak self] in
+            let token = await freshToken()
+            guard let self, !self.isIntentionallyClosed, self.connectionGeneration == generation else { return }
+            if let token { self.authToken = token }
+            self.performConnect()
+        }
     }
 
     /// Disconnect and stop reconnection attempts.
@@ -152,16 +172,28 @@ final class WebSocketClient: @unchecked Sendable {
         reconnectWork?.cancel()
         stopDeviceAnnounceTimer()
         stopPings()
+        if task != nil { logDiagnostic("socketClose", cause: "intentional") }
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         onConnectionStateChanged?(false)
+    }
+
+    /// Room kind and session id only; the room name also carries org and user ids.
+    private func logDiagnostic(_ event: String, cause: String? = nil, closeCode: Int? = nil, closeReason: String? = nil) {
+        let room = SyncDiagnosticsFile.roomFields(roomId)
+        var fields: [(String, SyncDiagnosticValue)] = [("room", .label(room.kind))]
+        if let sessionId = room.sessionId { fields.append(("sessionId", .id(sessionId))) }
+        if let cause { fields.append(("cause", .label(cause))) }
+        if let closeCode { fields.append(("code", .int(closeCode))) }
+        if let closeReason, !closeReason.isEmpty { fields.append(("reason", .text(closeReason))) }
+        SyncDiagnosticsFile.shared.log(event, fields: fields)
     }
 
     /// Reconnect using the previously stored connection parameters.
     @MainActor
     func reconnect() {
         guard !isIntentionallyClosed else { return }
-        performConnect()
+        connectWithFreshToken()
     }
 
     @MainActor
@@ -211,6 +243,7 @@ final class WebSocketClient: @unchecked Sendable {
         }
 
         logger.info("Connecting to \(roomId)...")
+        logDiagnostic("socketConnect")
         let wsTask = session.webSocketTask(with: url)
         wsTask.maximumMessageSize = 16 * 1024 * 1024 // 16 MB (default is 1 MB)
         self.task = wsTask
@@ -221,7 +254,7 @@ final class WebSocketClient: @unchecked Sendable {
 
         let deadline = DispatchWorkItem { [weak self, weak wsTask] in
             guard let self, let wsTask, self.task === wsTask, !self.ready else { return }
-            self.handleDisconnect(for: wsTask, message: "Sync connection timed out. Retrying when available.")
+            self.handleDisconnect(for: wsTask, cause: "readinessTimeout", message: "Sync connection timed out. Retrying when available.")
         }
         readinessDeadline = deadline
         DispatchQueue.main.asyncAfter(deadline: .now() + readinessTimeout, execute: deadline)
@@ -229,12 +262,13 @@ final class WebSocketClient: @unchecked Sendable {
             Task { @MainActor in
                 guard let self, self.task === wsTask else { return }
                 if let error {
-                    self.handleDisconnect(for: wsTask, message: "Could not connect sync: \(error.localizedDescription)")
+                    self.handleDisconnect(for: wsTask, cause: "handshakeFailed", message: "Could not connect sync: \(error.localizedDescription)")
                     return
                 }
                 self.readinessDeadline?.cancel()
                 self.readinessDeadline = nil
                 self.ready = true
+                self.logDiagnostic("socketOpen")
                 self.reconnectDelay = 2
                 self.draining = true
                 self.onConnectionStateChanged?(true)
@@ -279,7 +313,7 @@ final class WebSocketClient: @unchecked Sendable {
             task.send(.string(string)) { [weak self] error in
                 if let error = error {
                     self?.logger.error("Send error: \(error.localizedDescription)")
-                    self?.handleDisconnect(for: task, message: "Sync send failed: \(error.localizedDescription)")
+                    self?.handleDisconnect(for: task, cause: "sendFailed", message: "Sync send failed: \(error.localizedDescription)")
                 }
             }
         } catch {
@@ -308,7 +342,7 @@ final class WebSocketClient: @unchecked Sendable {
             Task { @MainActor in
                 guard let self, self.task === task else { return }
                 completion?(error)
-                if let error { self.handleDisconnect(for: task, message: "Sync send failed: \(error.localizedDescription)") }
+                if let error { self.handleDisconnect(for: task, cause: "sendFailed", message: "Sync send failed: \(error.localizedDescription)") }
             }
         }
     }
@@ -334,7 +368,7 @@ final class WebSocketClient: @unchecked Sendable {
                     // a single frame. After readiness, application awaits own
                     // receive backpressure and preserve document transfer order.
                     guard self.inbox.count < 128, self.inboxBytes + data.count <= 16 * 1024 * 1024 else {
-                        self.handleDisconnect(for: wsTask, message: "Sync handshake buffer exceeded its limit")
+                        self.handleDisconnect(for: wsTask, cause: "handshakeBufferExceeded", message: "Sync handshake buffer exceeded its limit")
                         return
                     }
                     self.inbox.append(data)
@@ -342,7 +376,7 @@ final class WebSocketClient: @unchecked Sendable {
                     if self.ready { await self.drainInbox(on: wsTask) }
                     else { self.startReceiving(on: wsTask) }
                 case .failure(let error):
-                    self.handleDisconnect(for: wsTask, message: "Sync disconnected: \(error.localizedDescription)")
+                    self.handleDisconnect(for: wsTask, cause: "receiveFailed", message: "Sync disconnected: \(error.localizedDescription)")
                 }
             }
         }
@@ -365,12 +399,15 @@ final class WebSocketClient: @unchecked Sendable {
 
     // MARK: - Reconnection
 
-    private func handleDisconnect(for wsTask: URLSessionWebSocketTask, message: String = "File sync disconnected. Please retry.") {
+    private func handleDisconnect(for wsTask: URLSessionWebSocketTask, cause: String, message: String = "File sync disconnected. Please retry.") {
         // Receive callbacks fire on a URLSession background queue.
         // Hop to main for Timer invalidation and shared state mutation.
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             guard self.task === wsTask else { return }
+            // Read the server's close code and reason before cancel replaces them.
+            self.logDiagnostic("socketClose", cause: cause, closeCode: wsTask.closeCode.rawValue,
+                               closeReason: wsTask.closeReason.flatMap { String(data: $0, encoding: .utf8) })
             wsTask.cancel(with: .goingAway, reason: nil)
             self.task = nil
             self.ready = false
@@ -393,7 +430,7 @@ final class WebSocketClient: @unchecked Sendable {
             let retry = DispatchWorkItem { [weak self] in
                 guard let self, !self.isIntentionallyClosed, self.isAppInForeground,
                       self.connectionGeneration == generation else { return }
-                self.performConnect()
+                self.connectWithFreshToken()
             }
             self.reconnectWork?.cancel()
             self.reconnectWork = retry
@@ -460,7 +497,7 @@ final class WebSocketClient: @unchecked Sendable {
                 if let error = error {
                     self.logger.warning("Ping failed -- treating connection as dead: \(error.localizedDescription)")
                     if let deadTask = self.task {
-                        self.handleDisconnect(for: deadTask)
+                        self.handleDisconnect(for: deadTask, cause: "pingFailed")
                     }
                 }
             }

@@ -55,7 +55,10 @@ class NimbalystRepository(
                 project.copy(
                     commandsJson = project.commandsJson ?: existing.commandsJson,
                     actionsJson = project.actionsJson ?: existing.actionsJson,
-                    gitRemoteHash = project.gitRemoteHash ?: existing.gitRemoteHash
+                    gitRemoteHash = project.gitRemoteHash ?: existing.gitRemoteHash,
+                    // A present config (commandsJson set) says whether there is a wiki; no config keeps it.
+                    localWikiFolder = if (project.commandsJson != null) project.localWikiFolder else existing.localWikiFolder,
+                    localWikiTypesJson = if (project.commandsJson != null) project.localWikiTypesJson else existing.localWikiTypesJson,
                 )
             }
         )
@@ -256,6 +259,10 @@ class NimbalystRepository(
     suspend fun updateDraftInput(sessionId: String, draftInput: String?, draftUpdatedAt: Long) {
         database.sessionDao().updateDraftInput(sessionId, draftInput, draftUpdatedAt)
     }
+
+    /** Writes a relayed live context reading. False when the session is not in the local DB. */
+    suspend fun updateLiveContext(sessionId: String, tokens: Int, contextWindow: Int): Boolean =
+        database.sessionDao().updateLiveContext(sessionId, tokens, contextWindow) > 0
 
     suspend fun updateClientMetadata(sessionId: String, clientMetadataJson: String) {
         database.sessionDao().updateClientMetadata(sessionId, clientMetadataJson)

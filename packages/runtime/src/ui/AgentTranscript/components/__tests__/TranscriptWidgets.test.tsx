@@ -250,6 +250,34 @@ describe('MessageSegment', () => {
     expect(container.querySelector('.context-limit-widget')).not.toBeNull();
   });
 
+  it('offers auto-resume only on the latest blocked usage-limit card and passes its reset', async () => {
+    const { interactiveWidgetHostAtom } = await import('../../../../store/atoms/interactiveWidgetHost');
+    const testStore = createStore();
+    const setUsageLimitAutoResume = vi.fn().mockResolvedValue(undefined);
+    testStore.set(interactiveWidgetHostAtom('limited'), { usageLimitAutoResumeEnabled: false, setUsageLimitAutoResume } as never);
+    const blocked = makeMessage({
+      type: 'system_message',
+      isError: true,
+      text: "<!-- [RATE_LIMIT] limitType=5-hour session resetsAtUnix=1772233200 -->\n\nYou've hit your session limit",
+    });
+    const segment = (isLastMessage: boolean) => (
+      <JotaiProvider store={testStore}>
+        <MessageSegment message={blocked} isUser={false} showToolCalls={false} showThinking={false}
+          expandedTools={new Set()} onToggleToolExpand={() => {}} sessionId="limited" isLastMessage={isLastMessage} />
+      </JotaiProvider>
+    );
+
+    const older = render(segment(false));
+    expect(older.container.querySelector('.rate-limit-widget-blocked')).not.toBeNull();
+    expect(older.container.querySelector('.rate-limit-auto-resume-on')).toBeNull();
+    older.unmount();
+
+    render(segment(true));
+    fireEvent.click(screen.getByText('Resume automatically when the limit resets'));
+    await waitFor(() => screen.getByText('Turn off'));
+    expect(setUsageLimitAutoResume).toHaveBeenCalledWith(true, 1772233200000);
+  });
+
   it('renders tool call card with expand/collapse', () => {
     const toolId = 'test-tool-1';
     const message = makeToolMessage(
@@ -2309,5 +2337,33 @@ describe('EditorScreenshotWidget', () => {
     const dialog = screen.getByRole('dialog', { name: 'Image preview' });
     expect(container.contains(dialog)).toBe(false);
     expect(dialog.parentElement).toBe(document.body);
+  });
+});
+
+describe('VisualDisplayWidget', () => {
+  it('enlarges an image from outside the workspace using the bytes the thumbnail loaded', async () => {
+    const { VisualDisplayWidget } = await import('../CustomToolWidgets/VisualDisplayWidget');
+    const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    // nim-asset:// only serves workspace roots, so a /tmp path must not be
+    // handed to the lightbox as a URL; readFile can reach it.
+    const readFile = vi.fn(async () => ({ success: true, content: pixel }));
+    const message = makeToolMessage(
+      'mcp__nimbalyst__display_to_user',
+      { items: [
+        { description: 'Mockup A', image: { path: '/tmp/arch-mock/a.png' } },
+        { description: 'Mockup B', image: { path: '/tmp/arch-mock/b.png' } },
+      ] },
+      'ok',
+    );
+    render(
+      <Wrapper>
+        <VisualDisplayWidget message={message} isExpanded={false} onToggle={() => {}} sessionId="visual-lightbox" readFile={readFile} />
+      </Wrapper>
+    );
+
+    fireEvent.click(await screen.findByAltText('Mockup B'));
+    const enlarged = await screen.findByTestId('zoomable-image');
+    await waitFor(() => expect(enlarged.getAttribute('src')).toBe(`data:image/png;base64,${pixel}`));
+    expect(readFile).toHaveBeenCalledWith('/tmp/arch-mock/b.png');
   });
 });

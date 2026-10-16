@@ -367,6 +367,26 @@ public final class DatabaseManager: @unchecked Sendable {
             try IndexReplicationStore.createSchema(db)
         }
 
+        // The Local wiki folder and type definitions from the desktop's project
+        // config. NULL means the project has no Local wiki (or no wiki types), or
+        // the desktop predates wiki sync.
+        // Registered after v2IndexReplication so existing installs apply it in order.
+        migrator.registerMigration("v19_project_local_wiki_folder") { db in
+            try db.alter(table: "projects") { t in
+                t.add(column: "localWikiFolder", .text)
+                t.add(column: "localWikiTypesJSON", .text)
+            }
+        }
+
+        // Set from client metadata when the desktop lists a session whose
+        // project is not synced, so the phone shows "not synced" instead of an
+        // empty transcript.
+        migrator.registerMigration("v20_session_transcript_sync_disabled") { db in
+            try db.alter(table: "sessions") { t in
+                t.add(column: "transcriptSyncDisabled", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         try migrator.migrate(writer)
         // The projection is derived data with its own shape marker; a recorded
         // migration says nothing about which shape it created.
@@ -606,6 +626,19 @@ public final class DatabaseManager: @unchecked Sendable {
                 sql: "UPDATE sessions SET draftInput = ?, draftUpdatedAt = ? WHERE id = ?",
                 arguments: [draftInput, draftUpdatedAt, sessionId]
             )
+        }
+    }
+
+    /// Update only the live context-window usage for an existing session.
+    /// Returns false when no local row exists; never creates one.
+    @discardableResult
+    public func updateSessionContext(sessionId: String, tokens: Int, contextWindow: Int) throws -> Bool {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE sessions SET contextTokens = ?, contextWindow = ? WHERE id = ?",
+                arguments: [tokens, contextWindow, sessionId]
+            )
+            return db.changesCount > 0
         }
     }
 
