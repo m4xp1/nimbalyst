@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.1] - 2026-10-16
+
+### Changed
+- Updated to Nimbalyst 0.81.7 while retaining the fork’s Russian search, file-backed trackers, current Memory session reading, opt-in Wiki and Git on Stable.
+
 ## [0.81.7] - 2026-10-16
 
 
