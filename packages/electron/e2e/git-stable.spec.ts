@@ -93,7 +93,8 @@ for (const marketplace of [true, false]) {
    await fs.writeFile(path.join(workspace,'picked.txt'),'hook must reject\n');await panel.getByTitle('Refresh',{exact:true}).click();
    const checkbox=panel.getByRole('checkbox',{name:'picked.txt',exact:true});await checkbox.check();await panel.getByPlaceholder('Summary (required)').fill('must not commit');
    await panel.getByRole('button',{name:'Commit (1)',exact:true}).click();
-   await expect(panel).toContainText(/GITFIXTURE_HOOK_REJECT|pre-commit|hook/i);expect(git(['rev-parse','HEAD'])).toBe(before);
+   await expect(panel).toContainText(/Failed \(exit 1\)|GITFIXTURE_HOOK_REJECT/);
+   await panel.getByRole('button',{name:/^Output/}).click();await expect(panel).toContainText('GITFIXTURE_HOOK_REJECT');expect(git(['rev-parse','HEAD'])).toBe(before);
    expect(await fs.readFile(path.join(workspace,'picked.txt'),'utf8')).toBe('hook must reject\n');expect(git(['diff','--cached','--name-only'])).toBe('staged.txt');
    git(['config','--unset','core.hooksPath']);
   },60000);
