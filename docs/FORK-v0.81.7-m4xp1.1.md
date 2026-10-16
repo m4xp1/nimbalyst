@@ -14,4 +14,4 @@ Nine files conflicted: CHANGELOG.md (both release histories retained); FEATURE_I
 
 The inline-filter test locators follow upstream’s new pills. One new upstream CLI test compares canonical Windows directories instead of slash spelling. No Git operations or model/RRF/recall policy were replaced during conflict resolution.
 
-About 0.81.7+m4xp1.1; Windows FileVersion 0.81.7.1; buildNumber 1. Release packaging and complete dependency validation run in GitHub CI. No local pnpm or EXE packaging. See release verification report for actual checks and limitations.
+About 0.81.7+m4xp1.1; Windows FileVersion 0.81.7.1; buildNumber 1. Release packaging and complete dependency validation run in GitHub CI. EXE packaging remains in CI. The owner later authorized local dependency installation; see the verification report for actual environment attempts, checks and limitations.
