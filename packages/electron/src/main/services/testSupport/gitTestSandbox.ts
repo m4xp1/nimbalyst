@@ -75,7 +75,7 @@ export function gitSandboxEnv(
     env.GIT_CONFIG_SYSTEM = missingConfig;
   }
   // Stop upward repo discovery from ever reaching the enclosing checkout.
-  env.GIT_CEILING_DIRECTORIES = fs.realpathSync(ceilingDir);
+  env.GIT_CEILING_DIRECTORIES = fs.realpathSync.native(ceilingDir);
   return env;
 }
 
@@ -89,7 +89,7 @@ export function assertGitSandbox(repo: string, ceilingDir?: string): void {
     encoding: 'utf8',
     env: gitSandboxEnv(ceilingDir),
   }).trim();
-  if (fs.realpathSync(toplevel) !== fs.realpathSync(repo)) {
+  if (fs.realpathSync.native(toplevel) !== fs.realpathSync.native(repo)) {
     throw new Error(
       `[gitTestSandbox] git resolved "${toplevel}" instead of the scratch repo "${repo}" — ` +
       'refusing to run a mutating git command outside the sandbox.',
