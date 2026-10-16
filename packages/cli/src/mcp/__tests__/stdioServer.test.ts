@@ -315,12 +315,12 @@ describe('re-pointing the server at another project', () => {
     const wiki = path.join(outer, 'nimbalyst-local', 'wiki');
     execFileSync('git', ['init', '-q'], { cwd: wiki, stdio: 'ignore' });
     // Sandboxed: the repository is the temp wiki folder, never this checkout.
-    expect(realpathSync(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: wiki, encoding: 'utf8' }).trim())).toBe(wiki);
+    expect(realpathSync.native(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: wiki, encoding: 'utf8' }).trim())).toBe(realpathSync.native(wiki));
     const tools = createLocalToolMap(localWikiContext(await project(true)));
 
     const result = (await run(tools, 'useLocalWiki', { folder: wiki })).body();
     expect(result.wikiFolder).toBe(wiki);
-    expect(realpathSync(result.projectRoot)).toBe(wiki);
+    expect(realpathSync.native(result.projectRoot)).toBe(realpathSync.native(wiki));
   });
 
   it('pagesForFiles names the pages whose paths cover the given files, and which clock dated them', async () => {
