@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Git panels are available on Stable, including Git installed from the Marketplace.
 
 ### Removed
 <!-- Removed features go here -->
