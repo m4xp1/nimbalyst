@@ -1324,7 +1324,8 @@ export class ExtensionLoader {
 
             // Check if extension should be visible for the current release channel
             const isVisible = await platformService.isExtensionVisibleForChannel(
-              validationResult.requiredReleaseChannel
+              validationResult.requiredReleaseChannel,
+              validationResult.id
             );
             if (!isVisible) {
               console.info(

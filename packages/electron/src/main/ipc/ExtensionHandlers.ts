@@ -1,3 +1,4 @@
+import { isExtensionVisibleForChannel } from '../../shared/extensionChannelPolicy';
 /**
  * IPC handlers for extension-related operations.
  *
@@ -112,31 +113,6 @@ function validateAndScrubBackendModules(
       `native-code consent is gated by the first-use prompt.`
   );
 
-  return true;
-}
-
-/**
- * Check if an extension should be visible for the current release channel.
- * Extensions with requiredReleaseChannel: 'alpha' are only visible to alpha users.
- * Extensions without this field or with 'stable' are visible to everyone.
- */
-function isExtensionVisibleForChannel(
-  manifest: { requiredReleaseChannel?: ReleaseChannel },
-  currentChannel: ReleaseChannel
-): boolean {
-  const requiredChannel = manifest.requiredReleaseChannel;
-
-  // No requirement or 'stable' requirement = visible to everyone
-  if (!requiredChannel || requiredChannel === 'stable') {
-    return true;
-  }
-
-  // 'alpha' requirement = only visible to alpha users
-  if (requiredChannel === 'alpha') {
-    return currentChannel === 'alpha';
-  }
-
-  // Unknown channel requirement = default to visible (fail open)
   return true;
 }
 
@@ -981,9 +957,9 @@ export function registerExtensionHandlers(): void {
   });
 
   // Check if an extension should be visible based on its required release channel
-  safeHandle('extensions:is-visible-for-channel', (_event, requiredChannel: string | undefined) => {
+  safeHandle('extensions:is-visible-for-channel', (_event, requiredChannel: string | undefined, extensionId?: string) => {
     const currentChannel = getReleaseChannel();
-    return isExtensionVisibleForChannel({ requiredReleaseChannel: requiredChannel as ReleaseChannel | undefined }, currentChannel);
+    return isExtensionVisibleForChannel({ id: extensionId, requiredReleaseChannel: requiredChannel }, currentChannel);
   });
 
   // Find files matching a glob pattern
