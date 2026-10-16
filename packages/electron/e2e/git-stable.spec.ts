@@ -1,5 +1,6 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -24,10 +25,10 @@ for (const marketplace of [true, false]) {
    for(const key of Object.keys(clean))if(key.startsWith('GIT_'))delete clean[key];
    app = await _electron.launch({ ...(process.env.NIMBALYST_E2E_APP_PATH ? {executablePath:process.env.NIMBALYST_E2E_APP_PATH} : {}),
     args: [...(process.env.NIMBALYST_E2E_APP_PATH ? ['--user-data-dir='+path.join(temp,'user')] : [isolate]), '--workspace', workspace], cwd:root,timeout:45000,
-    env: {...clean,GIT_CEILING_DIRECTORIES:temp,PLAYWRIGHT:'1',NIMBALYST_RELEASE_CHANNEL:'stable',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),NIMBALYST_E2E_EXTENSIONS_DIR:userExtensions,OPENAI_API_KEY:'',ANTHROPIC_API_KEY:''} });
+    env: {...clean,TEMP:realpathSync.native(os.tmpdir()),TMP:realpathSync.native(os.tmpdir()),GIT_CEILING_DIRECTORIES:temp,PLAYWRIGHT:'1',NIMBALYST_RELEASE_CHANNEL:'stable',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),NIMBALYST_E2E_EXTENSIONS_DIR:userExtensions,OPENAI_API_KEY:'',ANTHROPIC_API_KEY:''} });
    page = await app.firstWindow(); await page.getByTestId('tracker-mode-button').waitFor();
    // Windows may canonicalize the temp root to its short spelling.
-   expect(await fs.realpath(await app.evaluate(({app})=>app.getPath('userData')))).toBe(await fs.realpath(path.join(temp,'user')));
+   expect(realpathSync.native(await app.evaluate(({app})=>app.getPath('userData')))).toBe(realpathSync.native(path.join(temp,'user')));
    await invoke('permissions:trustWorkspace', workspace);
    await page.getByTestId('files-mode-button').click();
   }
@@ -37,7 +38,7 @@ for (const marketplace of [true, false]) {
    await expect(page.locator('.git-log-panel')).toBeVisible();
   }
   test.beforeAll(async () => {
-   temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'nimbalyst-git-stable-')));
+   temp = realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(),'nimbalyst-git-stable-')));
    workspace=path.join(temp,'Git artificial');userExtensions=path.join(temp,'extensions');
    await fs.mkdir(workspace);await fs.mkdir(userExtensions);await fs.mkdir(path.join(temp,'user'));
    git(['init','-b','main']);assertGitSandbox(workspace,temp);git(['config','user.name',FIXTURE_AUTHOR.name]);git(['config','user.email',FIXTURE_AUTHOR.email]);git(['config','commit.gpgsign','false']);git(['config','core.autocrlf','false']);
