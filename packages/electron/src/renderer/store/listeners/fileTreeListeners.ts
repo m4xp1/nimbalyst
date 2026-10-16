@@ -24,6 +24,9 @@ import {
   buildFileTreeForest,
   normalizeTreePath,
   replaceFolderChildren,
+  keepLoadedTruncatedChildren,
+  findExpandedTruncatedFolders,
+  expandedDirsAtom,
   type RendererFileTreeItem,
 } from '../atoms/fileTree';
 import { workspaceRepoPathsAtom } from '../atoms/workspaceRepos';
@@ -98,8 +101,28 @@ export function initFileTreeListeners(workspacePath: string): () => void {
 
   const cleanups: Array<() => void> = [];
   let disposed = false;
+  const refreshGenerations = new Map<string, symbol>();
   treesByRoot = {};
   store.set(workspaceRepoPathsAtom, []);
+
+  function refreshExpandedFolders(rootPath: string, items: RendererFileTreeItem[], generation: symbol): void {
+    const isCurrent = () => !disposed && refreshGenerations.get(rootPath) === generation;
+    if (!isCurrent()) return;
+    for (const folderPath of findExpandedTruncatedFolders(items, store.get(expandedDirsAtom))) {
+      window.electronAPI.refreshFolderContents?.(folderPath)
+        .then((contents) => {
+          if (!isCurrent()) return;
+          const next = Array.isArray(contents) ? contents : [];
+          // Each read has its own depth limit. Keep loaded descendants until
+          // the next expanded boundary is refreshed, then continue below it.
+          applyLoadedFolderContents(folderPath, keepLoadedTruncatedChildren(treesByRoot[rootPath], next));
+          refreshExpandedFolders(rootPath, next, generation);
+        })
+        .catch((error) => {
+          console.error('[fileTreeListeners] Error re-reading deep folder:', folderPath, error);
+        });
+    }
+  }
 
   // Load the initial forest: every root of this workspace.
   void (async () => {
@@ -119,14 +142,23 @@ export function initFileTreeListeners(workspacePath: string): () => void {
   if (window.electronAPI.onWorkspaceFileTreeUpdated) {
     const cleanup = window.electronAPI.onWorkspaceFileTreeUpdated(
       (data: { fileTree: RendererFileTreeItem[]; rootPath?: string }) => {
+        if (disposed) return;
         const rootPath = data.rootPath ?? workspacePath;
         const rootPaths = store.get(workspaceRootPathsAtom);
         // A rebuild for a root this workspace no longer shows (detach racing a
         // pending debounce) must not resurrect it in the forest.
         if (rootPaths.length > 0 && !rootPaths.includes(rootPath)) return;
 
-        treesByRoot[rootPath] = data.fileTree;
+        // A newer rebuild invalidates every outstanding descendant read for
+        // this root, even when the new tree has no truncated folders.
+        const generation = Symbol();
+        refreshGenerations.set(rootPath, generation);
+        treesByRoot[rootPath] = keepLoadedTruncatedChildren(treesByRoot[rootPath], data.fileTree);
         publishForest(rootPaths.length > 0 ? rootPaths : [workspacePath]);
+
+        // The rebuild did not read below its depth limit, so an open folder
+        // there would keep showing what it held when it was expanded.
+        refreshExpandedFolders(rootPath, data.fileTree, generation);
       }
     );
     cleanups.push(cleanup);
@@ -143,7 +175,10 @@ export function initFileTreeListeners(workspacePath: string): () => void {
 
         const rootPaths = data.folders ?? [workspacePath];
         for (const known of Object.keys(treesByRoot)) {
-          if (!rootPaths.includes(known)) delete treesByRoot[known];
+          if (!rootPaths.includes(known)) {
+            delete treesByRoot[known];
+            refreshGenerations.delete(known);
+          }
         }
         await Promise.all(rootPaths.filter((r) => !treesByRoot[r]).map(loadRootTree));
         if (disposed) return;
@@ -171,6 +206,7 @@ export function initFileTreeListeners(workspacePath: string): () => void {
 
   return () => {
     disposed = true;
+    refreshGenerations.clear();
     treesByRoot = {};
     cleanups.forEach(cleanup => cleanup?.());
   };

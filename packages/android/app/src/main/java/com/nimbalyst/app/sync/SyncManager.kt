@@ -99,7 +99,8 @@ class SyncManager internal constructor(
     private val indexHandler = IndexMessageHandler(
         repository, decoder, gson, { crypto }, _state, _connectedDevices,
         settings, indexRequests, creations, commands, signals, errors,
-        onPong = requests::deliveryConfirmed
+        onPong = requests::deliveryConfirmed,
+        onSnapshotApplied = requests::reconnect,
     ) { replication }
     private val _indexCoverage = MutableStateFlow(IndexCoverage())
     @Volatile private var replication: IndexReplicationClient? = null
@@ -368,7 +369,8 @@ class SyncManager internal constructor(
             submit = indexIngestion::submit,
             onApplied = indexHandler::afterReplicatedPage,
             onBootstrapFinalized = indexHandler::bootstrapFinalized,
-            onLegacyServer = { indexRequests.requestFull() }
+            onLegacyServer = { indexRequests.requestFull() },
+            onCaughtUp = requests::reconnect,
         )
         replication = client
         client.setForeground(presence.isInForeground)
@@ -432,7 +434,8 @@ class SyncManager internal constructor(
         notificationManager.state.value.deviceToken?.let(::registerPushToken)
         startReplication()
         startJwtRefreshTimer()
-        indexIngestion.submit { requests.reconnect() }
+        // Parked writes replay on index catch-up (onCaughtUp / onSnapshotApplied), not here:
+        // a draft blob replaces the server's, so it must carry the desktop's current fields.
         rejoinActiveSession()
     }
 
@@ -633,7 +636,17 @@ class SyncManager internal constructor(
 
     internal suspend fun refreshJwt() {
         val credentials = credentialStore.credentials ?: return
-        val refreshed = when (val result = tokenRefresher.refresh(credentials)) {
+        val result = tokenRefresher.refresh(credentials)
+        // A sign-out, sign-in or re-pair during the await: the answer is the previous
+        // session's, and must neither overwrite nor sign out the one stored now.
+        val current = credentialStore.credentials
+        if (current == null || current.serverUrl != credentials.serverUrl || current.encryptionSeed != credentials.encryptionSeed ||
+            current.authUserId != credentials.authUserId || current.sessionToken != credentials.sessionToken
+        ) {
+            Log.w(TAG, "Dropping a JWT refresh answer for a session that is no longer stored")
+            return
+        }
+        val refreshed = when (result) {
             is TokenRefresh.Refreshed -> result.credentials
             // Offline or a server error: no verdict on the session, so it never counts toward sign-out.
             TokenRefresh.Unavailable -> return

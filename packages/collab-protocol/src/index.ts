@@ -35,3 +35,5 @@ export * from "./indexReplication.js";
 export * from "./sessionRetention.js";
 export * from './jwtScopes.js';
 export * from './syncClientInfo.js';
+export * from './htmlEmbedProtocol.js';
+export * from './htmlEmbedShell.js';

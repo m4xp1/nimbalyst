@@ -24,6 +24,22 @@ class TranscriptSessionSyncTest {
     }
 
     @Test
+    fun `same identity with new content while load is in flight forces replacement`() {
+        // Room upserts replace same-ID rows, so the content can change under an id.
+        val initial = snap("a")
+        val repaired = initial.copy(messages = initial.messages.map { it.copy(contentDecrypted = "full reply") })
+        val sync = TranscriptSessionSync()
+        sync.onSnapshot(initial)
+        val load = sync.onBridgeReady().single() as TranscriptCommand.Load
+        assertTrue(sync.onSnapshot(repaired).isEmpty())
+        val replacement = sync.onLoadResult(load, "s1").next.single() as TranscriptCommand.Load
+        assertTrue(replacement.replace)
+        assertEquals(repaired, replacement.snapshot)
+        assertTrue(sync.onLoadResult(replacement, "s1").next.isEmpty())
+        assertTrue(sync.onSnapshot(repaired).isEmpty())
+    }
+
+    @Test
     fun `room emissions after the first load send only the new messages`() {
         val sync = loaded(snap("a", "b"))
 

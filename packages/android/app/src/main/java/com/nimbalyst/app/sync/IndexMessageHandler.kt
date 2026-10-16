@@ -30,9 +30,13 @@ internal class IndexMessageHandler(
     private val errors: SyncErrors,
     /** The room answered our `ping`: everything sent before it arrived. */
     private val onPong: () -> Unit = {},
+    /** A legacy full index was applied; parked writes may now replay from current rows. */
+    private val onSnapshotApplied: suspend () -> Unit = {},
     /** The versioned replication driver for the current connection, if any. */
     private val replication: () -> IndexReplicationClient? = { null },
 ) {
+    private val liveContext = LiveSessionContextApplier(repository, gson)
+
     companion object {
         private const val TAG = "IndexMessageHandler"
 
@@ -90,6 +94,9 @@ internal class IndexMessageHandler(
             "createWorktreeResponseBroadcast" -> parse<CreateWorktreeResponseBroadcast>(message)
                 ?.let { commands.receiveWorktreeResponse(it.response) }
             "settingsSyncBroadcast" -> handleSettingsSyncBroadcast(message)
+            "sessionContextBroadcast" -> parse<SessionContextBroadcast>(message)?.let { broadcast ->
+                crypto()?.let { liveContext.apply(broadcast.update, it) }
+            }
             "devicesList" -> handleDevicesList(message)
             "deviceJoined" -> handleDeviceJoined(message)
             "deviceLeft" -> handleDeviceLeft(message)
@@ -133,6 +140,7 @@ internal class IndexMessageHandler(
             )
         }
         reportUnreadable(health.unreadableSessions, health.encryptionMismatch)
+        onSnapshotApplied()
     }
 
     private fun reportUnreadable(unreadable: Int, encryptionMismatch: Boolean) {

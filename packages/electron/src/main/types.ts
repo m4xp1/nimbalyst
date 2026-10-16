@@ -38,6 +38,8 @@ export interface WindowState {
      * and document caches stay alive even when the project is hidden.
      */
     additionalWorkspacePaths?: string[];
+    /** Visible rail order for renderer reloads; independent of primary/active paths. */
+    projectRailOrder?: string[];
     documentEdited: boolean;
 
     // Tab management (optional for backward compatibility)
@@ -81,4 +83,6 @@ export interface FileTreeItem {
     path: string;
     children?: FileTreeItem[];
     truncated?: number; // Number of items hidden when directory was too large
+    /** The tree walk stopped at its depth limit here; `children` was not read. */
+    childrenTruncated?: boolean;
 }

@@ -16,13 +16,21 @@ import {
   createCollabDocsScopeLifecycle,
   useCollabPagesState,
   type CollabDocsSession,
+  type CollabSidebarCreateMenu,
 } from '@nimbalyst/collab-bundle/docs-ui';
-import { TrackersUIProvider } from '@nimbalyst/collab-bundle/trackers-ui';
+import { createTrackerReferenceResolver, TrackersUIProvider } from '@nimbalyst/collab-bundle/trackers-ui';
+import { PageEditorServicesContext, type PageEditorServices } from './pageEditorServices';
 import { setWorkspaceFileLinkOpener } from '@nimbalyst/collab-bundle/editor';
+import { wikiApi, wikiChanges } from '../api/client';
 import { LocalCollabHost, routePath } from '../host/LocalCollabHost';
 import type { LocalTrackerDataSource } from '../host/LocalTrackerDataSource';
 import { DraftStore, DraftStoreContext, prepareToLeave, resolveLeave, type LeaveChoice, type LeaveDecision } from './drafts';
 import { PageView, SearchView, TypedPageView, TypesView, TypeTableView, type PageModule, type ViewRoute } from './views';
+import { WikiCreateMenu } from './WikiCreateMenu';
+import { setWikiCanvasContext } from '../editors/canvas/WikiCanvasCard';
+import { renderWikiFileEmbed } from '../editors/WikiFileEmbed';
+import { setWikiHtmlNavigator } from '../editors/html/htmlPages';
+import { openWikiHtmlLink } from '../editors/html/wikiHtmlNavigation';
 
 type Route = ViewRoute;
 
@@ -45,6 +53,13 @@ function pathOf(route: Route): string {
 }
 
 type Leaving = { reason: 'conflict' | 'error'; proceed: () => void };
+
+/** Whether the wiki server answers; it stops when the agent session that started it ends. */
+function useServerReachable(): boolean {
+  const [reachable, setReachable] = useState(() => wikiChanges.isReachable());
+  useEffect(() => wikiChanges.subscribe(() => setReachable(wikiChanges.isReachable())), []);
+  return reachable;
+}
 
 function useRoute(drafts: DraftStore): [Route, (route: Route, options?: { newTab?: boolean }) => void, Leaving | null, (choice: LeaveChoice) => void] {
   const [route, setRoute] = useState<Route>(parseLocation);
@@ -113,11 +128,13 @@ function useRoute(drafts: DraftStore): [Route, (route: Route, options?: { newTab
 
 export interface AppProps {
   root: string;
+  /** The project the wiki belongs to; canvas cards name files relative to it. */
+  projectRoot: string | null;
   trackers: LocalTrackerDataSource;
   module: PageModule;
 }
 
-export function App({ root, trackers, module }: AppProps) {
+export function App({ root, projectRoot, trackers, module }: AppProps) {
   const drafts = useMemo(() => new DraftStore(), []);
   const [route, navigate, leaving, chooseLeave] = useRoute(drafts);
   const [notice, setNotice] = useState<string | null>(null);
@@ -133,8 +150,57 @@ export function App({ root, trackers, module }: AppProps) {
     return () => lifecycle.dispose();
   }, [host]);
 
+  // References in page bodies resolve against the wiki's own typed pages and rows; a click opens the item here.
+  const trackerReferences = useMemo(
+    () => createTrackerReferenceResolver(trackers, { onOpenItem: (id) => navigate({ kind: 'item', id }) }),
+    [trackers, navigate],
+  );
+  useEffect(() => () => trackerReferences.dispose(), [trackerReferences]);
+  const editorServices = useMemo<PageEditorServices>(
+    () => ({
+      pageLinks: (pageId) => host.pageLinkSource(pageId),
+      fileEmbed: (pageId, embed) => {
+        const target = host.resolveLink(pageId, embed.src);
+        return renderWikiFileEmbed(embed, target.kind === 'outside' ? null : host.source().page(target.id) ?? null, drafts);
+      },
+      trackerReferences,
+    }),
+    [host, trackerReferences, drafts],
+  );
+
+  // A link clicked inside an HTML page; with no embedding page, the open page.
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  useEffect(() => {
+    setWikiHtmlNavigator((fromPageId, href, options) => {
+      const current = routeRef.current;
+      const from = fromPageId ?? (current.kind === 'page' || current.kind === 'item' ? current.id : null);
+      openWikiHtmlLink(href, options, from, {
+        resolveLink: (pageId, link) => host.resolveLink(pageId, link),
+        navigate,
+        itemIdForKey: (key) => {
+          const resolved = trackerReferences.resolve(key);
+          return resolved.state === 'resolved' ? resolved.item.id : null;
+        },
+        openExternal: (link) => window.open(link, '_blank', 'noopener'),
+        notice: setNotice,
+      });
+    });
+    return () => setWikiHtmlNavigator(null);
+  }, [host, navigate, trackerReferences]);
+
+  useEffect(() => setWikiCanvasContext({
+    wikiRoot: root,
+    projectRoot,
+    pages: () => host.source().allPages(),
+    subscribe: (listener) => host.source().subscribe((change) => {
+      if (change.type === 'snapshot') listener();
+    }),
+  }), [host, root, projectRoot]);
+
   return (
     <DraftStoreContext.Provider value={drafts}>
+    <PageEditorServicesContext.Provider value={editorServices}>
     <TrackersUIProvider dataSource={trackers} identity={null}>
       {session ? (
         <CollabDocsUIProvider session={session}>
@@ -144,6 +210,7 @@ export function App({ root, trackers, module }: AppProps) {
         <div className="flex h-full items-center justify-center text-sm text-nim-muted">{notice ?? 'Opening the wiki…'}</div>
       )}
     </TrackersUIProvider>
+    </PageEditorServicesContext.Provider>
     </DraftStoreContext.Provider>
   );
 }
@@ -181,6 +248,8 @@ function Shell({
 }) {
   const typeResolver = module.useBrowserTypeResolver('team');
   const { documents } = useCollabPagesState();
+  const [createMenu, setCreateMenu] = useState<CollabSidebarCreateMenu | null>(null);
+  const reachable = useServerReachable();
 
   // Home is the first top-level page, as `nim wiki init` writes one.
   const home = useMemo(
@@ -197,7 +266,10 @@ function Shell({
     if (!openPageId) return undefined;
     setWorkspaceFileLinkOpener((href) => {
       const target = host.resolveLink(openPageId, href);
-      if (target.kind === 'outside') onNotice(`${target.path} is not a page in this wiki, so it cannot open here. Open it in your editor or in Nimbalyst.`);
+      // An attachment or other file beside the page opens from the server, as the browser shows it.
+      if (target.kind === 'outside' && !/\.md$/i.test(target.path) && !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+        window.open(wikiApi.pageFileUrl(openPageId, href.replace(/[?#].*$/, '')), '_blank', 'noopener');
+      } else if (target.kind === 'outside') onNotice(`${target.path} is not a page in this wiki, so it cannot open here. Open it in your editor or in Nimbalyst.`);
       else navigate(target);
     });
     return () => setWorkspaceFileLinkOpener(null);
@@ -206,6 +278,7 @@ function Shell({
   return (
     <div className="wiki-web-app flex h-full min-h-0">
       <aside className="wiki-web-sidebar flex w-[280px] shrink-0 flex-col border-r border-nim bg-nim-secondary">
+        <WikiCreateMenu menu={createMenu} />
         <div className="min-h-0 flex-1">
           {/* As the desktop's Wiki section: a compact section label and the Home / Search / Types rows above the tree. */}
           <CollabSidebar
@@ -222,6 +295,7 @@ function Shell({
               />
             )}
             typeResolver={typeResolver}
+            registerCreateMenu={setCreateMenu}
             onArchiveItem={async (itemId) => {
               await trackers.command({ type: 'archive-item', itemId, archive: true });
             }}
@@ -229,6 +303,11 @@ function Shell({
         </div>
       </aside>
       <main className="wiki-web-main flex min-w-0 flex-1 flex-col overflow-auto select-text">
+        {reachable ? null : (
+          <div className="wiki-web-server-down border-b border-nim bg-nim-secondary px-4 py-2 text-xs text-nim" role="alert">
+            The wiki server stopped, so changes made here are not saved. Ask your agent to open the wiki in the browser again, or run <code>nim wiki serve</code>; this page reconnects on its own.
+          </div>
+        )}
         {notice ? (
           <div className="wiki-web-notice flex items-start gap-2 border-b border-nim bg-nim-secondary px-4 py-2 text-xs text-nim" role="alert">
             <span className="flex-1">{notice}</span>

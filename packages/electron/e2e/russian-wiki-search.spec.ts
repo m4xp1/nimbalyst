@@ -77,17 +77,17 @@ test.describe.serial('Built Local Wiki Russian search', () => {
   await page.getByTestId('tracker-filter-omnibox-option-field:status').click();
   await expect(input).toHaveValue('status:');
   await page.getByTestId('tracker-filter-omnibox-option-value:draft').click();
-  await expect(view.getByTestId('tracker-active-filter-pill-0')).toBeVisible();
+  await expect(view.getByTestId('tracker-filter-omnibox-pill-0')).toBeVisible();
   await expect(rows).toHaveCount(1);await expect(rows.first()).toHaveAttribute('data-row-id','wiki-form');
   await input.fill('WIKIPROBE624');await expect(rows).toHaveCount(1);await input.press('Escape');
   await view.getByRole('button',{name:'Remove Status filter',exact:true}).click();
   await expect(rows).toHaveCount(2);await expect(input).toHaveValue('WIKIPROBE624');
   await input.fill('WIKIPROBE624 status:done');await input.press('Enter');
   await expect(rows).toHaveCount(1);await expect(rows.first()).toHaveAttribute('data-row-id','wiki-exact');
-  await expect(view.getByTestId('tracker-active-filter-pill-0')).toBeVisible();
+  await expect(view.getByTestId('tracker-filter-omnibox-pill-0')).toBeVisible();
   await view.getByTestId('tracker-filter-omnibox-clear').click();
   await expect(rows).toHaveCount(2);await expect(input).toHaveValue('');
-  await expect(view.getByTestId('tracker-active-filter-pill-0')).toHaveCount(0);
+  await expect(view.getByTestId('tracker-filter-omnibox-pill-0')).toHaveCount(0);
  });
 
  test('disabling Wiki refreshes the connected client, denies cached tools and preserves files',async()=>{

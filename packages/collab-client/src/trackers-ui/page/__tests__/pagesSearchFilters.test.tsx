@@ -25,10 +25,10 @@ describe('Wiki search field filters', () => {
   await waitFor(()=>expect(container.querySelectorAll('tbody tr')).toHaveLength(1));
   expect(container.querySelector('tbody tr')?.getAttribute('data-row-id')).toBe('draft');
   expect(parsePagesSearch(new URLSearchParams(screen.getByTestId('stored-search').textContent!)).filters?.clauses).toEqual([{field:'status',op:'=',value:'draft'}]);
-  expect(screen.getByTestId('tracker-active-filter-pill-0').textContent).toContain('Draft');
+  expect(screen.getByTestId('tracker-filter-omnibox-pill-0').textContent).toContain('Draft');
   fireEvent.change(input,{target:{value:'русский'}});
   expect(container.querySelectorAll('tbody tr')).toHaveLength(1);
-  fireEvent.click(within(screen.getByTestId('tracker-active-filter-pill-0')).getByRole('button',{name:'Remove Status filter'}));
+  fireEvent.click(within(screen.getByTestId('tracker-filter-omnibox-pill-0')).getByRole('button',{name:'Remove Status filter'}));
   expect(container.querySelectorAll('tbody tr')).toHaveLength(2);
   expect((input as HTMLInputElement).value).toBe('русский');
   fireEvent.change(input,{target:{value:'русский status:done'}});

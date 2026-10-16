@@ -19,6 +19,8 @@ import {
   type UpdateAnalyticsState,
 } from './autoUpdaterUtils';
 import { installAtomFeedFilter } from './electronUpdaterPatch';
+import { createWindowsSignatureVerifier } from './windowsSignatureVerifier';
+import type { NsisUpdater } from 'electron-updater';
 
 // Install the atom-feed filter before any AutoUpdaterService is constructed
 // (which is the first thing that triggers electron-updater to read the feed).
@@ -68,6 +70,12 @@ export class AutoUpdaterService {
     // explicit user actions so an official build cannot silently replace the fork.
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
+
+    // electron-updater's stock Authenticode check times out at 20s, which a
+    // freshly downloaded installer can exceed while Defender scans it.
+    if (process.platform === 'win32') {
+      (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = createWindowsSignatureVerifier(log);
+    }
 
     // Configure feed URL based on release channel
     this.configureFeedURL();

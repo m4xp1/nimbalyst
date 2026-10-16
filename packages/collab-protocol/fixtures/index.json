@@ -44,6 +44,15 @@
       "swiftSource": "packages/ios/NimbalystNative/Sources/Sync/IndexReplicationProtocol.swift"
     },
     {
+      "file": "projectConfig.desktop.json",
+      "tsType": "ProjectConfig",
+      "tsSource": "packages/runtime/src/sync/types.ts",
+      "direction": "desktopToIos",
+      "swiftType": "ProjectConfig",
+      "notes": "Decrypted plaintext of encryptedConfig on project index entries and projectConfigUpdate. actions and localWiki are omitted when the project has none; localWiki.types only when the wiki defines types.",
+      "swiftSource": "packages/ios/NimbalystNative/Sources/Sync/SyncProtocol.swift"
+    },
+    {
       "file": "settingsPayload.desktop.json",
       "tsType": "SyncedSettings",
       "tsSource": "packages/runtime/src/sync/types.ts",
@@ -506,6 +515,23 @@
       "swiftType": "FileIndexDeleteBroadcast",
       "swiftSource": "packages/ios/NimbalystNative/Sources/Sync/IndexReplicationProtocol.swift",
       "notes": "Swift file-index broadcast envelope is declared in IndexReplicationProtocol.swift."
+    },
+    {
+      "file": "sessionContextUpdate.json",
+      "tsType": "Extract<ClientMessage, { type: 'sessionContextUpdate' }>",
+      "tsSource": "packages/runtime/src/sync/collabV3WireTypes.ts",
+      "direction": "desktopToServer",
+      "swiftType": "SessionContextUpdateMessage",
+      "swiftSource": "packages/ios/NimbalystNative/Sources/Sync/SyncProtocol.swift",
+      "notes": "Phones do not send this; they receive sessionContextBroadcast. Relayed, never stored. Ciphertext is synthetic; in production it decrypts to client-metadata JSON holding only currentContext."
+    },
+    {
+      "file": "sessionContextBroadcast.json",
+      "tsType": "Extract<ServerMessage, { type: 'sessionContextBroadcast' }>",
+      "tsSource": "packages/runtime/src/sync/collabV3WireTypes.ts",
+      "direction": "serverToIos",
+      "swiftType": "SessionContextBroadcast",
+      "swiftSource": "packages/ios/NimbalystNative/Sources/Sync/SyncProtocol.swift"
     }
   ],
   "findings": [

@@ -11,6 +11,7 @@ export const loadPlacedViewEmbed = () => import('@nimbalyst/collab-client/tracke
 export { setPageMarkAuthorProvider, type PageMarkAuthor } from '@nimbalyst/runtime/editor/plugins/PageMarkPlugin/pageMarkHost';
 export { setCitationHost, type CitationHost } from '@nimbalyst/runtime/editor/plugins/CitationPlugin/citationHost';
 export {
+  openConsoleLink,
   setConsoleLinkOpener,
   setPageReferenceOpener,
   type ConsoleLinkOpener,
@@ -18,6 +19,8 @@ export {
 } from './consoleLinkOpener';
 // Relative file links (`Personas/CMO.md`): a host that serves a folder of pages resolves them itself.
 export { setWorkspaceFileLinkOpener, type WorkspaceFileLinkOpener } from '@nimbalyst/runtime/editor/utils/workspaceLinkNavigation';
+// A host that can render editor files declares their suffixes; a paragraph-isolated link to one then loads as an embed.
+export { registerEmbeddableExtension } from '@nimbalyst/runtime/editor/plugins/EmbedPlugin/embeddableExtensions';
 // trackers-ui must not load the editor graph, so the host builds the views controller from this entry.
 export { createNamedPageViewsController, type NamedPageViewsController } from '@nimbalyst/runtime/editor/plugins/EmbedPlugin/namedPageViewsController';
 // Page history: the markdown diff and revision projection. The dialog is in `./docs-ui`.
@@ -116,6 +119,10 @@ export type {
   TeamRoomSource,
   TextFormatType,
   TrackerReferenceResolver,
+  UploadedEditorAsset,
+  PageLinkOption,
+  PageLinkSource,
+  FileEmbedRequest,
 } from './types';
 export {
   asTeamJwt,

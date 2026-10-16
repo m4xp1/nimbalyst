@@ -22,13 +22,15 @@
 import { runCommitProposalOnce, commitProposalIdentity } from '../services/ai/CommitProposalExecution';
 import { resolveGitCommitProposalPromptId } from '../services/ai/gitCommitProposalPromptUtils';
 import { ipcMain } from 'electron';
-import simpleGit, { SimpleGit } from 'simple-git';
+import type { SimpleGit } from 'simple-git';
+import { createGit } from '../services/gitClient';
 import log from 'electron-log/main';
 import { existsSync } from 'fs';
 import { dirname, join, relative, isAbsolute, resolve } from 'path';
 import { gitOperationLock } from '../services/GitOperationLock';
 import { executeGitCommitAcrossRepos, toRepositoryRelativePath, type HunkSelection } from '../services/GitCommitService';
 import { getGitSubprocessEnv, simpleGitWithHookEnv } from '../services/gitEnv';
+import { simpleGitReadOnly } from '../services/gitReadOnly';
 import { SessionCommitService } from '../services/SessionCommitService';
 import { safeHandle } from '../utils/ipcRegistry';
 import { findGitRootForFile } from '../services/GitStatusService';
@@ -283,7 +285,7 @@ function parseGitStatusPorcelainV1Z(rawStatus: string): GitWorkingChanges {
  * vocabulary used by consumers.
  */
 export async function getWorkingChanges(repoPath: string): Promise<GitWorkingChanges> {
-  const git: SimpleGit = simpleGit(repoPath, { config: ['core.optionalLocks=false'] });
+  const git: SimpleGit = simpleGitReadOnly(repoPath);
   const rawStatus = await git.raw(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   return parseGitStatusPorcelainV1Z(rawStatus);
 }
@@ -332,12 +334,12 @@ export async function discardGitChanges(
 /**
  * Read the branch/ahead-behind snapshot the title bar and Git panel both render.
  *
- * `core.optionalLocks=false` tells git to skip the index refresh that would
+ * GIT_OPTIONAL_LOCKS=0 (simpleGitReadOnly) tells git to skip the index refresh that would
  * create `.git/index.lock`, so this read can run concurrently with writes
  * (commit/rebase/etc.) without queueing behind them on `gitOperationLock`.
  */
 export async function readBranchStatus(repoPath: string): Promise<GitStatusResult> {
-  const git: SimpleGit = simpleGit(repoPath, { config: ['core.optionalLocks=false'] });
+  const git: SimpleGit = simpleGitReadOnly(repoPath);
   const status = await git.status();
   return {
     branch: normalizeCurrentBranch(status.current) || 'HEAD',
@@ -428,7 +430,7 @@ export function registerGitHandlers(): void {
       }
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
 
         if (!(await hasCommits(git))) {
           return [];
@@ -496,7 +498,7 @@ export function registerGitHandlers(): void {
     if (!isGitRepository(repoPath)) return { branches: [], current: '' };
 
     try {
-      const git: SimpleGit = simpleGit(repoPath);
+      const git: SimpleGit = createGit(repoPath);
       const summary = await git.branch();
       let current = normalizeCurrentBranch(summary.current);
       let branches = summary.all;
@@ -606,7 +608,7 @@ export function registerGitHandlers(): void {
 
           // Check for conflict markers in error message
           if (message.includes('CONFLICT') || message.includes('conflict')) {
-            const git: SimpleGit = simpleGit(repoPath);
+            const git: SimpleGit = createGit(repoPath);
             const status = await git.status();
             return { success: false, error: message, conflicts: status.conflicted };
           }
@@ -656,7 +658,7 @@ export function registerGitHandlers(): void {
       return gitOperationLock.withLock(repoPath, 'git:rebase', async () => {
         const result = await runGitCommandStreaming(operationLog, repoPath, args);
         if (result.success) return { success: true };
-        const status = await simpleGit(repoPath).status();
+        const status = await createGit(repoPath).status();
         return { success: false, error: result.error, conflicts: status.conflicted };
       });
     }
@@ -673,7 +675,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(repoPath)) return { isRebasing: false, conflicts: [] };
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
 
         // Check for REBASE_HEAD file as indicator of active rebase
         const rebaseHeadPath = join(repoPath, '.git', 'REBASE_HEAD');
@@ -763,7 +765,7 @@ export function registerGitHandlers(): void {
       return gitOperationLock.withLock(repoPath, 'git:cherry-pick', async () => {
         const result = await runGitCommandStreaming(operationLog, repoPath, ['cherry-pick', hash]);
         if (result.success) return { success: true };
-        const status = await simpleGit(repoPath).status();
+        const status = await createGit(repoPath).status();
         return { success: false, error: result.error, conflicts: status.conflicted };
       });
     }
@@ -807,7 +809,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(repoPath)) return null;
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
 
         const [bodyRaw, numstatRaw, nameStatusRaw] = await Promise.all([
           git.raw(['show', '-s', '--format=%B', hash]),
@@ -871,7 +873,7 @@ export function registerGitHandlers(): void {
         return { staged: [], unstaged: [], untracked: [], conflicted: [] };
       }
 
-      // core.optionalLocks=false skips the index refresh that would create
+      // GIT_OPTIONAL_LOCKS=0 skips the index refresh that would create
       // .git/index.lock, allowing this read to run concurrently with writes
       // without queueing on gitOperationLock.
       try {
@@ -911,7 +913,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(repoPath)) return { success: false, error: 'Not a git repository' };
 
       return gitOperationLock.withLock(repoPath, 'git:unstage', async () => {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
         const args = await hasCommits(git)
           ? ['reset', 'HEAD', '--', ...files]
           : ['rm', '--cached', '--', ...files];
@@ -949,7 +951,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(repoPath)) return '';
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
         const content = await git.show([`${hash}:${filePath}`]);
         return content;
       } catch (error) {
@@ -978,7 +980,7 @@ export function registerGitHandlers(): void {
       }
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
 
         // In a fresh repo with no commits, diff against an empty tree instead of HEAD
         if (!(await hasCommits(git))) {
@@ -1031,7 +1033,7 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(gitWorkspacePath)) {
         return { unifiedDiff: '', isBinary: false };
       }
-      const git: SimpleGit = simpleGit(gitWorkspacePath);
+      const git: SimpleGit = createGit(gitWorkspacePath);
       const repoHasCommits = await hasCommits(git);
 
       try {
@@ -1128,7 +1130,7 @@ export function registerGitHandlers(): void {
       }
 
       try {
-        const git: SimpleGit = simpleGit(repoPath);
+        const git: SimpleGit = createGit(repoPath);
         const diff = await git.raw(['show', '--no-color', '--format=', hash, '--', filePath]);
         return { unifiedDiff: diff, isBinary: /\bBinary files\b/.test(diff) };
       } catch (error) {

@@ -689,6 +689,13 @@ export function getAdditionalDirectoriesForWorkspace(
   // read shared configs (.claude/settings.json, package.json) and reach the
   // shared .git common dir for operations like `git rebase --continue`.
   if (workspaceIdentity.isWorktree) {
+    // Inherit project attachments without replacing folders attached directly
+    // to an independently opened worktree. Preserve project-path alias lookup.
+    const attachedFrom = resolveProjectPathCandidates(workspacePath)
+      .find((candidate) => getAttachedFolders(candidate).length > 0);
+    for (const attached of attachedFrom ? getAttachedFolders(attachedFrom) : []) {
+      additionalDirs.add(attached);
+    }
     additionalDirs.add(projectPath);
   }
 

@@ -28,6 +28,8 @@ public struct SessionListRow: Identifiable, Hashable, Sendable {
     public var updatedAt: Int
     public var lastReadAt: Int?
     public var lastMessageAt: Int?
+    /// The desktop withholds this session's transcript; see `Session`.
+    public var transcriptSyncDisabled: Bool = false
 
     /// Derived display metadata; never persisted or sent over sync.
     public var treeDepth: Int = 0
@@ -46,7 +48,7 @@ public struct SessionListRow: Identifiable, Hashable, Sendable {
         "id", "projectId", "titleDecrypted", "provider", "model", "phase",
         "sessionType", "agentRole", "parentSessionId", "createdBySessionId", "worktreeId",
         "isArchived", "isPinned", "isExecuting", "hasQueuedPrompts",
-        "createdAt", "updatedAt", "lastReadAt", "lastMessageAt"
+        "createdAt", "updatedAt", "lastReadAt", "lastMessageAt", "transcriptSyncDisabled"
     ]
 
     static func selectList(alias: String, prefix: String = "") -> String {
@@ -74,7 +76,8 @@ public struct SessionListRow: Identifiable, Hashable, Sendable {
         createdAt: Int = 0,
         updatedAt: Int = 0,
         lastReadAt: Int? = nil,
-        lastMessageAt: Int? = nil
+        lastMessageAt: Int? = nil,
+        transcriptSyncDisabled: Bool = false
     ) {
         self.id = id
         self.projectId = projectId
@@ -95,6 +98,7 @@ public struct SessionListRow: Identifiable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.lastMessageAt = lastMessageAt
+        self.transcriptSyncDisabled = transcriptSyncDisabled
     }
 
     init(row: Row, prefix: String = "") {
@@ -119,6 +123,7 @@ public struct SessionListRow: Identifiable, Hashable, Sendable {
         updatedAt = row["\(prefix)updatedAt"] ?? 0
         lastReadAt = row["\(prefix)lastReadAt"]
         lastMessageAt = row["\(prefix)lastMessageAt"]
+        transcriptSyncDisabled = row["\(prefix)transcriptSyncDisabled"] ?? false
     }
 }
 
@@ -278,7 +283,9 @@ enum SessionListSQL {
     }
 
     /// Resolve the visible tree root through parent links, independently of role.
-    static let groupKeyCase = SessionTreeSQL.groupKey(visible: visible)
+    private static func groupKeys(_ name: String, seeds: String) -> String {
+        SessionTreeSQL.groupKeys(name, seeds: seeds, visible: visible)
+    }
 
     private static let memberColumns = """
         b.id, b.projectId, b.sessionType, b.agentRole, b.parentSessionId,
@@ -319,24 +326,21 @@ enum SessionListSQL {
                 : ""
             let keyset = keysetPrefilter ? "AND b.updatedAt <= :cursorTs" : ""
             return """
-            candidate AS MATERIALIZED (
-                SELECT \(groupKeyCase) AS groupKey
-                FROM sessions b
+            \(groupKeys("candidate", seeds: """
+                SELECT b.id FROM sessions b
                 WHERE \(visible("b")) \(attention) \(keyset)
                 ORDER BY b.updatedAt DESC, b.id DESC
                 LIMIT :candidateLimit
-            ),
+                """)),
             keys AS MATERIALIZED (
                 SELECT DISTINCT \(keyParts("groupKey")) FROM candidate
             )
             """
         case .session:
             return """
+            \(groupKeys("focus", seeds: "SELECT b.id FROM sessions b WHERE b.id = :focusId AND \(visible("b"))")),
             keys AS MATERIALIZED (
-                SELECT \(keyParts("groupKey")) FROM (
-                    SELECT \(groupKeyCase) AS groupKey FROM sessions b
-                    WHERE b.id = :focusId AND \(visible("b"))
-                )
+                SELECT \(keyParts("groupKey")) FROM focus
             )
             """
         case .explicit:
@@ -358,18 +362,21 @@ enum SessionListSQL {
         SELECT c.id FROM sessions c INDEXED BY idx_sessions_parent JOIN subtree p ON c.parentSessionId = p.id
         WHERE \(visible("c"))
     ),
-    classified AS MATERIALIZED (
-            SELECT \(memberColumns), \(groupKeyCase) AS groupKey FROM sessions b
+    \(groupKeys("linked", seeds: """
+            SELECT b.id FROM sessions b
             WHERE \(visible("b")) AND b.id IN (SELECT anchor FROM keys WHERE groupKind <> 'wt')
             UNION
-            SELECT \(memberColumns), \(groupKeyCase) AS groupKey FROM sessions b
+            SELECT b.id FROM sessions b
             WHERE \(visible("b")) AND b.id IN (SELECT id FROM subtree)
             UNION
-            SELECT \(memberColumns), \(groupKeyCase) AS groupKey FROM sessions b
+            SELECT b.id FROM sessions b
             WHERE \(visible("b")) AND b.createdBySessionId IN (SELECT anchor FROM keys WHERE groupKind = 'meta')
             UNION
-            SELECT \(memberColumns), \(groupKeyCase) AS groupKey FROM sessions b
+            SELECT b.id FROM sessions b
             WHERE \(visible("b")) AND b.worktreeId IN (SELECT anchor FROM keys WHERE groupKind = 'wt')
+            """)),
+    classified AS MATERIALIZED (
+        SELECT \(memberColumns), k.groupKey FROM linked k JOIN sessions b ON b.id = k.sessionId
     ),
     member AS MATERIALIZED (
         SELECT

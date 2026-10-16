@@ -27,6 +27,8 @@ data class MessageEntity(
     val iv: String = "",
     val contentDecrypted: String? = null,
     val metadataJson: String? = null,
+    /** Unused since #1711 was simplified; kept so Room schema 7 still validates. */
+    val projectionJson: String? = null,
     val createdAt: Long,
 )
 
