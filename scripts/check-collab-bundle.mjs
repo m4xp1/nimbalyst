@@ -56,7 +56,10 @@ export const COLLAB_BUNDLE_EAGER_GZIP_BUDGET_BYTES = {
   // 2026-10-09: 362,835 after the wiki blocks gained bottom-right resize
   // grips and block-menu items (type, title, columns, depth, reset size).
   // Raised from 359,000 with ~2% headroom.
-  editor: 370_000,
+  // Fork 0.81.7 measured 371,299 bytes. A/B with upstream-tag versions of
+  // the fork-modified bundle modules measured 367,645 (same dependencies).
+  // Russian matching and retained fork behavior add 3,654; <0.2% headroom.
+  editor: 372_000,
   // Measured at 70,625 gzip bytes on 2026-09-08, when the list took over
   // folder browsing from the tree for the browser console (folder rows, the
   // browse scope, the row "more" action). The row context menu itself is
@@ -80,7 +83,9 @@ export const COLLAB_BUNDLE_EAGER_GZIP_BUDGET_BYTES = {
   // NFC/source mapping and Russian Snowball 3.1.1. A measurement-only build
   // without Snowball is 92,538 bytes (2,602 bytes for the stemmer); no editor
   // or transport became eager. Reset just this entry with <1% headroom.
-  'docs-ui': 96_000,
+  // Fork 0.81.7 measured 96,352; the same upstream-module A/B was 91,848.
+  // Retained Russian search/filter behavior adds 4,504; <0.7% headroom.
+  'docs-ui': 97_000,
   // Sep 5 privacy-aware document transport graph measured 35,049 bytes.
   // Keep a narrow allowance for the supported response/refresh contract.
   'feedback-ui': 35_500,
