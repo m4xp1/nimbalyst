@@ -14,9 +14,27 @@ describe('semantic candidate relevance policy',()=>{
   const root=mkdtempSync(path.join(tmpdir(),'memory-relevance-')),dbPath=path.join(root,'index.db');
   const embedder={info:{id:'openai',model:'text-embedding-3-small',dims:2},embed:vi.fn(async(texts:string[])=>texts.map(()=>[1,0]))};
   const store=new SqliteStore(dbPath);store.setEmbedderInfo(embedder.info);store.upsertChunks([chunk('fact','Интерфейс должен быть на русском языке.',.309)]);store.close();
-  const engine=MemoryEngine.create({root,dbPath,factsDir:'facts',sources:[]},embedder);
+  // Persisted candidates remain searchable only inside the active source rules.
+  const engine=MemoryEngine.create({root,dbPath,factsDir:'facts',sources:[{sourceClass:'docs',include:['fact.md']}]},embedder);
   try {expect(await engine.search('кошечки')).toHaveLength(1);const hits=await engine.search('языке');expect(hits).toHaveLength(1);expect(hits[0].signals).toEqual({dense:true,sparse:true});expect(embedder.embed).toHaveBeenCalledTimes(2);}
   finally {await engine.close();rmSync(root,{recursive:true,force:true});}
+ });
+ it('hides saved documents outside current source rules without rewriting their text or vectors',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-saved-rules-')),dbPath=path.join(root,'index.db');
+  const embedder={info:{id:'openai',model:'text-embedding-3-small',dims:2},embed:vi.fn(async(texts:string[])=>texts.map(()=>[1,0]))};
+  const saved=chunk('fact','Интерфейс должен быть на русском языке.',.309);
+  const store=new SqliteStore(dbPath);store.setEmbedderInfo(embedder.info);store.setSourcePathFormat(2);store.upsertChunks([saved]);const before=store.loadAll();store.close();
+  try {
+   for(const sources of [[],[{sourceClass:'docs',include:['other.md']}],[{sourceClass:'docs',include:['fact.md'],exclude:['fact.md']}]]) {
+    const engine=MemoryEngine.create({root,dbPath,factsDir:'facts',sources},embedder);
+    try {expect(await engine.search('языке')).toEqual([]);expect(engine.expand('fact.md',[])).toBeNull();}
+    finally {await engine.close();}
+   }
+   const reopened=new SqliteStore(dbPath);try {expect(reopened.loadAll()).toEqual(before);}finally{reopened.close();}
+   const included=MemoryEngine.create({root,dbPath,factsDir:'facts',sources:[{sourceClass:'docs',include:['fact.md']}]},embedder);
+   try {expect((await included.search('языке')).map(hit=>hit.sourcePath)).toEqual(['fact.md']);expect(embedder.embed).toHaveBeenCalledTimes(4);}
+   finally {await included.close();}
+  }finally{rmSync(root,{recursive:true,force:true});}
  });
  it('returns nearest candidates even for weak similarities',()=>{
   const retriever=new Retriever([chunk('fact','Интерфейс продукта на русском языке.',.324),chunk('doc','Сравнить сумму установщика.',.126)]);
