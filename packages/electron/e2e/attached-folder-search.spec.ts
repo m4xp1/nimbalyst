@@ -30,6 +30,9 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   workspace=path.join(temp,'main');attached=path.join(temp,'link');permissionOnly=path.join(temp,'permissions-only');
   for(const dir of [workspace,attached,permissionOnly]){await fs.mkdir(path.join(dir,'docs'),{recursive:true});execFileSync('git',['init',dir],{stdio:'ignore',windowsHide:true});}
   await fs.mkdir(path.join(attached,'archive'));await fs.mkdir(path.join(temp,'user'));await fs.mkdir(path.join(temp,'tmp'));
+  await fs.mkdir(path.join(workspace,'ignored'));
+  await fs.writeFile(path.join(workspace,'.gitignore'),'ignored/\n');
+  await fs.writeFile(path.join(workspace,'ignored','Скрытый.md'),'СкрытыйКонтентМаркер');
   await fs.writeFile(path.join(workspace,'docs','Приёмка.md'),'# Primary\nОсновнойПоисковыйМаркер');
   await fs.writeFile(path.join(attached,'docs','Приёмка.md'),'# Attached\nРусский интерфейс. ПодключеннаяПапкаМаркер');
   await fs.writeFile(path.join(attached,'archive','archive.md'),'# Archive\nАрхивПодключеннойПапкиМаркер');
@@ -86,6 +89,9 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:path.join(workspace,'docs')})).success).toBe(true);
   await search('Files','ПРИЕМКА');await expect(page.locator('.files-pane .unified-quick-open-item').filter({hasText:'Приёмка.md'})).toHaveCount(1);
   expect((await call('search_project_knowledge',{query:'ОсновнойПоисковыйМаркер'})).chunks).toHaveLength(1);
+  expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:path.join(workspace,'ignored')})).success).toBe(true);
+  await search('Files','Скрытый');await expect(page.locator('.files-pane .unified-quick-open-item').filter({hasText:'Скрытый.md'})).toHaveCount(0);
+  await search('In Files','СкрытыйКонтентМаркер');await expect(page.locator('.in-files-pane .unified-quick-open-item')).toHaveCount(0);
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
  },120000);
 });

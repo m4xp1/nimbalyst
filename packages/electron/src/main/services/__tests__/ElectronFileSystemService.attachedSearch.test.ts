@@ -24,6 +24,9 @@ describe('attached folder agent search',()=>{
    expect((await service.searchFiles('ПодключенныйМаркер',{maxResults:1})).results).toHaveLength(1);
    state.roots=[primary];expect((await service.searchFiles('ПодключенныйМаркер')).results).toHaveLength(1);
    fs.writeFileSync(path.join(primary,'same.md'),'NewMarker');expect((await service.searchFiles('ПодключенныйМаркер')).results).toEqual([]);
+   const nested=path.join(primary,'nested');fs.mkdirSync(nested);fs.mkdirSync(path.join(primary,'.git'));
+   fs.writeFileSync(path.join(primary,'.gitignore'),'nested/\n');fs.writeFileSync(path.join(nested,'hidden.md'),'ИсключенныйФайлМаркер');
+   state.roots=[primary,nested];expect((await service.searchFiles('ИсключенныйФайлМаркер')).results).toEqual([]);
   }finally{service.destroy();fs.rmSync(root,{recursive:true,force:true});}
  });
 });

@@ -26,3 +26,9 @@ export function owningSearchRoot(roots: WorkspaceSearchRoot[], file: string, can
   const candidates = roots.filter(root => { const base=searchPathKey(root.path); return key===base || key.startsWith(base+path.sep); });
   return candidates.find(root => root.id === null) ?? candidates.sort((a,b)=>b.path.length-a.path.length)[0];
 }
+
+/** Do not name a primary descendant explicitly to rg: that would bypass its ignore rules. */
+export function scanSearchRoots(roots: WorkspaceSearchRoot[]): WorkspaceSearchRoot[] {
+  const primary=roots.find(root=>root.id===null), base=primary && searchPathKey(primary.path);
+  return roots.filter(root=>root.available && (!base || root.id===null || !searchPathKey(root.path).startsWith(base+path.sep)));
+}
