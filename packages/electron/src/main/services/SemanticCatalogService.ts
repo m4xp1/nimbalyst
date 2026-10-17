@@ -354,6 +354,15 @@ export class SemanticCatalogService {
     return this.readiness.get(workspacePath) === true;
   }
 
+  /** Opening Quick Open must recover after an idle empty index gains live records. */
+  async checkAvailability(workspacePath: string): Promise<boolean> {
+    if (this.isAvailable(workspacePath)) return true;
+    const generation = this.currentGeneration(workspacePath);
+    if (generation < 0) return false;
+    await this.refreshReadiness(workspacePath, generation);
+    return this.isAvailable(workspacePath);
+  }
+
   async query(
     workspacePath: string,
     query: string,
