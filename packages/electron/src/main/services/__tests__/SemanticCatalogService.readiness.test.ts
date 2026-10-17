@@ -162,6 +162,24 @@ describe('SemanticCatalogService readiness', () => {
     expect(service.isAvailable(WORKSPACE)).toBe(false);
   });
 
+  it('rechecks an idle empty index when Quick Open probes after the first live messages', async () => {
+    host.statusRequest.mockResolvedValue(statusPayload({ chunks: 0, indexing: false }));
+    const service = new SemanticCatalogService(); service.start();
+    emitState('running');
+    await vi.waitFor(() => expect(host.statusRequest).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(service.isAvailable(WORKSPACE)).toBe(false);
+    expect(host.statusRequest).toHaveBeenCalledTimes(1);
+    // The live session ingest adds chunks without a module transition or file scan.
+    host.statusRequest.mockResolvedValue(statusPayload({ chunks: 3 }));
+    expect(await service.checkAvailability(WORKSPACE)).toBe(true);
+    expect(service.isAvailable(WORKSPACE)).toBe(true);
+    emitState('stopped');
+    expect(await service.checkAvailability(WORKSPACE)).toBe(false);
+    expect(host.statusRequest).toHaveBeenCalledTimes(2);
+    service.stop();
+  });
+
   it('treats keyword-only retrieval as available', async () => {
     // No embedder: the sparse fallback is a working state, not an outage.
     host.statusRequest.mockResolvedValue(

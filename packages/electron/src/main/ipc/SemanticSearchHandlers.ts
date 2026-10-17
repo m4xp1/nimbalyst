@@ -18,7 +18,7 @@ export function registerSemanticSearchHandlers() {
     'semantic-search:available',
     async (_event, workspacePath: string): Promise<boolean> => {
       if (!workspacePath) return false;
-      return SemanticCatalogService.getInstance().isAvailable(workspacePath);
+      return SemanticCatalogService.getInstance().checkAvailability(workspacePath);
     },
   );
 
