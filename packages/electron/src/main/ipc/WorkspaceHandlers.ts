@@ -1,4 +1,5 @@
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
+import { describeWorkspaceSearchRoots, owningSearchRoot } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
 import { join, basename, dirname, extname } from 'path';
@@ -281,9 +282,11 @@ export function registerWorkspaceHandlers() {
             // as a root of its own, so keep each path once.
             const roots = getWorkspaceRoots(workspacePath);
             const seenPaths = new Set<string>();
-            const cache = (await Promise.all(roots.map(rootPath => quickOpenFileNameCache.get(rootPath))))
-                .flat()
+            const cachedRoots = await Promise.all(roots.map(rootPath => quickOpenFileNameCache.get(rootPath)));
+            const currentSearchRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
+            const cache = cachedRoots.flat()
                 .filter(item => {
+                    if (!owningSearchRoot(currentSearchRoots, item.path)) return false;
                     if (seenPaths.has(item.path)) return false;
                     seenPaths.add(item.path);
                     return true;
@@ -399,7 +402,10 @@ export function registerWorkspaceHandlers() {
                 }
             }
 
-            return Array.from(contentMatches.values()).sort((a, b) => {
+            const currentSearchRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
+            return Array.from(contentMatches.values())
+                .filter(item => owningSearchRoot(describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath)), item.path))
+                .sort((a, b) => {
                 const exact = (r: any) => r.matches.some((m: any) => m.keywordMatch !== 'stem');
                 return Number(exact(b)) - Number(exact(a));
             }).slice(0, 50);

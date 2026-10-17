@@ -8,6 +8,7 @@
  * different cap is preserved rather than truncated.
  */
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import path from 'node:path';
 
 let backing: Record<string, unknown> = {};
 
@@ -30,8 +31,8 @@ vi.mock('electron-store', () => {
   return { default: FakeStore };
 });
 
-const PRIMARY = '/tmp/multi-root-primary';
-const ATTACHED = '/tmp/multi-root-attached';
+const PRIMARY = path.resolve('/tmp/multi-root-primary');
+const ATTACHED = path.resolve('/tmp/multi-root-attached');
 
 /** Mirrors `workspaceKey` in the store so fixtures can seed persisted state. */
 function keyFor(workspacePath: string): string {
@@ -85,10 +86,10 @@ describe('attached folders', () => {
     const { attachFolderToWorkspace, getAttachedFolders, MAX_ATTACHED_FOLDERS } = await loadStore();
 
     for (let i = 0; i < MAX_ATTACHED_FOLDERS; i++) {
-      expect(attachFolderToWorkspace(PRIMARY, `/tmp/root-${i}`).ok).toBe(true);
+      expect(attachFolderToWorkspace(PRIMARY, path.resolve(`/tmp/root-${i}`)).ok).toBe(true);
     }
 
-    expect(attachFolderToWorkspace(PRIMARY, '/tmp/root-overflow')).toMatchObject({
+    expect(attachFolderToWorkspace(PRIMARY, path.resolve('/tmp/root-overflow'))).toMatchObject({
       ok: false,
       reason: 'cap-reached',
     });
@@ -99,14 +100,14 @@ describe('attached folders', () => {
     const { attachFolderToWorkspace, detachFolderFromWorkspace, getWorkspaceRoots } = await loadStore();
 
     attachFolderToWorkspace(PRIMARY, ATTACHED);
-    attachFolderToWorkspace(PRIMARY, '/tmp/multi-root-other');
+    attachFolderToWorkspace(PRIMARY, path.resolve('/tmp/multi-root-other'));
 
-    expect(detachFolderFromWorkspace(PRIMARY, `${ATTACHED}/`)).toEqual(['/tmp/multi-root-other']);
-    expect(getWorkspaceRoots(PRIMARY)).toEqual([PRIMARY, '/tmp/multi-root-other']);
+    expect(detachFolderFromWorkspace(PRIMARY, `${ATTACHED}/`)).toEqual([path.resolve('/tmp/multi-root-other')]);
+    expect(getWorkspaceRoots(PRIMARY)).toEqual([PRIMARY, path.resolve('/tmp/multi-root-other')]);
   });
 
   it('preserves a persisted list longer than the current cap', async () => {
-    const overCap = Array.from({ length: 12 }, (_, i) => `/tmp/persisted-${i}`);
+    const overCap = Array.from({ length: 12 }, (_, i) => path.resolve(`/tmp/persisted-${i}`));
     backing[keyFor(PRIMARY)] = { workspacePath: PRIMARY, attachedFolders: overCap };
 
     const { getAttachedFolders } = await loadStore();

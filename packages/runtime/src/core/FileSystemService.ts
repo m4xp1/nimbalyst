@@ -10,7 +10,10 @@ export interface FileSearchOptions {
 }
 
 export interface FileSearchResult {
+  /** Absolute for attached-root hits, primary-relative otherwise. */
   file: string;
+  rootPath?: string;
+  relativePath?: string;
   line: number;
   content: string;
 }

@@ -23,6 +23,8 @@ import { logger } from '../utils/logger';
 import { SafePathValidator } from '../security/SafePathValidator';
 import { shouldExcludeFile, shouldExcludeDir, shouldExcludePath, GLOB_EXCLUDE_PATTERNS } from '../utils/fileFilters';
 import { getRipgrepPath } from './ripgrepPath';
+import { getWorkspaceRoots } from '../utils/store';
+import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey } from '../utils/workspaceSearchRoots';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,7 +92,10 @@ export class ElectronFileSystemService implements FileSystemService {
       // arbitrary preprocessor binary per file, so argv/flag injection here
       // would be remote code execution. execFile already blocks shell
       // metacharacters; `--` blocks argv injection.
-      rgArgs.push('--', query, searchPath);
+      const roots = describeWorkspaceSearchRoots(options?.path ? [searchPath] : getWorkspaceRoots(this.workspacePath));
+      const availableRoots = roots.filter(root => root.available);
+      if (!availableRoots.length) return { success: false, error: 'No search roots are available' };
+      rgArgs.push('--', query, ...availableRoots.map(root => root.path));
 
       logger.ai.info('[FileSystemService] Searching files', {
         query,
@@ -98,21 +103,28 @@ export class ElectronFileSystemService implements FileSystemService {
         args: rgArgs
       });
 
-      const { stdout } = await execFileAsync(getRipgrepPath(), rgArgs, {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 30000 // 30 second timeout
-      });
+      let stdout = '';
+      try { ({ stdout } = await execFileAsync(getRipgrepPath(), rgArgs, { maxBuffer: 10 * 1024 * 1024, timeout: 30000 })); }
+      catch (error: any) { if (error.code !== 1) throw error; stdout = error.stdout ?? ''; }
 
       // Parse ripgrep JSON output
       const results: FileSearchResult[] = [];
+      const seen = new Set<string>();
 
       for (const line of stdout.split('\n').filter(Boolean)) {
         try {
           const parsed = JSON.parse(line);
           if (parsed.type === 'match') {
-            const filePath = relative(this.workspacePath, parsed.data.path.text);
+            const absolute = canonicalSearchPath(parsed.data.path.text);
+            const owner = owningSearchRoot(roots, absolute);
+            if (!owner) continue;
+            const key = searchPathKey(absolute) + ':' + parsed.data.line_number;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const filePath = relative(this.workspacePath, absolute);
             results.push({
-              file: filePath,
+              file: owner.id === null ? filePath : absolute,
+              ...(owner.id === null ? {} : { rootPath: owner.path, relativePath: relative(owner.path, absolute) }),
               line: parsed.data.line_number,
               content: parsed.data.lines.text.trim()
             });
@@ -124,7 +136,7 @@ export class ElectronFileSystemService implements FileSystemService {
 
       return {
         success: true,
-        results,
+        results: results.slice(0, Math.max(1, options?.maxResults || 50)),
         totalResults: results.length
       };
     } catch (error) {
