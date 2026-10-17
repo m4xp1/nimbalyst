@@ -4649,55 +4649,983 @@ function projectSnapshot({ state, formatVersion, tableOrders }) {
   };
 }
 
+// packages/search-text/dist/snowball/base-stemmer.js
+var BaseStemmer = class {
+  constructor() {
+    this.current = "";
+    this.c = 0;
+    this.limit = 0;
+    this.limit_backward = 0;
+    this.bra = 0;
+    this.ket = 0;
+    this.af = 0;
+  }
+  /**
+   * @param {string} value
+   */
+  setCurrent(value) {
+    this.current = value;
+    this.c = 0;
+    this.limit = this.current.length;
+    this.limit_backward = 0;
+    this.bra = this.c;
+    this.ket = this.limit;
+  }
+  /**
+   * @return {string}
+   */
+  getCurrent() {
+    return this.current;
+  }
+  /**
+   * @param {BaseStemmer} other
+   */
+  copy_from(other) {
+    this.current = other.current;
+    this.c = other.c;
+    this.limit = other.limit;
+    this.limit_backward = other.limit_backward;
+    this.bra = other.bra;
+    this.ket = other.ket;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  in_grouping(s, min, max) {
+    if (this.c >= this.limit)
+      return false;
+    let ch = this.current.charCodeAt(this.c);
+    if (ch > max || ch < min)
+      return false;
+    ch -= min;
+    if ((s[ch >>> 3] & 1 << (ch & 7)) === 0)
+      return false;
+    this.c++;
+    return true;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  go_in_grouping(s, min, max) {
+    while (this.c < this.limit) {
+      let ch = this.current.charCodeAt(this.c);
+      if (ch > max || ch < min)
+        return true;
+      ch -= min;
+      if ((s[ch >>> 3] & 1 << (ch & 7)) === 0)
+        return true;
+      this.c++;
+    }
+    return false;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  in_grouping_b(s, min, max) {
+    if (this.c <= this.limit_backward)
+      return false;
+    let ch = this.current.charCodeAt(this.c - 1);
+    if (ch > max || ch < min)
+      return false;
+    ch -= min;
+    if ((s[ch >>> 3] & 1 << (ch & 7)) === 0)
+      return false;
+    this.c--;
+    return true;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  go_in_grouping_b(s, min, max) {
+    while (this.c > this.limit_backward) {
+      let ch = this.current.charCodeAt(this.c - 1);
+      if (ch > max || ch < min)
+        return true;
+      ch -= min;
+      if ((s[ch >>> 3] & 1 << (ch & 7)) === 0)
+        return true;
+      this.c--;
+    }
+    return false;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  out_grouping(s, min, max) {
+    if (this.c >= this.limit)
+      return false;
+    let ch = this.current.charCodeAt(this.c);
+    if (ch > max || ch < min) {
+      this.c++;
+      return true;
+    }
+    ch -= min;
+    if ((s[ch >>> 3] & 1 << (ch & 7)) === 0) {
+      this.c++;
+      return true;
+    }
+    return false;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  go_out_grouping(s, min, max) {
+    while (this.c < this.limit) {
+      let ch = this.current.charCodeAt(this.c);
+      if (ch <= max && ch >= min) {
+        ch -= min;
+        if ((s[ch >>> 3] & 1 << (ch & 7)) !== 0) {
+          return true;
+        }
+      }
+      this.c++;
+    }
+    return false;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  out_grouping_b(s, min, max) {
+    if (this.c <= this.limit_backward)
+      return false;
+    let ch = this.current.charCodeAt(this.c - 1);
+    if (ch > max || ch < min) {
+      this.c--;
+      return true;
+    }
+    ch -= min;
+    if ((s[ch >>> 3] & 1 << (ch & 7)) === 0) {
+      this.c--;
+      return true;
+    }
+    return false;
+  }
+  /**
+   * @param {Array<number>} s
+   * @param {number} min
+   * @param {number} max
+   * @return {boolean}
+   */
+  go_out_grouping_b(s, min, max) {
+    while (this.c > this.limit_backward) {
+      let ch = this.current.charCodeAt(this.c - 1);
+      if (ch <= max && ch >= min) {
+        ch -= min;
+        if ((s[ch >>> 3] & 1 << (ch & 7)) !== 0) {
+          return true;
+        }
+      }
+      this.c--;
+    }
+    return false;
+  }
+  /**
+   * @param {string} s
+   * @return {boolean}
+   */
+  eq_s(s) {
+    if (this.limit - this.c < s.length)
+      return false;
+    if (!this.current.startsWith(s, this.c))
+      return false;
+    this.c += s.length;
+    return true;
+  }
+  /**
+   * @param {string} s
+   * @return {boolean}
+   */
+  eq_s_b(s) {
+    if (this.c - this.limit_backward < s.length)
+      return false;
+    if (!this.current.endsWith(s, this.c))
+      return false;
+    this.c -= s.length;
+    return true;
+  }
+  /**
+   * @param {Array<Array<string|number>>} v
+   * @param {?function(): boolean} call_among_func
+   * @return {number}
+   */
+  find_among(v, call_among_func) {
+    let i = 0;
+    let j = v.length;
+    const c = this.c;
+    const l = this.limit;
+    let common_i = 0;
+    let common_j = 0;
+    let first_key_inspected = false;
+    while (true) {
+      const k = i + (j - i >>> 1);
+      let diff = 0;
+      let common2 = common_i < common_j ? common_i : common_j;
+      const w = v[k];
+      let i2;
+      for (i2 = common2; i2 < w[0].length; i2++) {
+        if (c + common2 === l) {
+          diff = -1;
+          break;
+        }
+        diff = this.current.charCodeAt(c + common2) - w[0].charCodeAt(i2);
+        if (diff !== 0)
+          break;
+        common2++;
+      }
+      if (diff < 0) {
+        j = k;
+        common_j = common2;
+      } else {
+        i = k;
+        common_i = common2;
+      }
+      if (j - i <= 1) {
+        if (i > 0)
+          break;
+        if (j === i)
+          break;
+        if (first_key_inspected)
+          break;
+        first_key_inspected = true;
+      }
+    }
+    while (true) {
+      const w = v[i];
+      if (common_i >= w[0].length) {
+        this.c = c + w[0].length;
+        if (w.length < 4)
+          return w[1];
+        this.af = w[3];
+        if (call_among_func.call(this)) {
+          this.c = c + w[0].length;
+          return w[1];
+        }
+      }
+      if (!w[2])
+        return 0;
+      i -= w[2];
+    }
+  }
+  // find_among_b is for backwards processing. Same comments apply
+  /**
+   * @param {Array<Array<string|number>>} v
+   * @param {?function(): boolean} call_among_func
+   */
+  find_among_b(v, call_among_func) {
+    let i = 0;
+    let j = v.length;
+    const c = this.c;
+    const lb = this.limit_backward;
+    let common_i = 0;
+    let common_j = 0;
+    let first_key_inspected = false;
+    while (true) {
+      const k = i + (j - i >> 1);
+      let diff = 0;
+      let common2 = common_i < common_j ? common_i : common_j;
+      const w = v[k];
+      let i2;
+      for (i2 = w[0].length - 1 - common2; i2 >= 0; i2--) {
+        if (c - common2 === lb) {
+          diff = -1;
+          break;
+        }
+        diff = this.current.charCodeAt(c - 1 - common2) - w[0].charCodeAt(i2);
+        if (diff !== 0)
+          break;
+        common2++;
+      }
+      if (diff < 0) {
+        j = k;
+        common_j = common2;
+      } else {
+        i = k;
+        common_i = common2;
+      }
+      if (j - i <= 1) {
+        if (i > 0)
+          break;
+        if (j === i)
+          break;
+        if (first_key_inspected)
+          break;
+        first_key_inspected = true;
+      }
+    }
+    while (true) {
+      const w = v[i];
+      if (common_i >= w[0].length) {
+        this.c = c - w[0].length;
+        if (w.length < 4)
+          return w[1];
+        this.af = w[3];
+        if (call_among_func.call(this)) {
+          this.c = c - w[0].length;
+          return w[1];
+        }
+      }
+      if (!w[2])
+        return 0;
+      i -= w[2];
+    }
+  }
+  /* to replace chars between c_bra and c_ket in this.current by the
+   * chars in s.
+   */
+  /**
+   * @param {number} c_bra
+   * @param {number} c_ket
+   * @param {string} s
+   * @return {number}
+   */
+  #replace_s(c_bra, c_ket, s) {
+    const adjustment = s.length - (c_ket - c_bra);
+    this.current = this.current.slice(0, c_bra) + s + this.current.slice(c_ket);
+    this.limit += adjustment;
+    if (this.c >= c_ket)
+      this.c += adjustment;
+    else if (this.c > c_bra)
+      this.c = c_bra;
+    return adjustment;
+  }
+  /**
+   */
+  #slice_check() {
+    console.assert(this.bra >= 0);
+    console.assert(this.bra <= this.ket);
+    console.assert(this.ket <= this.limit);
+    console.assert(this.limit <= this.current.length);
+  }
+  /**
+   * @param {string} s
+   */
+  slice_from(s) {
+    this.#slice_check();
+    this.#replace_s(this.bra, this.ket, s);
+    this.ket = this.bra + s.length;
+  }
+  /**
+   */
+  slice_del() {
+    this.slice_from("");
+  }
+  /**
+   * @param {number} c_bra
+   * @param {number} c_ket
+   * @param {string} s
+   */
+  insert(c_bra, c_ket, s) {
+    const adjustment = this.#replace_s(c_bra, c_ket, s);
+    if (c_bra <= this.bra)
+      this.bra += adjustment;
+    if (c_bra <= this.ket)
+      this.ket += adjustment;
+  }
+  /**
+   * @return {string}
+   */
+  slice_to() {
+    this.#slice_check();
+    return this.current.slice(this.bra, this.ket);
+  }
+};
+
+// packages/search-text/dist/snowball/russian-stemmer.js
+var a_0 = [
+  ["\u0432", 1],
+  ["\u0438\u0432", 2, 1],
+  ["\u044B\u0432", 2, 2],
+  ["\u0432\u0448\u0438", 1],
+  ["\u0438\u0432\u0448\u0438", 2, 1],
+  ["\u044B\u0432\u0448\u0438", 2, 2],
+  ["\u0432\u0448\u0438\u0441\u044C", 1],
+  ["\u0438\u0432\u0448\u0438\u0441\u044C", 2, 1],
+  ["\u044B\u0432\u0448\u0438\u0441\u044C", 2, 2]
+];
+var a_1 = [
+  ["\u0435\u0435", 1],
+  ["\u0438\u0435", 1],
+  ["\u043E\u0435", 1],
+  ["\u044B\u0435", 1],
+  ["\u0438\u043C\u0438", 1],
+  ["\u044B\u043C\u0438", 1],
+  ["\u0435\u0439", 1],
+  ["\u0438\u0439", 1],
+  ["\u043E\u0439", 1],
+  ["\u044B\u0439", 1],
+  ["\u0435\u043C", 1],
+  ["\u0438\u043C", 1],
+  ["\u043E\u043C", 1],
+  ["\u044B\u043C", 1],
+  ["\u0435\u0433\u043E", 1],
+  ["\u043E\u0433\u043E", 1],
+  ["\u0435\u043C\u0443", 1],
+  ["\u043E\u043C\u0443", 1],
+  ["\u0438\u0445", 1],
+  ["\u044B\u0445", 1],
+  ["\u0435\u044E", 1],
+  ["\u043E\u044E", 1],
+  ["\u0443\u044E", 1],
+  ["\u044E\u044E", 1],
+  ["\u0430\u044F", 1],
+  ["\u044F\u044F", 1]
+];
+var a_2 = [
+  ["\u0435\u043C", 1],
+  ["\u043D\u043D", 1],
+  ["\u0432\u0448", 1],
+  ["\u0438\u0432\u0448", 2, 1],
+  ["\u044B\u0432\u0448", 2, 2],
+  ["\u0449", 1],
+  ["\u044E\u0449", 1, 1],
+  ["\u0443\u044E\u0449", 2, 1]
+];
+var a_3 = [
+  ["\u0441\u044C", 1],
+  ["\u0441\u044F", 1]
+];
+var a_4 = [
+  ["\u043B\u0430", 1],
+  ["\u0438\u043B\u0430", 2, 1],
+  ["\u044B\u043B\u0430", 2, 2],
+  ["\u043D\u0430", 1],
+  ["\u0435\u043D\u0430", 2, 1],
+  ["\u0435\u0442\u0435", 1],
+  ["\u0438\u0442\u0435", 2],
+  ["\u0439\u0442\u0435", 1],
+  ["\u0435\u0439\u0442\u0435", 2, 1],
+  ["\u0443\u0439\u0442\u0435", 2, 2],
+  ["\u043B\u0438", 1],
+  ["\u0438\u043B\u0438", 2, 1],
+  ["\u044B\u043B\u0438", 2, 2],
+  ["\u0439", 1],
+  ["\u0435\u0439", 2, 1],
+  ["\u0443\u0439", 2, 2],
+  ["\u043B", 1],
+  ["\u0438\u043B", 2, 1],
+  ["\u044B\u043B", 2, 2],
+  ["\u0435\u043C", 1],
+  ["\u0438\u043C", 2],
+  ["\u044B\u043C", 2],
+  ["\u043D", 1],
+  ["\u0435\u043D", 2, 1],
+  ["\u043B\u043E", 1],
+  ["\u0438\u043B\u043E", 2, 1],
+  ["\u044B\u043B\u043E", 2, 2],
+  ["\u043D\u043E", 1],
+  ["\u0435\u043D\u043E", 2, 1],
+  ["\u043D\u043D\u043E", 1, 2],
+  ["\u0435\u0442", 1],
+  ["\u0443\u0435\u0442", 2, 1],
+  ["\u0438\u0442", 2],
+  ["\u044B\u0442", 2],
+  ["\u044E\u0442", 1],
+  ["\u0443\u044E\u0442", 2, 1],
+  ["\u044F\u0442", 2],
+  ["\u043D\u044B", 1],
+  ["\u0435\u043D\u044B", 2, 1],
+  ["\u0442\u044C", 1],
+  ["\u0438\u0442\u044C", 2, 1],
+  ["\u044B\u0442\u044C", 2, 2],
+  ["\u0435\u0448\u044C", 1],
+  ["\u0438\u0448\u044C", 2],
+  ["\u044E", 2],
+  ["\u0443\u044E", 2, 1]
+];
+var a_5 = [
+  ["\u0430", 1],
+  ["\u0435\u0432", 1],
+  ["\u043E\u0432", 1],
+  ["\u0435", 1],
+  ["\u0438\u0435", 1, 1],
+  ["\u044C\u0435", 1, 2],
+  ["\u0438", 1],
+  ["\u0435\u0438", 1, 1],
+  ["\u0438\u0438", 1, 2],
+  ["\u0430\u043C\u0438", 1, 3],
+  ["\u044F\u043C\u0438", 1, 4],
+  ["\u0438\u044F\u043C\u0438", 1, 1],
+  ["\u0439", 1],
+  ["\u0435\u0439", 1, 1],
+  ["\u0438\u0435\u0439", 1, 1],
+  ["\u0438\u0439", 1, 3],
+  ["\u043E\u0439", 1, 4],
+  ["\u0430\u043C", 1],
+  ["\u0435\u043C", 1],
+  ["\u0438\u0435\u043C", 1, 1],
+  ["\u043E\u043C", 1],
+  ["\u044F\u043C", 1],
+  ["\u0438\u044F\u043C", 1, 1],
+  ["\u043E", 1],
+  ["\u0443", 1],
+  ["\u0430\u0445", 1],
+  ["\u044F\u0445", 1],
+  ["\u0438\u044F\u0445", 1, 1],
+  ["\u044B", 1],
+  ["\u044C", 1],
+  ["\u044E", 1],
+  ["\u0438\u044E", 1, 1],
+  ["\u044C\u044E", 1, 2],
+  ["\u044F", 1],
+  ["\u0438\u044F", 1, 1],
+  ["\u044C\u044F", 1, 2]
+];
+var a_6 = [
+  ["\u043E\u0441\u0442", 1],
+  ["\u043E\u0441\u0442\u044C", 1]
+];
+var a_7 = [
+  ["\u0435\u0439\u0448\u0435", 1],
+  ["\u043D", 2],
+  ["\u0435\u0439\u0448", 1],
+  ["\u044C", 3]
+];
+var g_v = [33, 65, 8, 232];
+var russian_stemmer_default = class extends BaseStemmer {
+  #I_p2 = 0;
+  #I_pV = 0;
+  /** @return {boolean} */
+  #r_mark_regions() {
+    this.#I_pV = this.limit;
+    this.#I_p2 = this.limit;
+    const v_1 = this.c;
+    lab0: {
+      if (!this.go_out_grouping(g_v, 1072, 1103))
+        break lab0;
+      this.c++;
+      this.#I_pV = this.c;
+      if (!this.go_in_grouping(g_v, 1072, 1103))
+        break lab0;
+      this.c++;
+      if (!this.go_out_grouping(g_v, 1072, 1103))
+        break lab0;
+      this.c++;
+      if (!this.go_in_grouping(g_v, 1072, 1103))
+        break lab0;
+      this.c++;
+      this.#I_p2 = this.c;
+    }
+    this.c = v_1;
+    return true;
+  }
+  /** @return {boolean} */
+  #r_perfective_gerund() {
+    let a;
+    this.ket = this.c;
+    a = this.find_among_b(a_0);
+    if (a === 0)
+      return false;
+    this.bra = this.c;
+    switch (a) {
+      case 1: {
+        lab0: {
+          lab1: {
+            if (!this.eq_s_b("\u0430"))
+              break lab1;
+            break lab0;
+          }
+          if (!this.eq_s_b("\u044F"))
+            return false;
+        }
+        this.slice_del();
+        break;
+      }
+      case 2: {
+        this.slice_del();
+        break;
+      }
+    }
+    return true;
+  }
+  /** @return {boolean} */
+  #r_adjective() {
+    this.ket = this.c;
+    if (this.find_among_b(a_1) === 0)
+      return false;
+    this.bra = this.c;
+    this.slice_del();
+    return true;
+  }
+  /** @return {boolean} */
+  #r_adjectival() {
+    let a;
+    if (!this.#r_adjective())
+      return false;
+    const v_1 = this.limit - this.c;
+    lab0: {
+      this.ket = this.c;
+      a = this.find_among_b(a_2);
+      if (a === 0) {
+        this.c = this.limit - v_1;
+        break lab0;
+      }
+      this.bra = this.c;
+      switch (a) {
+        case 1: {
+          lab1: {
+            lab2: {
+              if (!this.eq_s_b("\u0430"))
+                break lab2;
+              break lab1;
+            }
+            if (!this.eq_s_b("\u044F")) {
+              this.c = this.limit - v_1;
+              break lab0;
+            }
+          }
+          this.slice_del();
+          break;
+        }
+        case 2: {
+          this.slice_del();
+          break;
+        }
+      }
+    }
+    return true;
+  }
+  /** @return {boolean} */
+  #r_reflexive() {
+    this.ket = this.c;
+    if (this.find_among_b(a_3) === 0)
+      return false;
+    this.bra = this.c;
+    this.slice_del();
+    return true;
+  }
+  /** @return {boolean} */
+  #r_verb() {
+    let a;
+    this.ket = this.c;
+    a = this.find_among_b(a_4);
+    if (a === 0)
+      return false;
+    this.bra = this.c;
+    switch (a) {
+      case 1: {
+        lab0: {
+          lab1: {
+            if (!this.eq_s_b("\u0430"))
+              break lab1;
+            break lab0;
+          }
+          if (!this.eq_s_b("\u044F"))
+            return false;
+        }
+        this.slice_del();
+        break;
+      }
+      case 2: {
+        this.slice_del();
+        break;
+      }
+    }
+    return true;
+  }
+  /** @return {boolean} */
+  #r_noun() {
+    this.ket = this.c;
+    if (this.find_among_b(a_5) === 0)
+      return false;
+    this.bra = this.c;
+    this.slice_del();
+    return true;
+  }
+  /** @return {boolean} */
+  #r_derivational() {
+    this.ket = this.c;
+    if (this.find_among_b(a_6) === 0)
+      return false;
+    this.bra = this.c;
+    if (this.#I_p2 > this.c)
+      return false;
+    this.slice_del();
+    return true;
+  }
+  /** @return {boolean} */
+  #r_tidy_up() {
+    let a;
+    this.ket = this.c;
+    a = this.find_among_b(a_7);
+    if (a === 0)
+      return false;
+    this.bra = this.c;
+    switch (a) {
+      case 1: {
+        this.slice_del();
+        this.ket = this.c;
+        if (!this.eq_s_b("\u043D"))
+          return false;
+        this.bra = this.c;
+        if (!this.eq_s_b("\u043D"))
+          return false;
+        this.slice_del();
+        break;
+      }
+      case 2: {
+        if (!this.eq_s_b("\u043D"))
+          return false;
+        this.slice_del();
+        break;
+      }
+      case 3: {
+        this.slice_del();
+        break;
+      }
+    }
+    return true;
+  }
+  /** @return {boolean} */
+  #stem() {
+    const v_1 = this.c;
+    lab0: {
+      while (true) {
+        const v_2 = this.c;
+        lab1: {
+          golab2: while (true) {
+            const v_3 = this.c;
+            lab3: {
+              this.bra = this.c;
+              if (!this.eq_s("\u0451"))
+                break lab3;
+              this.ket = this.c;
+              this.c = v_3;
+              break golab2;
+            }
+            this.c = v_3;
+            if (this.c >= this.limit)
+              break lab1;
+            this.c++;
+          }
+          this.slice_from("\u0435");
+          continue;
+        }
+        this.c = v_2;
+        break;
+      }
+    }
+    this.c = v_1;
+    this.#r_mark_regions();
+    this.limit_backward = this.c;
+    this.c = this.limit;
+    if (this.c < this.#I_pV)
+      return false;
+    const v_4 = this.limit_backward;
+    this.limit_backward = this.#I_pV;
+    const v_5 = this.limit - this.c;
+    lab4: {
+      lab5: {
+        const v_6 = this.limit - this.c;
+        lab6: {
+          if (!this.#r_perfective_gerund())
+            break lab6;
+          break lab5;
+        }
+        this.c = this.limit - v_6;
+        const v_7 = this.limit - this.c;
+        lab7: {
+          if (!this.#r_reflexive()) {
+            this.c = this.limit - v_7;
+            break lab7;
+          }
+        }
+        lab8: {
+          const v_8 = this.limit - this.c;
+          lab9: {
+            if (!this.#r_adjectival())
+              break lab9;
+            break lab8;
+          }
+          this.c = this.limit - v_8;
+          lab10: {
+            if (!this.#r_verb())
+              break lab10;
+            break lab8;
+          }
+          this.c = this.limit - v_8;
+          if (!this.#r_noun())
+            break lab4;
+        }
+      }
+    }
+    this.c = this.limit - v_5;
+    const v_9 = this.limit - this.c;
+    lab11: {
+      this.ket = this.c;
+      if (!this.eq_s_b("\u0438")) {
+        this.c = this.limit - v_9;
+        break lab11;
+      }
+      this.bra = this.c;
+      this.slice_del();
+    }
+    const v_10 = this.limit - this.c;
+    this.#r_derivational();
+    this.c = this.limit - v_10;
+    const v_11 = this.limit - this.c;
+    this.#r_tidy_up();
+    this.c = this.limit - v_11;
+    this.limit_backward = v_4;
+    this.c = this.limit_backward;
+    return true;
+  }
+  /**@return{string}*/
+  stem(input) {
+    this.setCurrent(input);
+    this.#stem();
+    return this.getCurrent();
+  }
+  stemWord = this.stem;
+};
+
+// packages/search-text/dist/allTerms.js
+var WORD = /[\p{L}\p{N}][\p{L}\p{N}\p{M}_]*(?:[./\\-][\p{L}\p{N}][\p{L}\p{N}\p{M}_]*)*/gu;
+var RUSSIAN = /^[а-я]+$/u;
+var EDGE_PUNCTUATION = /^[,!?;:'"«»()[\]{}—–]+|[,!?;:'"«»()[\]{}—–]+$/gu;
+function terms(query) {
+  return normalizeSearchText(query).split(/\s+/).map((t) => t.replace(EDGE_PUNCTUATION, "")).filter(Boolean);
+}
+function sourceRange(p, start, end) {
+  return { start: p.starts[start], end: p.ends[end - 1] };
+}
+function fieldsFor(query, texts) {
+  const qs = terms(query), exact = qs.map(() => false), found = qs.map(() => false);
+  const fields = texts.map((text) => {
+    const p = projectSearchText(text), tokens = [...p.text.matchAll(WORD)];
+    const ranges = [], counts = qs.map(() => 0);
+    qs.forEach((q, i) => {
+      for (let at = p.text.indexOf(q); at >= 0 && counts[i] < 20; at = p.text.indexOf(q, at + q.length)) {
+        const containing = RUSSIAN.test(q) ? tokens.find((t) => RUSSIAN.test(t[0]) && t.index <= at && t.index + t[0].length >= at + q.length) : void 0;
+        ranges.push(containing ? sourceRange(p, containing.index, containing.index + containing[0].length) : sourceRange(p, at, at + q.length));
+        counts[i]++;
+        exact[i] = found[i] = true;
+      }
+      if (counts[i] || !RUSSIAN.test(q))
+        return;
+      const stem = stemSearchToken(q);
+      for (const token of tokens) {
+        if (!RUSSIAN.test(token[0]) || stemSearchToken(token[0]) !== stem)
+          continue;
+        const before = p.text[token.index - 1] ?? "", after = p.text[token.index + token[0].length] ?? "";
+        if (/[/\\_]/u.test(before) || /[/\\_]/u.test(after))
+          continue;
+        const r = sourceRange(p, token.index, token.index + token[0].length);
+        if (/[а-яё][А-ЯЁ]/u.test(text.slice(r.start, r.end)))
+          continue;
+        ranges.push(r);
+        counts[i]++;
+        found[i] = true;
+        if (counts[i] >= 20)
+          break;
+      }
+    });
+    return { ranges: mergeSearchRanges(ranges), counts };
+  });
+  return { fields, exact, found };
+}
+function mergeSearchRanges(ranges) {
+  const merged = [];
+  for (const range of [...ranges].sort((a, b) => a.start - b.start || a.end - b.end)) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end)
+      last.end = Math.max(last.end, range.end);
+    else
+      merged.push({ ...range });
+  }
+  return merged;
+}
+function matchAllSearchTerms(query, texts) {
+  const { fields, exact, found } = fieldsFor(query, texts);
+  if (!found.length || !found.every(Boolean))
+    return null;
+  return { keywordMatch: exact.every(Boolean) ? "exact" : "stem", fields };
+}
+function searchTermRanges(query, text) {
+  return fieldsFor(query, [text]).fields[0].ranges;
+}
+function searchTextSnippet(text, query, length = 140) {
+  const flat = text.replace(/\s+/g, " ").trim(), ranges = searchTermRanges(query, flat);
+  const first = ranges[0], desiredStart = Math.max(0, (first?.start ?? 0) - 45);
+  const desiredEnd = Math.min(flat.length, Math.max(desiredStart + length, first?.end ?? 0));
+  const boundaries = [0, ...Array.from(new Intl.Segmenter("ru", { granularity: "grapheme" }).segment(flat), (s) => s.index + s.segment.length)];
+  const start = boundaries.find((b) => b >= desiredStart) ?? flat.length;
+  const end = boundaries.find((b) => b >= desiredEnd) ?? flat.length;
+  const prefix = start > 0 ? "\u2026" : "";
+  return {
+    snippet: prefix + flat.slice(start, end) + (end < flat.length ? "\u2026" : ""),
+    highlights: ranges.filter((r) => r.start >= start && r.end <= end).map((r) => ({ start: r.start - start + prefix.length, end: r.end - start + prefix.length }))
+  };
+}
+
+// packages/search-text/dist/index.js
+var RUSSIAN_WORD = /^[а-я]+$/u;
+var stemmer = new russian_stemmer_default();
+function normalizeSearchText(text) {
+  return text.normalize("NFC").toLowerCase().normalize("NFC").replace(/ё/g, "\u0435");
+}
+function stemSearchToken(token) {
+  return RUSSIAN_WORD.test(token) ? stemmer.stemWord(token) : token;
+}
+var segments = new Intl.Segmenter("ru", { granularity: "grapheme" });
+function projectSearchText(text, preserveCase = false) {
+  const result = { text: "", starts: [], ends: [] };
+  for (const { segment, index } of segments.segment(text)) {
+    const normalized = preserveCase ? segment.normalize("NFC").replace(/ё/g, "\u0435").replace(/Ё/g, "\u0415") : normalizeSearchText(segment);
+    result.text += normalized;
+    for (let i = 0; i < normalized.length; i++) {
+      result.starts.push(index);
+      result.ends.push(index + segment.length);
+    }
+  }
+  return result;
+}
+
 // packages/local-wiki/src/search.ts
 function fieldText(fields) {
   return Object.values(fields).map((v) => typeof v === "string" ? v : v == null ? "" : JSON.stringify(v)).join(" ");
 }
-function snippetAround(text, term) {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const at = flat.toLowerCase().indexOf(term);
-  if (at < 0) return flat.slice(0, 120);
-  const start = Math.max(0, at - 50);
-  const end = Math.min(flat.length, at + term.length + 70);
-  return (start > 0 ? "..." : "") + flat.slice(start, end) + (end < flat.length ? "..." : "");
-}
-function countOccurrences(haystack, needle) {
-  let count = 0;
-  for (let at = haystack.indexOf(needle); at >= 0 && count < 20; at = haystack.indexOf(needle, at + needle.length)) count++;
-  return count;
-}
 function searchDocs(docs, query, limit) {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return [];
-  const hits = [];
+  const hits = [], seen = /* @__PURE__ */ new Set();
   for (const doc of docs) {
-    const title = doc.title.toLowerCase();
-    const rest = `${doc.body}
-${fieldText(doc.fields)}`;
-    const restLower = rest.toLowerCase();
-    let score = 0;
-    let matched = true;
-    for (const term of terms) {
-      const inTitle = title.includes(term);
-      const inRest = countOccurrences(restLower, term);
-      if (!inTitle && inRest === 0) {
-        matched = false;
-        break;
-      }
-      score += (inTitle ? 10 : 0) + inRest;
-    }
-    if (!matched) continue;
+    if (seen.has(doc.id)) continue;
+    const rest = doc.body + "\n" + fieldText(doc.fields);
+    const match = matchAllSearchTerms(query, [doc.title, rest]);
+    if (!match) continue;
+    seen.add(doc.id);
+    const score = match.fields[0].counts.reduce((sum, n) => sum + (n ? 10 : 0), 0) + match.fields[1].counts.reduce((a, b) => a + b, 0);
     hits.push({
       id: doc.id,
       title: doc.title,
       kind: doc.kind,
       type: doc.type,
       path: doc.path,
-      snippet: snippetAround(rest, terms.find((t) => restLower.includes(t)) ?? terms[0]),
-      score
+      ...searchTextSnippet(rest, query),
+      score,
+      keywordMatch: match.keywordMatch
     });
   }
-  hits.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+  hits.sort((a, b) => Number(a.keywordMatch === "stem") - Number(b.keywordMatch === "stem") || b.score - a.score || a.title.localeCompare(b.title));
   return hits.slice(0, limit);
 }
 
@@ -5676,27 +6604,28 @@ var LocalWiki = class extends WikiTables {
     return [...this.types.values()];
   }
   async readBody(id) {
-    return this.exclusive(async () => {
-      const page = this.state.pages.get(id);
-      let rel;
-      let raw;
-      if (page) {
-        rel = page.path;
-        raw = page.sidecar !== null;
-      } else {
-        const trashed = this.state.trash.get(id);
-        if (!trashed || trashed.manifest.kind !== "page") throw new LocalWikiError("not-found", `No page ${id}`);
-        const entries2 = trashed.manifest.entries ?? {};
-        rel = entries2.md ? relJoin(trashed.entryDir, entries2.md) : entries2.file ? relJoin(trashed.entryDir, entries2.file) : null;
-        raw = !entries2.md && Boolean(entries2.file);
-      }
-      if (!rel) return { markdown: "", version: contentVersion("") };
-      const text = await readFile7(this.abs(rel), "utf8");
-      if (raw) return { markdown: text, version: contentVersion(text) };
-      const parsed = parseMarkdownFile(text);
-      if (!parsed.ok) return { markdown: text, version: contentVersion(text), malformed: true };
-      return { markdown: parsed.body, version: contentVersion(parsed.body) };
-    });
+    return this.exclusive(() => this.readBodyCurrent(id));
+  }
+  async readBodyCurrent(id) {
+    const page = this.state.pages.get(id);
+    let rel;
+    let raw;
+    if (page) {
+      rel = page.path;
+      raw = page.sidecar !== null;
+    } else {
+      const trashed = this.state.trash.get(id);
+      if (!trashed || trashed.manifest.kind !== "page") throw new LocalWikiError("not-found", `No page ${id}`);
+      const entries2 = trashed.manifest.entries ?? {};
+      rel = entries2.md ? relJoin(trashed.entryDir, entries2.md) : entries2.file ? relJoin(trashed.entryDir, entries2.file) : null;
+      raw = !entries2.md && Boolean(entries2.file);
+    }
+    if (!rel) return { markdown: "", version: contentVersion("") };
+    const text = await readFile7(this.abs(rel), "utf8");
+    if (raw) return { markdown: text, version: contentVersion(text) };
+    const parsed = parseMarkdownFile(text);
+    if (!parsed.ok) return { markdown: text, version: contentVersion(text), malformed: true };
+    return { markdown: parsed.body, version: contentVersion(parsed.body) };
   }
   async trackerSnapshot(typeId) {
     return this.exclusive(async () => {
@@ -5743,7 +6672,13 @@ var LocalWiki = class extends WikiTables {
     return this.exclusive(async () => {
       const docs = [];
       for (const page of this.state.pages.values()) {
-        docs.push({ id: page.id, title: page.title, kind: "page", type: page.type, path: page.path, body: page.body, fields: page.fields });
+        let body;
+        try {
+          body = (await this.readBodyCurrent(page.id)).markdown;
+        } catch {
+          continue;
+        }
+        docs.push({ id: page.id, title: page.title, kind: "page", type: page.type, path: page.path, body, fields: page.fields });
       }
       for (const table of this.state.tables.values()) {
         const def = this.types.get(table.typeId);
@@ -5753,7 +6688,9 @@ var LocalWiki = class extends WikiTables {
           docs.push({ id, title, kind: "row", type: table.typeId, path: table.path, body: "", fields });
         }
       }
-      return searchDocs(docs, query, options.limit ?? 50);
+      const types2 = options.typeIds ? new Set(options.typeIds) : null;
+      const excluded = new Set(options.excludeIds ?? []);
+      return searchDocs(docs.filter((doc) => !excluded.has(doc.id) && (!doc.type || !types2 || types2.has(doc.type))), query, options.limit ?? 50);
     });
   }
   async readActivity(id) {
@@ -6485,9 +7422,9 @@ function parseHumanCitationHref(href) {
     return { ...target.agent ? { agent: target.agent } : {}, sessionId: target.sessionId, inputKind: target.inputKind, key: target.key };
   }
   if (!href.startsWith(LEGACY_HUMAN_CITATION_BASE)) return null;
-  const segments = href.slice(LEGACY_HUMAN_CITATION_BASE.length).split("/");
-  if (segments.length !== 3) return null;
-  const [sessionId, inputKind, key] = segments.map(decodeValue);
+  const segments2 = href.slice(LEGACY_HUMAN_CITATION_BASE.length).split("/");
+  if (segments2.length !== 3) return null;
+  const [sessionId, inputKind, key] = segments2.map(decodeValue);
   if (!sessionId || !key || !isCitationInputKind(inputKind)) return null;
   return { sessionId, inputKind, key };
 }
