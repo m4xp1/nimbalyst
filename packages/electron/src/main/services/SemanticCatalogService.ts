@@ -65,6 +65,9 @@ export interface SemanticSearchResult {
   refId: string;
   sourceClass: string;
   sourcePath: string;
+  rootLabel?: string;
+  rootPath?: string;
+  relativePath?: string;
   title: string;
   snippet: string;
   score: number;

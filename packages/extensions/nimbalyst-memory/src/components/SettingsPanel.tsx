@@ -30,6 +30,7 @@ interface IndexStatus {
   indexSizeBytes?: number;
   indexing?: boolean;
   fileIndex?: FileIndexStatus;
+  sourceRootErrors?: Array<{label:string;path:string}>;
   indexedFiles?: number;
   watching?: boolean;
   chunksWithoutVectors?: number;
@@ -436,7 +437,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   const totalChunks = status?.chunks ?? 0;
   const coverage =
     totalChunks > 0 ? Math.round(((status?.denseChunks ?? 0) / totalChunks) * 100) : 0;
-  const indexLabel = status?.indexing ? 'Indexing…' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
+  const indexLabel = status?.indexing ? 'Indexing…' : status?.sourceRootErrors?.length ? 'Partial index' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
   const countLabel = (n:number|null|undefined) => n == null ? 'Unknown' : n.toLocaleString();
   const keywordOnly = isKeywordOnly(status);
   // The provider's error text stays out of the UI; only the fact of it surfaces.
@@ -665,13 +666,13 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
           <h4 style={H4}>
             Coverage
             {status && status.ready !== false && (
-              <span style={chipTone(status.fileIndex?.state === 'ready' ? 'ok' : 'idle')}>
+              <span style={chipTone(!status.sourceRootErrors?.length && status.fileIndex?.state === 'ready' ? 'ok' : 'idle')}>
                 <span
                   style={{
                     width: 7,
                     height: 7,
                     borderRadius: '50%',
-                    background: status.fileIndex?.state === 'ready' ? '#4ade80' : 'var(--nim-text-muted)',
+                    background: !status.sourceRootErrors?.length && status.fileIndex?.state === 'ready' ? '#4ade80' : 'var(--nim-text-muted)',
                   }}
                 />
                 {indexLabel}
@@ -703,6 +704,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         </div>
 
         {statusError && <p style={ERR}>{statusError}</p>}
+        {!!status?.sourceRootErrors?.length && <p role="alert" style={ERR}>Unavailable source folders: {status.sourceRootErrors.map(root=>root.path).join(', ')}. Their old results are excluded.</p>}
 
         {status && status.ready === false && (
           <p style={{ margin: 0, color: muted }}>

@@ -895,7 +895,8 @@ export const MAX_ATTACHED_FOLDERS = 8;
  * and an attached folder that differ only by a trailing slash compare equal.
  */
 function normalizeRootPath(rootPath: string): string {
-  return path.normalize(rootPath).replace(/\/+$/, '');
+  const normalized = path.normalize(rootPath);
+  return normalized === path.parse(normalized).root ? normalized : normalized.replace(/[\\/]+$/, '');
 }
 
 /**

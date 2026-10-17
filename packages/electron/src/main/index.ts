@@ -329,6 +329,7 @@ import { registerCollabV3TestHandlers } from './ipc/CollabV3TestHandlers';
 import { registerHeapSnapshotHandlers } from './ipc/HeapSnapshotHandlers';
 import { getPermissionService } from './services/PermissionService';
 import { ClaudeSettingsManager } from './services/ClaudeSettingsManager';
+import { loadCodexAdditionalDirectories } from './utils/codexAdditionalDirectories';
 import { setClaudeModelPickerSource } from '@nimbalyst/runtime/ai/claudeCustomModels';
 import { TrayManager } from './tray/TrayManager';
 import { pathToFileURL } from 'url';
@@ -2332,7 +2333,9 @@ app.whenReady().then(async () => {
         getAdditionalDirectoriesForWorkspace(workspacePath, { includeSiblingWorktrees: false }),
       ));
     OpenAICodexProvider.setAdditionalDirectoriesLoader((workspacePath: string) =>
-      withAttachmentStagingDirectory(workspacePath, getAdditionalDirectoriesForWorkspace(workspacePath)));
+      loadCodexAdditionalDirectories(workspacePath,
+        withAttachmentStagingDirectory(workspacePath, getAdditionalDirectoriesForWorkspace(workspacePath)),
+        path => ClaudeSettingsManager.getInstance().getEffectiveSettings(path, { strict: true })));
     // #1177: replaces the CLI's own git-status block, which we suppress because
     // it is rebuilt from the live working tree on every resumed turn and busts
     // the prompt cache. The provider resolves this once per session and freezes

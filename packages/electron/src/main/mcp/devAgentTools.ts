@@ -21,7 +21,9 @@
  */
 
 import { realpath, readFile, writeFile, mkdir } from 'fs/promises';
-import { resolve as resolvePath, sep as pathSep, dirname } from 'path';
+import { resolve as resolvePath, sep as pathSep, dirname, relative, isAbsolute } from 'path';
+import { getWorkspaceRoots } from '../utils/store';
+import { describeWorkspaceSearchRoots, owningSearchRoot } from '../utils/workspaceSearchRoots';
 import type { MetaAgentOpenAITool } from './metaAgentServer';
 import { getFileSystemService } from '../window/serviceRegistry';
 import { ElectronFileSystemService } from '../services/ElectronFileSystemService';
@@ -301,13 +303,21 @@ export async function dispatchDevAgentTool(
    */
   onFileWrite?: (change: DevAgentFileWrite) => void
 ): Promise<string> {
-  const svc = getFileSystemService(workspaceRoot) ?? new ElectronFileSystemService(workspaceRoot);
+  let readRoot = workspaceRoot;
+  const requested = asString(args.path);
+  if (['read_file', 'list_files', 'search_files'].includes(name) && requested && isAbsolute(requested)) {
+    const owner = owningSearchRoot(describeWorkspaceSearchRoots(getWorkspaceRoots(workspaceRoot)), requested);
+    if (!owner) return 'Error: requested path is outside workspace search roots.';
+    readRoot = owner.path;
+    args = { ...args, path: relative(readRoot, requested) || '.' };
+  }
+  const svc = getFileSystemService(readRoot) ?? new ElectronFileSystemService(readRoot);
 
   switch (name) {
     case 'read_file': {
       const filePath = asString(args.path);
       if (!filePath) return 'Error: read_file requires a "path" argument.';
-      const escaped = await assertInsideWorkspace(workspaceRoot, filePath);
+      const escaped = await assertInsideWorkspace(readRoot, filePath);
       if (escaped) return escaped;
       const res = await svc.readFile(filePath);
       if (!res.success) return `Error reading ${filePath}: ${res.error ?? 'unknown error'}`;
@@ -325,7 +335,7 @@ export async function dispatchDevAgentTool(
       return clamp(`${filePath} (${slice.length} line(s)${sizeNote})\n${numbered}${truncNote}`);
     }
     case 'list_files': {
-      const listEscaped = await assertInsideWorkspace(workspaceRoot, asString(args.path) ?? '.');
+      const listEscaped = await assertInsideWorkspace(readRoot, asString(args.path) ?? '.');
       if (listEscaped) return listEscaped;
       const res = await svc.listFiles({
         path: asString(args.path),
@@ -348,7 +358,7 @@ export async function dispatchDevAgentTool(
     case 'search_files': {
       const query = asString(args.query);
       if (!query) return 'Error: search_files requires a "query" argument.';
-      const searchEscaped = await assertInsideWorkspace(workspaceRoot, asString(args.path) ?? '.');
+      const searchEscaped = await assertInsideWorkspace(readRoot, asString(args.path) ?? '.');
       if (searchEscaped) return searchEscaped;
       const res = await svc.searchFiles(query, {
         path: asString(args.path),

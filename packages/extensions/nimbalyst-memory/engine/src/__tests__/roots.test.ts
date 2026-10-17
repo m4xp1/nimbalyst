@@ -237,3 +237,38 @@ describe('sourcePath key format stamp', () => {
   });
 
 });
+
+describe('attached-root ownership and cancellation',()=>{
+ it('keeps the primary owner and its exclusions when roots overlap, without merging equal text',async()=>{
+  const {root,memoryDir,config}=setup();
+  mkdirSync(path.join(root,'docs/nested'),{recursive:true});
+  writeFileSync(path.join(root,'docs/same.md'),'# Same\nОдинаковыйТекстКорней');
+  writeFileSync(path.join(memoryDir,'same.md'),'# Same\nОдинаковыйТекстКорней');
+  writeFileSync(path.join(root,'docs/nested/excluded.md'),'# Hidden\nИсключенныйКореньМаркер');
+  config.sources.push({sourceClass:'custom',include:['**/*.md'],root:{id:'nested',path:path.join(root,'docs/nested'),personal:true}});
+  config.workspaceExclude=['docs/nested/excluded.md'];
+  const engine=MemoryEngine.create(config,new FakeEmbedder());
+  try {
+   await engine.indexAll();
+   const hits=(await engine.search('ОдинаковыйТекстКорней',30)).filter(hit=>hit.signals?.sparse);
+   expect(new Set(hits.map(hit=>hit.sourcePath))).toEqual(new Set(['docs/same.md','@memory/same.md']));
+   expect((await engine.search('ИсключенныйКореньМаркер',30)).filter(hit=>hit.signals?.sparse)).toEqual([]);
+   expect(engine.isPersonalSourcePath('@memory/same.md')).toBe(true);
+   expect(resolveInRoots(resolveRoots(root,config.sources),'docs/nested/excluded.md').sourcePath).toBe('docs/nested/excluded.md');
+  }finally{await engine.close();}
+ });
+ it('does not restore removed-root chunks after an in-flight embedding finishes',async()=>{
+  const {memoryDir,config}=setup();writeFileSync(path.join(memoryDir,'late.md'),'# Late\nПозднийУдаленныйКорень');
+  const fake=new FakeEmbedder();let release!:()=>void,entered!:()=>void;
+  const started=new Promise<void>(resolve=>entered=resolve),hold=new Promise<void>(resolve=>release=resolve);
+  let first=true;
+  const engine=MemoryEngine.create(config,{info:fake.info,embed:async texts=>{if(first){first=false;entered();await hold;}return fake.embed(texts);}});
+  try {
+   const backfill=engine.indexAll();await started;
+   const detach=engine.updateSources(config.sources.filter(set=>!set.root),[]);
+   release();await Promise.all([backfill,detach]);
+   expect(engine.expand('@memory/late.md',[])).toBeNull();
+   expect((await engine.search('ПозднийУдаленныйКорень',30)).filter(hit=>hit.sourcePath.startsWith('@memory/'))).toEqual([]);
+  }finally{release?.();await engine.close();}
+ });
+});

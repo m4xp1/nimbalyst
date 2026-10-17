@@ -8,6 +8,10 @@
  * different cap is preserved rather than truncated.
  */
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import {describeWorkspaceSearchRoots,owningSearchRoot} from '../workspaceSearchRoots';
 
 let backing: Record<string, unknown> = {};
 
@@ -30,8 +34,8 @@ vi.mock('electron-store', () => {
   return { default: FakeStore };
 });
 
-const PRIMARY = '/tmp/multi-root-primary';
-const ATTACHED = '/tmp/multi-root-attached';
+const PRIMARY = path.resolve('/tmp/multi-root-primary');
+const ATTACHED = path.resolve('/tmp/multi-root-attached');
 
 /** Mirrors `workspaceKey` in the store so fixtures can seed persisted state. */
 function keyFor(workspacePath: string): string {
@@ -85,10 +89,10 @@ describe('attached folders', () => {
     const { attachFolderToWorkspace, getAttachedFolders, MAX_ATTACHED_FOLDERS } = await loadStore();
 
     for (let i = 0; i < MAX_ATTACHED_FOLDERS; i++) {
-      expect(attachFolderToWorkspace(PRIMARY, `/tmp/root-${i}`).ok).toBe(true);
+      expect(attachFolderToWorkspace(PRIMARY, path.resolve(`/tmp/root-${i}`)).ok).toBe(true);
     }
 
-    expect(attachFolderToWorkspace(PRIMARY, '/tmp/root-overflow')).toMatchObject({
+    expect(attachFolderToWorkspace(PRIMARY, path.resolve('/tmp/root-overflow'))).toMatchObject({
       ok: false,
       reason: 'cap-reached',
     });
@@ -99,14 +103,14 @@ describe('attached folders', () => {
     const { attachFolderToWorkspace, detachFolderFromWorkspace, getWorkspaceRoots } = await loadStore();
 
     attachFolderToWorkspace(PRIMARY, ATTACHED);
-    attachFolderToWorkspace(PRIMARY, '/tmp/multi-root-other');
+    attachFolderToWorkspace(PRIMARY, path.resolve('/tmp/multi-root-other'));
 
-    expect(detachFolderFromWorkspace(PRIMARY, `${ATTACHED}/`)).toEqual(['/tmp/multi-root-other']);
-    expect(getWorkspaceRoots(PRIMARY)).toEqual([PRIMARY, '/tmp/multi-root-other']);
+    expect(detachFolderFromWorkspace(PRIMARY, `${ATTACHED}/`)).toEqual([path.resolve('/tmp/multi-root-other')]);
+    expect(getWorkspaceRoots(PRIMARY)).toEqual([PRIMARY, path.resolve('/tmp/multi-root-other')]);
   });
 
   it('preserves a persisted list longer than the current cap', async () => {
-    const overCap = Array.from({ length: 12 }, (_, i) => `/tmp/persisted-${i}`);
+    const overCap = Array.from({ length: 12 }, (_, i) => path.resolve(`/tmp/persisted-${i}`));
     backing[keyFor(PRIMARY)] = { workspacePath: PRIMARY, attachedFolders: overCap };
 
     const { getAttachedFolders } = await loadStore();
@@ -124,4 +128,19 @@ describe('attached folders', () => {
 
     expect(getAttachedFolders(PRIMARY)).toEqual([ATTACHED]);
   });
+});
+
+it('keys attached roots by canonical full paths and retains primary/deepest ownership',()=>{
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),'root-identities-'));
+  try {
+    const main=path.join(base,'main'),first=path.join(base,'one','link'),second=path.join(base,'two','link'),nested=path.join(first,'docs');
+    for(const dir of [main,first,second,nested])fs.mkdirSync(dir,{recursive:true});
+    const alias=path.join(base,'alias');fs.symlinkSync(first,alias,'junction');
+    const roots=describeWorkspaceSearchRoots([main,first,second,nested,alias]);
+    expect(roots).toHaveLength(4);expect(roots[1].label).toBe(roots[2].label);expect(roots[1].id).not.toBe(roots[2].id);
+    expect(describeWorkspaceSearchRoots([main,alias])[1].id).toBe(roots[1].id);
+    expect(owningSearchRoot(roots,path.join(nested,'file.md'))?.id).toBe(roots[3].id);
+    const overlap=describeWorkspaceSearchRoots([first,nested]);
+    expect(owningSearchRoot(overlap,path.join(nested,'file.md'))?.id).toBeNull();
+  }finally{fs.rmSync(base,{recursive:true,force:true});}
 });

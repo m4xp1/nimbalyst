@@ -458,11 +458,11 @@ export const ProjectPermissionsPanel: React.FC<ProjectPermissionsPanelProps> = (
             <span className="permissions-section-count text-xs px-1.5 py-0.5 rounded bg-[var(--nim-bg-tertiary)] text-[var(--nim-text-muted)]">{permissions?.additionalDirectories.length || 0}</span>
           </div>
           <p className="permissions-section-description text-xs text-[var(--nim-text-muted)] mb-3">
-            Allow the agent to access directories outside this project.
+            Allow agent access, including writes permitted by its mode, outside this project. Applies to Claude Code and Codex. To include a folder in workspace search, use Attach Folder To Workspace.
           </p>
           {permissions?.additionalDirectories.length === 0 ? (
             <div className="permissions-empty-state text-xs text-[var(--nim-text-faint)] py-4 px-3 rounded bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)]">
-              No additional directories. The agent can only access files within this project.
+              No explicitly added agent directories. Workspace folders and provider permissions still apply; this list does not restrict external reading.
             </div>
           ) : (
             <div className="permissions-directory-list flex flex-col gap-2 mb-3">

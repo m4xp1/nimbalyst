@@ -139,6 +139,8 @@ export interface Embedder {
 /** One indexable source set: a class tag plus the globs that feed it. */
 export interface SourceSet {
   sourceClass: string;
+  /** Exclusions relative to this source root. */
+  exclude?: string[];
   /** Glob patterns relative to this set's root (fast-glob syntax). */
   include: string[];
   /**

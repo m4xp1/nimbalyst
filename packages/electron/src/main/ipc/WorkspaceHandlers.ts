@@ -1,4 +1,5 @@
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
+import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
 import { join, basename, dirname, extname } from 'path';
@@ -281,13 +282,21 @@ export function registerWorkspaceHandlers() {
             // as a root of its own, so keep each path once.
             const roots = getWorkspaceRoots(workspacePath);
             const seenPaths = new Set<string>();
-            const cache = (await Promise.all(roots.map(rootPath => quickOpenFileNameCache.get(rootPath))))
-                .flat()
-                .filter(item => {
-                    if (seenPaths.has(item.path)) return false;
-                    seenPaths.add(item.path);
-                    return true;
+            const cachedRoots = await Promise.all(roots.map(rootPath => quickOpenFileNameCache.get(rootPath)));
+            const currentRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
+            const retainedRoots = new Set<string>();
+            const cache = cachedRoots.flatMap((items,index) => {
+                const canonicalRoot=canonicalSearchPath(roots[index]), key=searchPathKey(canonicalRoot);
+                if (!currentRoots.some(root=>root.available && searchPathKey(root.path)===key) || retainedRoots.has(key)) return [];
+                retainedRoots.add(key);
+                // rg does not follow inner symlinks; translate a root alias once, not via fs for every cached file.
+                return items.flatMap(item=>{
+                    const absolute=path.resolve(canonicalRoot,path.relative(roots[index],item.path));
+                    const owner=owningSearchRoot(currentRoots,absolute,false), fileKey=searchPathKey(absolute);
+                    if(!owner || searchPathKey(owner.path)!==key || seenPaths.has(fileKey))return [];
+                    seenPaths.add(fileKey);return [{...item,path:absolute}];
                 });
+            });
             if (cache.length === 0) {
                 return [];
             }
@@ -382,16 +391,18 @@ export function registerWorkspaceHandlers() {
                         if (item.type === 'match') {
                             const match = decodeRipgrepMatch(item.data, trimmedQuery);
                             if (!match) continue;
-                            const filePath = item.data.path.text;
-                            if (!contentMatches.has(filePath)) {
-                                contentMatches.set(filePath, {
+                            const filePath = canonicalSearchPath(item.data.path.text);
+                            const fileKey = searchPathKey(filePath);
+                            if (!contentMatches.has(fileKey)) {
+                                contentMatches.set(fileKey, {
                                     path: path.normalize(filePath),
                                     isContentMatch: true,
                                     matches: []
                                 });
                             }
 
-                            contentMatches.get(filePath).matches.push(match);
+                            const matches=contentMatches.get(fileKey).matches;
+                            if(!matches.some((previous:any)=>previous.line===match.line && previous.start===match.start && previous.end===match.end))matches.push(match);
                         }
                     } catch (e) {
                         // Skip invalid JSON lines
@@ -399,7 +410,10 @@ export function registerWorkspaceHandlers() {
                 }
             }
 
-            return Array.from(contentMatches.values()).sort((a, b) => {
+            const currentSearchRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
+            return Array.from(contentMatches.values())
+                .filter(item => owningSearchRoot(currentSearchRoots, item.path)?.available)
+                .sort((a, b) => {
                 const exact = (r: any) => r.matches.some((m: any) => m.keywordMatch !== 'stem');
                 return Number(exact(b)) - Number(exact(a));
             }).slice(0, 50);

@@ -1516,7 +1516,7 @@ describe('OpenAICodexProvider', () => {
   it.each(['reviewer', 'roots', 'sandbox'])('reattaches a live Codex thread when %s changes', async change => {
     let classifierEnabled = false;
     let roots = ['/parent'];
-    OpenAICodexProvider.setAdditionalDirectoriesLoader(() => roots);
+    OpenAICodexProvider.setAdditionalDirectoriesLoader(async () => roots);
     OpenAICodexProvider.setTrustChecker(() => ({
       trusted: true,
       mode: 'bypass-all',

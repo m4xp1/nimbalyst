@@ -5,13 +5,15 @@ const parse = (text: string) => text.split('\n').map(s => s.trim()).filter(Boole
 export function SourceSettings({ callBackendTool, onApplied }: {
   callBackendTool?: Call; onApplied: () => void;
 }) {
+  const [rootId,setRootId]=useState<string|null>(null);
+  const [roots,setRoots]=useState<Array<{id:string|null;label:string;path:string;available:boolean}>>([]);
   const [include, setInclude] = useState('');
   const [exclude, setExclude] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bridge = useRef({ callBackendTool, onApplied });
   bridge.current = { callBackendTool, onApplied };
-  const draft = useRef({ include: '', exclude: '', loaded: false, dirty: false });
+  const draft = useRef({ rootId:null as string|null, include: '', exclude: '', loaded: false, dirty: false });
   const live = useRef(false);
   const saved = useRef('');
   const submitted = useRef('');
@@ -21,38 +23,62 @@ export function SourceSettings({ callBackendTool, onApplied }: {
     const call = bridge.current.callBackendTool;
     if (!call || !draft.current.loaded || !draft.current.dirty) return;
     const rules: Rules = { version: 1, include: parse(draft.current.include), exclude: parse(draft.current.exclude) };
-    const key = JSON.stringify(rules);
+    const id=draft.current.rootId;
+    const key = JSON.stringify({rootId:id,...rules});
     if (key === submitted.current) return;
     submitted.current = key;
     queue.current = queue.current.then(async () => {
       try {
-        await call('memory.set_sources', rules);
-        saved.current = key;
-        if (live.current) { setError(null); bridge.current.onApplied(); }
+        await call('memory.set_sources', id ? {...rules,rootId:id} : rules);
+        if(draft.current.rootId===id)saved.current = key;
+        if (live.current && draft.current.rootId===id) { setError(null); bridge.current.onApplied(); }
       } catch {
+        if(draft.current.rootId!==id)return;
         if (submitted.current === key) submitted.current = saved.current;
         if (live.current) setError('Could not finish saving sources. Check paths and index status; focus and leave a field to try again.');
         else console.error('[memory] Could not save sources when closing settings.');
       }
     });
   };
+  const generation=useRef(0);
+  const loadRoot = async (id:string|null) => {
+    flush.current();
+    const current=++generation.current;
+    setRootId(id);setLoaded(false);
+    draft.current={rootId:id,include:'',exclude:'',loaded:false,dirty:false};
+    try {
+      await queue.current;
+      const rules:Rules=await bridge.current.callBackendTool?.('memory.get_sources',id ? {rootId:id} : undefined);
+      if(!live.current || current!==generation.current)return;
+      const inc=rules.include.join('\n'),exc=rules.exclude.join('\n');
+      draft.current={rootId:id,include:inc,exclude:exc,loaded:true,dirty:false};
+      saved.current=submitted.current=JSON.stringify({rootId:id,...rules});
+      setInclude(inc);setExclude(exc);setLoaded(true);setError(null);
+    }catch{if(live.current && current===generation.current)setError('Could not load saved sources.');}
+  };
   useEffect(() => {
-    live.current = true;
-    void bridge.current.callBackendTool?.('memory.get_sources').then((rules: Rules) => {
-      if (!live.current || draft.current.dirty) return;
-      const inc = rules.include.join('\n'), exc = rules.exclude.join('\n');
-      draft.current = { include: inc, exclude: exc, loaded: true, dirty: false };
-      saved.current = submitted.current = JSON.stringify(rules);
-      setInclude(inc); setExclude(exc); setLoaded(true);
-    }).catch(() => { if (live.current) setError('Could not load saved sources.'); });
-    return () => { flush.current(); live.current = false; };
+    live.current=true;
+    void loadRoot(null);
+    const refresh=()=>{void bridge.current.callBackendTool?.('memory.get_source_roots').then(value=>{
+      if(live.current && Array.isArray(value)){
+        setRoots(value);
+        if(draft.current.rootId && !value.some(root=>root.id===draft.current.rootId))void loadRoot(null);
+      }
+    }).catch(()=>{});};
+    refresh();const timer=setInterval(refresh,2000);
+    return ()=>{clearInterval(timer);flush.current();live.current=false;generation.current++;};
   }, []);
   const field = { width: '100%', minHeight: 75, fontFamily: 'monospace',
     background: 'var(--nim-bg)', color: 'var(--nim-text)', border: '1px solid var(--nim-border)', borderRadius: 6, padding: 8 } as const;
   return <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Additional text sources</h3>
+    {roots.length>1 && <label>Source folder<select aria-label="Source folder" value={rootId??''} disabled={!loaded}
+      onChange={event=>{void loadRoot(event.target.value||null);}}>
+      {roots.map(root=><option key={root.id??'primary'} value={root.id??''}>{root.label} — {root.path}{root.available?'':' (unavailable)'}</option>)}
+    </select></label>}
+    {roots.some(root=>!root.available) && <p role="alert">Some source folders are unavailable. Their old search results have been removed.</p>}
     <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
-      Add workspace-relative files, folders or globs, one per line. Additional sources
+      Add files relative to the selected source folder, folders or globs, one per line. Additional sources
       support UTF-8 text of any extension, including JSON, YAML, code and files without
       an extension. Binary files are skipped.
     </p>

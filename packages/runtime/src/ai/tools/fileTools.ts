@@ -69,7 +69,7 @@ function resolveCallTarget(ctx: ToolContext | undefined, argPath: unknown) {
  */
 export const searchFilesTool: ToolDefinition = {
   name: 'searchFiles',
-  description: 'Search for files containing specific text within the workspace',
+  description: 'Search for files containing specific text within the workspace and attached folders',
   parameters: {
     type: 'object',
     properties: {
@@ -79,7 +79,7 @@ export const searchFilesTool: ToolDefinition = {
       },
       path: {
         type: 'string',
-        description: 'Optional path to search. Relative paths resolve against the primary workspace root; use an absolute path to search inside a folder attached to this workspace. Defaults to the entire primary root.'
+        description: 'Optional path to search. Relative paths resolve against the primary workspace root; use an absolute path to search inside a folder attached to this workspace. Defaults to the primary workspace and all attached folders.'
       },
       filePattern: {
         type: 'string',

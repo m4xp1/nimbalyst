@@ -116,14 +116,21 @@ export class ClaudeSettingsManager {
   /**
    * Read a settings file, returning undefined if it doesn't exist
    */
-  private async readSettingsFile(filePath: string): Promise<ClaudeSettings | undefined> {
+  private async readSettingsFile(filePath: string, strict = false): Promise<ClaudeSettings | undefined> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content) as ClaudeSettings;
+      const settings = JSON.parse(content) as ClaudeSettings;
+      if (strict && (!settings || typeof settings !== 'object' || Array.isArray(settings))) throw new Error('Expected a settings object');
+      const directories = settings?.permissions?.additionalDirectories;
+      if (strict && directories !== undefined && (!Array.isArray(directories) || directories.some(value => typeof value !== 'string'))) {
+        throw new Error('permissions.additionalDirectories must be an array of directory paths');
+      }
+      return settings;
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return undefined;
       }
+      if (strict) throw new Error(`Cannot read agent permissions from ${filePath}: ${String(error)}`);
       log.warn(`Failed to read settings file: ${filePath}`, error);
       return undefined;
     }
@@ -177,14 +184,14 @@ export class ClaudeSettingsManager {
    * Get effective settings merged from all sources
    * NOTE: Resolves worktree paths to parent project for settings lookup
    */
-  async getEffectiveSettings(workspacePath: string): Promise<EffectiveClaudeSettings> {
+  async getEffectiveSettings(workspacePath: string, options: { strict?: boolean } = {}): Promise<EffectiveClaudeSettings> {
     // Resolve worktree paths to parent project
     const resolvedPath = await resolveWorkspacePathForPermissions(workspacePath);
 
     const [projectShared, projectLocal, userLevel] = await Promise.all([
-      this.readSettingsFile(this.getProjectSharedPath(resolvedPath)),
-      this.readSettingsFile(this.getProjectLocalPath(resolvedPath)),
-      this.readSettingsFile(this.getUserLevelPath()),
+      this.readSettingsFile(this.getProjectSharedPath(resolvedPath), options.strict),
+      this.readSettingsFile(this.getProjectLocalPath(resolvedPath), options.strict),
+      this.readSettingsFile(this.getUserLevelPath(), options.strict),
     ]);
 
     const permissions = this.mergePermissions(
