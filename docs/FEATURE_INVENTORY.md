@@ -207,6 +207,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 ## File Management
 
 - Multi-folder projects -- attach folders from the File menu or quick open; their files participate in the explorer, search, and agent context, with Git tracked per repository; Quick Open, @ mentions and content search also find files in repositories cloned inside a project, and worktree sessions get the project's attached folders
+- Windows fork: attached folders participate in agent file search and the same Memory index as Quick Open. Additional Memory includes/excludes are selected per source folder; full canonical-path root IDs avoid same-name collisions. Detach/unavailable roots remove stale results; overlaps preserve the primary/deepest-root owner and its exclusions. Foreign project databases, sessions, Wiki and personal harness memory are not imported.
 - File tree with expand/collapse and keyboard navigation
 - Virtualized file tree for large repositories
 - Context menu: rename, delete, reveal in Finder, open externally, copy path, move, copy
@@ -241,6 +242,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Echo cancellation
 - Extension-contributed voice tools (`voiceAgent: true` AI tools) and voice session-context providers — any extension can expose tools and start-of-session context to the voice agent
 - Backend-module voice/agent tools — an extension's utility-process can register MCP tools dispatched in-process (no renderer hop), enabling native engines to answer the voice and coding agents sub-second
+- Windows fork: Codex receives Agent Permissions Additional Directories from effective user/project/local settings, alongside attached folders, worktrees, SDK docs and attachment staging. Updates apply next turn; invalid paths/settings are explicit errors. These access directories do not automatically become search roots or commit-tool repositories; sandbox modes and Claude Code behavior remain unchanged.
 - Project-knowledge grounding (Nimbalyst Memory extension) — local hybrid search over your design docs, plans, CLAUDE.md, and notes, available to the voice and coding agents
 - Hands-free brainstorm loop — talk an idea through, kick off a plan (`/design`), have the agent read the written plan back to refine it by voice, then `/implement`; ask "is it done yet?" anytime for live task status
 - Voice agent tool calls (memory lookups, coding-agent questions, and more) are recorded in the voice session transcript and render as tool widgets, including a dedicated memory-recall widget showing the query and the returned source documents (title + snippet)

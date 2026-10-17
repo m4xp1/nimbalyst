@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.2] - 2026-10-17
+
+### Fixed
+- Codex now receives Additional Directories from Agent Permissions and applies updates on the next turn.
+- Search attached folders in Files, In Files, agent file search and Memory; select a source folder for additional Memory rules.
+
 ## [0.81.7+m4xp1.1] - 2026-10-16
 
 ### Changed

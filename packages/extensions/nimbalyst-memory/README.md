@@ -32,6 +32,18 @@ Follow `nextCursor` until `hasMore=false` when the task requires the entire dial
 
 Desktop search responses with session hits include an optional `sessionReadHint`; document-only responses, Quick Open, and the standalone engine do not. Agents use advertised tool names and their existing discovery mechanism for deferred tools. Voice agents retain their existing tools and delegate full/current dialogue reading through `ask_coding_agent`. The standalone engine has no live host-history broker and does not offer `read_session`.
 
+## Attached folders in the Windows fork
+
+**Attach Folder To Workspace** adds a search root to Files, In Files, agent file search and Memory. Each root uses the standard Markdown source rules; attaching a folder does not index every text file or import its project database, Wiki, sessions or personal harness memory.
+
+In Project settings → Memory → **Additional text sources**, select **Source folder**, then enter rules relative to that folder. For example, choose **link** and include `archive/**`. Include/Exclude rules of the main workspace keep their existing `sources.json` format; attached-root rules live separately in the extension's local data. The project files are not rewritten.
+
+Primary source paths remain unchanged. Attached sources use `@<rootId>/<relativePath>`, where the root ID is derived from its full canonical path. Search results show the originating folder; `expand`, `read_doc` and opening a result resolve the same file. Overlapping roots keep the main workspace first, then the most specific attached root, without bypassing that owner's exclusions. Distinct files with equal text stay distinct.
+
+Changes, renames and deletions update the index. Detaching or losing access to a root removes its old results, cancels pending file indexing and leaves other roots available. Coverage reports unavailable roots. Attached content is local and is not automatically added to facts, export or synchronization. Model selection, RRF and recall are unchanged.
+
+**Agent Permissions → Additional Directories** is a separate access setting. It grants agent access under the active sandbox mode and does not add a search root. Codex merges effective user/project/local permissions (including worktree inheritance) with its automatic roots, applies changes on the next turn, and reports unreadable settings or invalid paths. This release does not restrict reading outside the workspace or change permission modes.
+
 ## Development
 
 The app catalog registers file-backed trackers by their workspace-relative path. The engine reads the current Markdown and frontmatter into one TRACKER search entity and removes the separate DOCUMENT entry for that path. The ownership manifest stores identifiers and indexing rules, not the body. These cards remain searchable outside ordinary document include masks; explicit exclusions and inaccessible files suppress their indexed content. Removing the card marker restores the ordinary document rules. Chunks and embeddings remain a rebuildable search cache, while tracker tools read and write the original file.
