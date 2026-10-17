@@ -109,6 +109,7 @@ export class ElectronFileSystemService implements FileSystemService {
 
       // Parse ripgrep JSON output
       const results: FileSearchResult[] = [];
+      const primaryPath = canonicalSearchPath(this.workspacePath);
       const seen = new Set<string>();
 
       for (const line of stdout.split('\n').filter(Boolean)) {
@@ -116,12 +117,12 @@ export class ElectronFileSystemService implements FileSystemService {
           const parsed = JSON.parse(line);
           if (parsed.type === 'match') {
             const absolute = canonicalSearchPath(parsed.data.path.text);
-            const owner = owningSearchRoot(roots, absolute);
+            const owner = owningSearchRoot(roots, absolute, false);
             if (!owner) continue;
             const key = searchPathKey(absolute) + ':' + parsed.data.line_number;
             if (seen.has(key)) continue;
             seen.add(key);
-            const filePath = relative(this.workspacePath, absolute);
+            const filePath = relative(primaryPath, absolute);
             results.push({
               file: owner.id === null ? filePath : absolute,
               ...(owner.id === null ? {} : { rootPath: owner.path, relativePath: relative(owner.path, absolute) }),

@@ -11,7 +11,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import {describeWorkspaceSearchRoots,owningSearchRoot} from '../workspaceSearchRoots';
+import {describeWorkspaceSearchRoots,owningSearchRoot,canonicalSearchPath} from '../workspaceSearchRoots';
 
 let backing: Record<string, unknown> = {};
 
@@ -139,6 +139,7 @@ it('keys attached roots by canonical full paths and retains primary/deepest owne
     const roots=describeWorkspaceSearchRoots([main,first,second,nested,alias]);
     expect(roots).toHaveLength(4);expect(roots[1].label).toBe(roots[2].label);expect(roots[1].id).not.toBe(roots[2].id);
     expect(describeWorkspaceSearchRoots([main,alias])[1].id).toBe(roots[1].id);
+    expect(canonicalSearchPath(path.join(alias,'new','file.md'))).toBe(path.join(fs.realpathSync.native(first),'new','file.md'));
     expect(owningSearchRoot(roots,path.join(nested,'file.md'))?.id).toBe(roots[3].id);
     const overlap=describeWorkspaceSearchRoots([first,nested]);
     expect(owningSearchRoot(overlap,path.join(nested,'file.md'))?.id).toBeNull();

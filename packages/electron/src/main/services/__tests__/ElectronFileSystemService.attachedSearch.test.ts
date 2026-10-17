@@ -12,7 +12,7 @@ import { dispatchDevAgentTool } from '../../mcp/devAgentTools';
 
 describe('attached folder agent search',()=>{
  it('searches all roots, preserves distinct files, limits globally, and removes detached results',async()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'attached-search-'));
+  const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'attached-search-')));
   const primary=path.join(root,'main'),attached=path.join(root,'link');
   fs.mkdirSync(primary);fs.mkdirSync(attached);fs.writeFileSync(path.join(primary,'same.md'),'ПодключенныйМаркер');fs.writeFileSync(path.join(attached,'same.md'),'ПодключенныйМаркер');
   state.roots=[primary,attached,attached+path.sep];const service=new ElectronFileSystemService(primary);
@@ -24,6 +24,10 @@ describe('attached folder agent search',()=>{
    expect((await service.searchFiles('ПодключенныйМаркер',{maxResults:1})).results).toHaveLength(1);
    state.roots=[primary];expect((await service.searchFiles('ПодключенныйМаркер')).results).toHaveLength(1);
    fs.writeFileSync(path.join(primary,'same.md'),'NewMarker');expect((await service.searchFiles('ПодключенныйМаркер')).results).toEqual([]);
+   const alias=path.join(root,'main-alias');fs.symlinkSync(primary,alias,'junction');state.roots=[alias];
+   const aliasService=new ElectronFileSystemService(alias);
+   try { expect((await aliasService.searchFiles('NewMarker')).results?.[0].file).toBe('same.md'); }
+   finally { aliasService.destroy(); }
    const nested=path.join(primary,'nested');fs.mkdirSync(nested);fs.mkdirSync(path.join(primary,'.git'));
    fs.writeFileSync(path.join(primary,'.gitignore'),'nested/\n');fs.writeFileSync(path.join(nested,'hidden.md'),'ИсключенныйФайлМаркер');
    state.roots=[primary,nested];expect((await service.searchFiles('ИсключенныйФайлМаркер')).results).toEqual([]);
