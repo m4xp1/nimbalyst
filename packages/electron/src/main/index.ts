@@ -2335,7 +2335,7 @@ app.whenReady().then(async () => {
     OpenAICodexProvider.setAdditionalDirectoriesLoader((workspacePath: string) =>
       loadCodexAdditionalDirectories(workspacePath,
         withAttachmentStagingDirectory(workspacePath, getAdditionalDirectoriesForWorkspace(workspacePath)),
-        path => ClaudeSettingsManager.getInstance().getEffectiveSettings(path)));
+        path => ClaudeSettingsManager.getInstance().getEffectiveSettings(path, { strict: true })));
     // #1177: replaces the CLI's own git-status block, which we suppress because
     // it is rebuilt from the live working tree on every resumed turn and busts
     // the prompt cache. The provider resolves this once per session and freezes
