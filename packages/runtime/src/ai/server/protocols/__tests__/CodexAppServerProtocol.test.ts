@@ -9,6 +9,7 @@ import {setCodexShellTrackingHost} from '../codexAppServer/shellTracking';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import path from 'node:path';
 
 // IMPORTANT: mock `node:child_process` BEFORE importing the protocol so the
 // module under test picks up the stub.
@@ -52,7 +53,12 @@ class FakeChildProcess extends EventEmitter {
         const line = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 1);
         if (!line.trim()) continue;
-        try { this.writtenLines.push(JSON.parse(line)); }
+        try {
+          const frame = JSON.parse(line);
+          this.writtenLines.push(frame);
+          if (frame.method === 'configRequirements/read') queueMicrotask(() => this.emitLine({ id: frame.id, result: { requirements: null } }));
+          if (frame.method === 'windowsSandbox/readiness') queueMicrotask(() => this.emitLine({ id: frame.id, result: { status: 'ready' } }));
+        }
         catch { this.writtenLines.push({ __unparseable: line }); }
       }
     });
@@ -518,7 +524,7 @@ describe('CodexAppServerProtocol', () => {
 
     const rootsReq = await nextWrittenMatching(child, 'skills/extraRoots/set');
     expect(rootsReq.params).toEqual({
-      extraRoots: ['/tmp/ws/.agents/skills/.nimbalyst-generated'],
+      extraRoots: [path.join('/tmp/ws', '.agents', 'skills', '.nimbalyst-generated')],
     });
     child.emitLine({ id: rootsReq.id, result: {} });
 

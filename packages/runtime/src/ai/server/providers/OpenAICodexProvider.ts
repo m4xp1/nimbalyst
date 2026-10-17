@@ -282,7 +282,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   // Returns paths like sibling worktrees and the parent project root that the
   // Codex transport should pass to the CLI as --add-dir entries so workspace-write
   // sandbox does not block edits to those directories. Issue #37 problem 1.
-  private static additionalDirectoriesLoader: ((workspacePath: string) => string[]) | null = null;
+  private static additionalDirectoriesLoader: ((workspacePath: string) => string[] | Promise<string[]>) | null = null;
 
   // Codex PreToolUse hook config (injected from electron main process).
   // When set, legacy SDK sessions are configured with a PreToolUse hook
@@ -471,7 +471,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     OpenAICodexProvider.enhancedPathLoader = loader;
   }
 
-  public static setAdditionalDirectoriesLoader(loader: ((workspacePath: string) => string[]) | null): void {
+  public static setAdditionalDirectoriesLoader(loader: ((workspacePath: string) => string[] | Promise<string[]>) | null): void {
     OpenAICodexProvider.additionalDirectoriesLoader = loader;
   }
 
@@ -1079,7 +1079,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       //   3. Otherwise, `createSession`.
       // Include authorized sibling roots in the cache key so new worktrees take effect next turn.
       const additionalDirectories = OpenAICodexProvider.additionalDirectoriesLoader
-        ? OpenAICodexProvider.additionalDirectoriesLoader(workspacePath)
+        ? await OpenAICodexProvider.additionalDirectoriesLoader(workspacePath)
         : [];
 
       const permissionKey = codexSessionConfigurationKey(permissionDecision.permissionMode, permissionDecision.agentVerified === true, workspacePath, additionalDirectories);
