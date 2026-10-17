@@ -3,7 +3,16 @@ import { realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 export interface WorkspaceSearchRoot { id: string | null; path: string; label: string; available: boolean; error?: string; }
 export function canonicalSearchPath(value: string): string {
-  try { return realpathSync.native(value); } catch { return path.resolve(value); }
+  const absolute=path.resolve(value), tail:string[]=[];
+  let current=absolute;
+  for (;;) {
+    try { return path.join(realpathSync.native(current),...tail); }
+    catch {
+      const parent=path.dirname(current);
+      if(parent===current)return absolute;
+      tail.unshift(path.basename(current));current=parent;
+    }
+  }
 }
 export function searchPathKey(value: string): string {
   const absolute = path.resolve(value);
