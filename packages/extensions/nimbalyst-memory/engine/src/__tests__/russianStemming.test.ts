@@ -91,7 +91,8 @@ describe('additive Russian Snowball projection', () => {
       db.close(); return result;
     };
     const before = read();
-    const engine = MemoryEngine.create({ root, dbPath, factsDir: 'facts', sources: [] }, embedder);
+    // Opening a saved index does not start a scan; its source must still be enabled.
+    const engine = MemoryEngine.create({ root, dbPath, factsDir: 'facts', sources: [{ sourceClass: 'facts', include: ['fact.md'] }] }, embedder);
     try {
       expect(embedder.embed).not.toHaveBeenCalled();
       const hits = await engine.search('язык');
