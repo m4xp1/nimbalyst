@@ -197,8 +197,11 @@ test('staging refuses a symlink rather than following it out of the allowlist', 
     // directory it did name. Dereferencing copies it into a shipped layer, and
     // the link's own name ("index.ts") says nothing about that.
     const secret = path.join(tmp, 'outside-secret.txt');
-    writeFileSync(secret, 'private');
-    symlinkSync(secret, path.join(repo, 'packages/node/src/linked.ts'));
+    // Windows junctions need no administrator/Developer Mode privilege and
+    // exercise the same final-entry reparse-point refusal.
+    if(process.platform==='win32') { mkdirSync(secret);writeFileSync(path.join(secret,'private.txt'),'private'); }
+    else writeFileSync(secret, 'private');
+    symlinkSync(secret, path.join(repo, 'packages/node/src/linked.ts'), process.platform==='win32' ? 'junction' : 'file');
 
     assert.throws(
       () => stageBuildContext({ repoRoot: repo, outDir: path.join(tmp, 'out') }),
@@ -227,7 +230,7 @@ test('staging refuses a symlinked ancestor directory, not just a symlinked file'
     writeFileSync(path.join(outside, 'scripts/add-node-extensions.mjs'), '// noop\n');
     writeFileSync(path.join(outside, 'package.json'), '{"name":"@fixture/runtime"}');
     rmSync(path.join(repo, 'packages/runtime'), { recursive: true, force: true });
-    symlinkSync(outside, path.join(repo, 'packages/runtime'));
+    symlinkSync(outside, path.join(repo, 'packages/runtime'), process.platform==='win32' ? 'junction' : 'dir');
 
     assert.throws(
       () => stageBuildContext({ repoRoot: repo, outDir: path.join(tmp, 'out') }),
