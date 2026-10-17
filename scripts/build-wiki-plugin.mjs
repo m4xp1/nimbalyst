@@ -131,6 +131,7 @@ const STRAY_MARKER = /<!-- \/?(?:desktop|remote|local)-only\b/;
 
 /** `text` as `side` sees it: its own blocks unwrapped, the other side's dropped. */
 export function applyBranch(text, side, fileLabel = '<text>') {
+  text = text.replace(/\r\n/g, '\n'); // Git's Windows checkout may use CRLF. Generated text is canonical LF.
   if (!text.includes('-only')) return text;
   const other = side === 'desktop' ? 'remote' : 'desktop';
   const out = text
@@ -273,6 +274,12 @@ const BUNDLES = [
   [SESSION_HELPER_OUT, () => bundleSessionHelper()],
   [LOCAL_SERVER_OUT, () => bundleLocalServer()],
   [WIKI_CONTEXT_OUT, () => bundleLocalServer(WIKI_CONTEXT_ENTRY)],
+  // The generated CLI bundles include the existing Russian search package.
+  // Ship its unmodified source and BSD notice with the plugin as with the desktop app.
+  ...['COPYING', 'SOURCE.md', 'base-stemmer.js', 'russian-stemmer.js'].map(name => [
+    path.join(PLUGIN_DIR, 'scripts', 'snowball-russian-3.1.1', name),
+    () => readFileSync(path.join(REPO_ROOT, 'packages/search-text/src/snowball', name), 'utf8'),
+  ]),
 ];
 
 function outputSkills(side) {
@@ -291,7 +298,7 @@ export function checkGenerated({ sourceDir = DEFAULT_SOURCE, targets = DEFAULT_T
   for (const [key, content] of expected) {
     const onDisk = targetPath(targets, key);
     if (!existsSync(onDisk)) stale.push(`missing: ${key}`);
-    else if (readFileSync(onDisk, 'utf8') !== content) stale.push(`changed: ${key}`);
+    else if (readFileSync(onDisk, 'utf8').replace(/\r\n/g, '\n') !== content) stale.push(`changed: ${key}`);
   }
   for (const side of SIDES) {
     for (const skill of outputSkills(side)) {
@@ -304,7 +311,7 @@ export function checkGenerated({ sourceDir = DEFAULT_SOURCE, targets = DEFAULT_T
     for (const [out, generate] of BUNDLES) {
       const rel = path.relative(REPO_ROOT, out);
       if (!existsSync(out)) stale.push(`missing: ${rel}`);
-      else if (readFileSync(out, 'utf8') !== generate()) stale.push(`changed: ${rel}`);
+      else if (readFileSync(out, 'utf8').replace(/\r\n/g, '\n') !== generate().replace(/\r\n/g, '\n')) stale.push(`changed: ${rel}`);
     }
   }
   return stale;
@@ -349,6 +356,7 @@ export function writeGenerated({ sourceDir = DEFAULT_SOURCE, targets = DEFAULT_T
   const written = [...files.keys()];
   if (bundle) {
     for (const [out, generate] of BUNDLES) {
+      mkdirSync(path.dirname(out), { recursive: true });
       writeFileSync(out, generate(), { mode: 0o755 });
       written.push(path.relative(REPO_ROOT, out));
     }

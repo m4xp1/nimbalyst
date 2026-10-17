@@ -169,8 +169,11 @@ test('the commit hooks run the shared script and let a commit through when node 
   const { repo, git } = seedRepo(t);
   writeFile(repo, 'nimbalyst-local/x.md');
   git(['add', '-f', 'nimbalyst-local/x.md']);
+  const shell = process.platform === 'win32'
+    ? path.resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '../../../usr/bin/sh.exe')
+    : '/bin/sh';
   for (const hook of ['pre-commit', 'pre-merge-commit']) {
-    const output = execFileSync('/bin/sh', [path.join(HOOKS_DIR, hook)], { cwd: repo, encoding: 'utf8', env: sandboxEnv({ PATH: '/nonexistent-bin' }) });
+    const output = execFileSync(shell, [path.join(HOOKS_DIR, hook)], { cwd: repo, encoding: 'utf8', env: sandboxEnv({ PATH: '/nonexistent-bin' }) });
     assert.match(output, /WARNING: node is not on PATH/);
   }
 });

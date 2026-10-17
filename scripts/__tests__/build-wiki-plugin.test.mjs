@@ -88,6 +88,7 @@ test('each side drops the other side\'s blocks and unwraps its own', () => {
   assert.throws(() => applyBranch('<!-- remote-only -->\nno end\n', 'desktop', 'x.md'), /unbalanced/);
   // Files without markers pass through byte for byte, blank lines included.
   assert.equal(applyBranch('a\n\n\n\nb\n', 'remote'), 'a\n\n\n\nb\n');
+  assert.equal(applyBranch(source.replace(/\n/g,'\r\n'), 'remote', 'CRLF fixture'), applyBranch(source, 'remote'));
 });
 
 test('generated files carry the generated marker, except references copied into pages', (t) => {
@@ -151,6 +152,9 @@ test('the setup skill compares a team\'s guide against the version the base guid
 
 test('committed desktop skills, plugin skills and session helper match the source', async () => {
   assert.deepEqual(await checkGenerated(), []);
+  for(const name of ['COPYING','SOURCE.md','base-stemmer.js','russian-stemmer.js']) {
+    assert.deepEqual(readFileSync(path.join(PLUGIN_DIR,'scripts/snowball-russian-3.1.1',name)),readFileSync(fileURLToPath(new URL('../../packages/search-text/src/snowball/'+name,import.meta.url))));
+  }
 });
 
 test('committed plugin skills cover the team project and the local wiki; desktop skills never name terminal tools', () => {

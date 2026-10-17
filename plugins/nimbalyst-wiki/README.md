@@ -531,3 +531,7 @@ The same files open in the free, open-source [Nimbalyst app](https://nimbalyst.c
   <a href="https://github.com/nimbalyst/nimbalyst-wiki/blob/main/CONTRIBUTING.md">Contributing</a> &nbsp;·&nbsp;
   <a href="https://github.com/nimbalyst/nimbalyst">Nimbalyst on GitHub</a>
 </p>
+
+## Bundled Russian search
+
+The generated server bundles include Snowball Russian 3.1.1 (BSD-3-Clause). Its unmodified JavaScript sources, attribution and COPYING are shipped in `scripts/snowball-russian-3.1.1/`.
