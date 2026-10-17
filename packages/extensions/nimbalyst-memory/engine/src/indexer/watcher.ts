@@ -18,6 +18,7 @@
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { expandSourcePatterns } from '../sourceRules.js';
+import { resolveInRoots } from '../roots.js';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import fg from 'fast-glob';
@@ -189,8 +190,8 @@ export class IndexWatcher {
     this.discovering = (async () => {
       const next = new Map<string, string>();
       for (const hit of await this.indexer.enumerate()) {
-        if (this.stopped || hit.sourcePath.startsWith("@")) continue;
-        const abs = path.resolve(this.config.root, hit.sourcePath);
+        if (this.stopped) continue;
+        const { abs } = resolveInRoots(this.indexer.sourceRoots(), hit.sourcePath);
         let info;
         try {
           info = await stat(abs);

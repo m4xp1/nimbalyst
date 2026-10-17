@@ -164,6 +164,9 @@ interface TeamManagementWindowTarget {
 }
 
 interface SemanticSearchResult {
+  rootLabel?: string;
+  rootPath?: string;
+  relativePath?: string;
   refType: string;
   refId: string;
   sourceClass: string;

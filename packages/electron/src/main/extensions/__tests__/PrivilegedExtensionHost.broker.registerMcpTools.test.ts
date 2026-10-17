@@ -90,6 +90,7 @@ const ctx = {
   grantedPermissions: ['mcp-server-register'],
   entryFilePath: '/x/entry.js',
   extensionPath: '/x',
+  dataDir: '/x/data',
 } as const;
 
 function makeManaged(send: (m: unknown) => void) {
@@ -277,5 +278,20 @@ describe('PrivilegedExtensionHost broker panels', () => {
     expect(clearBackendPanelGutterBadgesForModule).not.toHaveBeenCalled();
     (host as any).setState(managed, { status: 'crashed', exitCode: 1, crashedAt: 0 });
     expect(clearBackendPanelGutterBadgesForModule).toHaveBeenCalledWith('com.nimbalyst.memory', 'memory-engine', '/ws');
+  });
+});
+
+describe('Memory search-root broker boundary', () => {
+  it('derives roots from the bound workspace and ignores a forged workspace payload',async()=>{
+    const {dispatchBrokerMethod}=await import('../extensionBrokerDispatch');
+    const roots=await dispatchBrokerMethod('memorySourceRoots',{workspacePath:'/unrelated'},{...ctx,grantedPermissions:[...ctx.grantedPermissions]}) as Array<{path:string}>;
+    const path=await import('node:path');
+    expect(roots[0].path).toBe(path.resolve('/ws'));
+    expect(roots.some(root=>root.path===path.resolve('/unrelated'))).toBe(false);
+  });
+  it('does not expose the roots capability to another extension or module',async()=>{
+    const {dispatchBrokerMethod}=await import('../extensionBrokerDispatch');
+    await expect(dispatchBrokerMethod('memorySourceRoots',{}, {...ctx,grantedPermissions:[...ctx.grantedPermissions],extensionId:'com.other'})).rejects.toThrow(/denied/);
+    await expect(dispatchBrokerMethod('memorySourceRoots',{}, {...ctx,grantedPermissions:[...ctx.grantedPermissions],moduleId:'other'})).rejects.toThrow(/denied/);
   });
 });

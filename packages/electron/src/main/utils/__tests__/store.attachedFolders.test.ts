@@ -9,6 +9,9 @@
  */
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import {describeWorkspaceSearchRoots,owningSearchRoot} from '../workspaceSearchRoots';
 
 let backing: Record<string, unknown> = {};
 
@@ -125,4 +128,19 @@ describe('attached folders', () => {
 
     expect(getAttachedFolders(PRIMARY)).toEqual([ATTACHED]);
   });
+});
+
+it('keys attached roots by canonical full paths and retains primary/deepest ownership',()=>{
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),'root-identities-'));
+  try {
+    const main=path.join(base,'main'),first=path.join(base,'one','link'),second=path.join(base,'two','link'),nested=path.join(first,'docs');
+    for(const dir of [main,first,second,nested])fs.mkdirSync(dir,{recursive:true});
+    const alias=path.join(base,'alias');fs.symlinkSync(first,alias,'junction');
+    const roots=describeWorkspaceSearchRoots([main,first,second,nested,alias]);
+    expect(roots).toHaveLength(4);expect(roots[1].label).toBe(roots[2].label);expect(roots[1].id).not.toBe(roots[2].id);
+    expect(describeWorkspaceSearchRoots([main,alias])[1].id).toBe(roots[1].id);
+    expect(owningSearchRoot(roots,path.join(nested,'file.md'))?.id).toBe(roots[3].id);
+    const overlap=describeWorkspaceSearchRoots([first,nested]);
+    expect(owningSearchRoot(overlap,path.join(nested,'file.md'))?.id).toBeNull();
+  }finally{fs.rmSync(base,{recursive:true,force:true});}
 });

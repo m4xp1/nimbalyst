@@ -6,7 +6,7 @@ export function canonicalSearchPath(value: string): string {
   try { return realpathSync.native(value); } catch { return path.resolve(value); }
 }
 export function searchPathKey(value: string): string {
-  const absolute = canonicalSearchPath(value);
+  const absolute = path.resolve(value);
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
 }
 export function describeWorkspaceSearchRoots(paths: string[]): WorkspaceSearchRoot[] {
@@ -21,8 +21,8 @@ export function describeWorkspaceSearchRoots(paths: string[]): WorkspaceSearchRo
       label: path.basename(absolute) || absolute, available: !error, ...(error ? {error} : {}) }];
   });
 }
-export function owningSearchRoot(roots: WorkspaceSearchRoot[], file: string): WorkspaceSearchRoot | undefined {
-  const key = searchPathKey(file);
+export function owningSearchRoot(roots: WorkspaceSearchRoot[], file: string, canonicalize = true): WorkspaceSearchRoot | undefined {
+  const key = searchPathKey(canonicalize ? canonicalSearchPath(file) : file);
   const candidates = roots.filter(root => { const base=searchPathKey(root.path); return key===base || key.startsWith(base+path.sep); });
   return candidates.find(root => root.id === null) ?? candidates.sort((a,b)=>b.path.length-a.path.length)[0];
 }

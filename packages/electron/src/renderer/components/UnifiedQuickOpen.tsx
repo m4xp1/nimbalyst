@@ -3054,6 +3054,7 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
                     {result.title || result.sourcePath || result.refId}
                   </span>
                 </div>
+                {result.rootLabel && <div className="text-xs text-nim-faint truncate" title={result.refId}>{result.rootLabel} — {result.relativePath}</div>}
                 {result.snippet && (
                   <div className="text-xs text-nim-faint mt-0.5 truncate">{result.snippet}</div>
                 )}

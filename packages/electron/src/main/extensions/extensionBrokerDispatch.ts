@@ -15,7 +15,8 @@
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
-import { getProviderApiKeyFromSettings } from '../utils/store';
+import { getProviderApiKeyFromSettings, getWorkspaceRoots } from '../utils/store';
+import { describeWorkspaceSearchRoots } from '../utils/workspaceSearchRoots';
 import { logger } from '../utils/logger';
 import { dispatchMetaAgentTool } from '../mcp/metaAgentServer';
 import { dispatchDevAgentTool } from '../mcp/devAgentTools';
@@ -38,6 +39,10 @@ export async function dispatchBrokerMethod(
   ctx: BackendRuntimeContext
 ): Promise<BrokerResults[BrokerMethodName]> {
   switch (method) {
+    case 'memorySourceRoots': {
+      if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory source capability denied');
+      return describeWorkspaceSearchRoots(getWorkspaceRoots(ctx.workspacePath));
+    }
     case 'memorySessions': {
       if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory session capability denied');
       const payload=rawPayload as BrokerPayloads['memorySessions'];

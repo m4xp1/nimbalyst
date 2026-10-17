@@ -22,6 +22,7 @@ import type {
 } from './types.js';
 import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, type ResolvedRoot } from './roots.js';
+import { isInsideRealRoot } from './sourceRules.js';
 import { Indexer, type IndexProgress } from './indexer/indexer.js';
 import { IndexWatcher } from './indexer/watcher.js';
 import { Retriever } from './retrieval/retriever.js';
@@ -189,20 +190,22 @@ export class MemoryEngine {
     await this.indexFinished;
   }
 
+  /** Invalidate pending file embeddings before a host root change is queued. */
+  cancelFileIndexing(): void { this.indexer.cancel(); }
+
   async updateSources(
     sources: SourceSet[],
     workspaceExclude: string[]
   ): Promise<{ indexed: number; files: number }> {
-    if (this.indexing)
-      throw new Error(
-        "Wait for the current index pass before changing sources."
-      );
+    this.indexer.cancel();
+    await this.waitForIndexing();
     await this.watcher?.stop();
     this.watcher = null;
     this.config.sources = sources;
     this.config.workspaceExclude = workspaceExclude;
     this.roots = resolveRoots(this.config.root, sources);
     this.indexer = new Indexer(this.config, this.store, this.embedder);
+    this.refreshSnapshot();
     try {
       return await this.indexAll();
     } finally {
@@ -362,12 +365,13 @@ export class MemoryEngine {
    * thing standing between this tool and arbitrary file reads.
    */
   async readDoc(sourcePath: string): Promise<{ path: string; content: string }> {
-    let resolved: { abs: string; sourcePath: string };
+    let resolved: ReturnType<typeof resolveInRoots>;
     try {
       resolved = resolveInRoots(this.roots, sourcePath);
     } catch (err) {
       throw new Error(`read_doc: ${(err as Error).message}`);
     }
+    if (!await isInsideRealRoot(resolved.root.dir, resolved.abs)) throw new Error('read_doc: file escapes its configured root');
     const content = await readFile(resolved.abs, 'utf8');
     return { path: resolved.sourcePath, content };
   }

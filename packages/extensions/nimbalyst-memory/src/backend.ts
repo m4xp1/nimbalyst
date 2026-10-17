@@ -18,6 +18,7 @@
  * method of the same `name`.
  */
 import { mkdirSync } from 'node:fs';
+import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import { MemoryEngine } from '../engine/dist/index.js';
 import {
@@ -79,6 +80,7 @@ interface ActivateCtx {
     dataDir: string;
     log: (level: LogLevel, message: string, data?: unknown) => void;
     getApiKey: (providerId: string) => Promise<{ key: string | null }>;
+    memorySourceRoots?: () => Promise<MemorySourceRoot[]>;
     memorySessions?: (payload:{op:'rebuild'}|{op:'read';sessionId:string;cursor?:string;maxChars?:number})=>Promise<unknown>;
     registerMcpTools: (
       tools: Array<{
@@ -115,6 +117,9 @@ interface GlobalSearchResult {
   refId: string;
   sourceClass: string;
   sourcePath: string;
+  rootLabel?: string;
+  rootPath?: string;
+  relativePath?: string;
   /** Best-chunk heading or first line, for display when the host can't enrich. */
   title: string;
   snippet: string;
@@ -436,11 +441,18 @@ export async function activate(ctx: ActivateCtx) {
 
   let sourceRules = readSourceRules(dataDir);
   let sourceChanges: Promise<unknown> = Promise.resolve();
+  let sourceRoots: MemorySourceRoot[] = ctx.services.memorySourceRoots
+    ? await ctx.services.memorySourceRoots()
+    : [{id:null,path:workspacePath,label:path.basename(workspacePath),available:true}];
+  let rootRules = readAttachedRules(dataDir);
+  let rootSignature = JSON.stringify(sourceRoots);
+  let disposed = false;
+
   const config: EngineConfig = {
-    root: workspacePath,
+    root: sourceRoots.find(root=>root.id===null)?.path ?? workspacePath,
     dbPath,
     factsDir: FACTS_DIR,
-    sources: sourcesWithRules(defaultSources(FACTS_DIR, workspacePath),sourceRules),
+    sources: attachedSources(FACTS_DIR, workspacePath, sourceRoots, sourceRules, rootRules),
     workspaceExclude: sourceRules.exclude,
     // Surface engine-internal warnings (e.g. a failed query embedding that
     // would otherwise silently degrade search to sparse-only) into the host log.
@@ -541,6 +553,33 @@ export async function activate(ctx: ActivateCtx) {
     return engine;
   }
 
+  function annotateRoot<T extends {sourcePath:string}>(hit:T) {
+    const root=sourceRoots.find(root=>root.id && hit.sourcePath.startsWith('@'+root.id+'/'));
+    return root ? {...hit,rootLabel:root.label,rootPath:root.path,relativePath:hit.sourcePath.slice(root.id!.length+2)} : hit;
+  }
+  async function applySources() {
+    return requireEngine().updateSources(attachedSources(FACTS_DIR, workspacePath, sourceRoots, sourceRules, rootRules), sourceRules.exclude);
+  }
+  async function syncSourceRoots(): Promise<void> {
+    if (disposed || !ctx.services.memorySourceRoots) return;
+    const next = await ctx.services.memorySourceRoots();
+    if (disposed) return;
+    const signature = JSON.stringify(next);
+    if (signature !== rootSignature) {
+      sourceRoots = next; rootSignature = signature;
+      engine?.cancelFileIndexing();
+      const task = sourceChanges.catch(() => {}).then(applySources);
+      sourceChanges = task;
+      await task;
+    } else {
+      try { await sourceChanges; } catch { rootSignature=''; throw Error('Source indexing failed; retry to reconcile sources.'); }
+    }
+  }
+  const sourcePoll = ctx.services.memorySourceRoots ? setInterval(() => {
+    void syncSourceRoots().catch(error => log('error', '[memory] source roots: '+String(error)));
+  }, 1000) : null;
+  sourcePoll?.unref?.();
+
   await registerMcpTools(
     [...TOOL_DESCRIPTORS.map((t) => ({
       name: t.name,
@@ -548,30 +587,36 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_sources','set_sources'].map(name => ({
+    })), ...['get_sources','set_sources','get_source_roots'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: {type:'object',properties:{include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: {type:'object',properties:{rootId:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
 
-  return {
+  const runtime = {
     methods: {
-      get_sources: async () => { await sourceChanges.catch(() => {}); return sourceRules; },
+      get_source_roots: async () => { await syncSourceRoots(); return sourceRoots; },
+      get_sources: async (params?: {rootId?: string | null}) => {
+        await sourceChanges.catch(() => {});
+        const id=params?.rootId;
+        if (!id) return sourceRules;
+        if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
+        return rootRules[id] ?? {version:1 as const,include:[],exclude:[]};
+      },
       set_sources: (params: unknown) => {
         const next = normalizeSourceRules(params);
+        const id = (params as {rootId?:string})?.rootId;
         const apply = async () => {
-          const eng = requireEngine();
-          await eng.waitForIndexing();
-          writeSourceRules(dataDir, next);
-          sourceRules = next;
-          const result = await eng.updateSources(
-            sourcesWithRules(defaultSources(FACTS_DIR, workspacePath), next), next.exclude
-          );
-          return { ...result, rules: next };
+          if (id) {
+            if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
+            rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);
+          } else { writeSourceRules(dataDir,next);sourceRules=next; }
+          const result=await applySources();
+          return {...result,rules:next};
         };
-        const task = sourceChanges.catch(() => {}).then(apply);
-        sourceChanges = task;
+        const task=sourceChanges.catch(()=>{}).then(apply);
+        sourceChanges=task;
         return task;
       },
       search_project_knowledge: async (params: { query?: string; k?: number }) => {
@@ -579,7 +624,7 @@ export async function activate(ctx: ActivateCtx) {
         if (!query) throw new Error('query is required');
         const k = typeof params?.k === 'number' ? params.k : 5;
         const eng = requireEngine();
-        const chunks = await eng.search(query, k);
+        const chunks = (await eng.search(query, k)).map(annotateRoot);
         return {
           ...buildProjectSearchResponse(chunks, eng.status().retrieval),
           ...(chunks.some(chunk => chunk.refType === 'session') ? {
@@ -651,7 +696,7 @@ export async function activate(ctx: ActivateCtx) {
         );
         const searchResponse = buildProjectSearchResponse(hits, eng.status().retrieval);
         return {
-          results: collapseToEntities(hits, k),
+          results: collapseToEntities(hits, k).map(annotateRoot),
           capabilities: searchResponse.capabilities,
           fallback: searchResponse.fallback,
         };
@@ -761,6 +806,8 @@ export async function activate(ctx: ActivateCtx) {
         return {
           ready: true,
           ...buildPublicEngineStatus(engine.status()),
+          sourceRoots,
+          sourceRootErrors: sourceRoots.filter(root=>!root.available),
           indexSizeBytes: await engine.indexSizeBytes(),
         };
       },
@@ -934,9 +981,16 @@ export async function activate(ctx: ActivateCtx) {
     },
 
     deactivate: async () => {
+      disposed=true;
+      if(sourcePoll)clearInterval(sourcePoll);
       await sourceChanges.catch(() => {});
       await engine?.waitForIndexing();
       await engine?.close();
     },
   };
+  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild'] as const) {
+    const original=runtime.methods[name] as (...args:any[])=>Promise<any>;
+    (runtime.methods as any)[name]=async (...args:any[])=>{await syncSourceRoots();return original(...args);};
+  }
+  return runtime;
 }

@@ -67,7 +67,9 @@ export function isValidRootId(id: string): boolean {
 
 /** True when `abs` is `root` itself or sits underneath it. */
 function contains(root: string, abs: string): boolean {
-  return abs === root || abs.startsWith(root + path.sep);
+  const base = process.platform === 'win32' ? root.toLowerCase() : root;
+  const file = process.platform === 'win32' ? abs.toLowerCase() : abs;
+  return file === base || file.startsWith(base + path.sep);
 }
 
 function toPosix(p: string): string {
@@ -174,8 +176,8 @@ export function parseSourcePath(
  * This is the guard behind `read_doc`. Two properties matter and are tested:
  * the membership test is over the whole root set (adding a root must not weaken
  * the others), and there is no configuration that turns it off. Attribution
- * picks the deepest containing root so a nested root canonicalizes to itself
- * rather than to its ancestor.
+ * keeps the primary workspace first, then the deepest attached root, matching
+ * indexing ownership and preventing overlaps from bypassing exclusions.
  */
 export function resolveInRoots(
   roots: ResolvedRoot[],
@@ -184,9 +186,8 @@ export function resolveInRoots(
   const { root, rel } = parseSourcePath(roots, sourcePath);
   const abs = path.resolve(root.dir, rel);
 
-  const owner = roots
-    .filter((r) => contains(r.dir, abs))
-    .sort((a, b) => b.dir.length - a.dir.length)[0];
+  const candidates = roots.filter(r => contains(r.dir, abs));
+  const owner = candidates.find(r => r.id === null) ?? candidates.sort((a,b)=>b.dir.length-a.dir.length)[0];
   if (!owner) {
     // Wording keeps the pre-multi-root "escapes engine root" phrasing that
     // callers and tests match on.
@@ -205,9 +206,8 @@ export function locateAbsolute(
   abs: string
 ): { root: ResolvedRoot; rel: string } | null {
   const resolved = path.resolve(abs);
-  const owner = roots
-    .filter((r) => contains(r.dir, resolved))
-    .sort((a, b) => b.dir.length - a.dir.length)[0];
+  const candidates = roots.filter(r => contains(r.dir, resolved));
+  const owner = candidates.find(r => r.id === null) ?? candidates.sort((a,b)=>b.dir.length-a.dir.length)[0];
   if (!owner) return null;
   return { root: owner, rel: toPosix(path.relative(owner.dir, resolved)) };
 }

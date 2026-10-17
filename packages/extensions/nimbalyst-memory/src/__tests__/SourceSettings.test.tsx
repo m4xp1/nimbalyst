@@ -26,8 +26,8 @@ describe('automatic source settings',()=>{
   const call=vi.fn(async(name:string,params?:any)=>name==='memory.get_sources'?initial:params.include[0]==='ропо2'?hold:{});
   const r=render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);
   const f=await field();fireEvent.change(f,{target:{value:'ропо2'}});fireEvent.blur(f);
-  await waitFor(()=>expect(call).toHaveBeenCalledTimes(2));
-  fireEvent.change(f,{target:{value:'ропо'}});r.unmount();expect(call).toHaveBeenCalledTimes(2);
+  await waitFor(()=>expect(call.mock.calls.filter(([name])=>name==='memory.set_sources')).toHaveLength(1));
+  fireEvent.change(f,{target:{value:'ропо'}});r.unmount();expect(call.mock.calls.filter(([name])=>name==='memory.set_sources')).toHaveLength(1);
   await act(async()=>release());await waitFor(()=>expect(call).toHaveBeenLastCalledWith('memory.set_sources',initial));
  });
  it('saves Include and Exclude together when either loses focus',async()=>{
@@ -42,6 +42,20 @@ describe('automatic source settings',()=>{
   fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
   expect((await screen.findByRole('alert')).textContent).not.toContain('SECRET');
   fail=false;fireEvent.blur(f);await waitFor(()=>expect(screen.queryByRole('alert')).toBeNull());
-  expect(call).toHaveBeenCalledTimes(3);
+  expect(call.mock.calls.filter(([name])=>name==='memory.set_sources')).toHaveLength(2);
+ });
+
+ it('selects an attached source root and saves its rules without changing the primary',async()=>{
+  const call=vi.fn(async(name:string,params?:any)=>{
+   if(name==='memory.get_source_roots')return [{id:null,path:'/main',label:'main',available:true},{id:'attached-link',path:'/link',label:'link',available:true}];
+   if(name==='memory.get_sources')return params?.rootId?{version:1,include:[],exclude:[]}:initial;
+   return {};
+  });
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
+  const select=await screen.findByRole('combobox',{name:'Source folder'});
+  fireEvent.change(select,{target:{value:'attached-link'}});
+  await waitFor(()=>expect((screen.getByLabelText('Additional source includes') as HTMLTextAreaElement).value).toBe(''));
+  const f=await field();fireEvent.change(f,{target:{value:'archive/**'}});fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{version:1,rootId:'attached-link',include:['archive/**'],exclude:[]}));
  });
 });

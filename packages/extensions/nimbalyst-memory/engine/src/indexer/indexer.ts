@@ -113,6 +113,9 @@ function pageRowFor(
 }
 
 export class Indexer {
+  private cancelled = false;
+  cancel(): void { this.cancelled = true; }
+  private rootExcluded = new Map<string, (p: string) => boolean>();
   private fileRecords = new Map<string, FileRecord>();
   private validatedFiles = new Set<string>();
   private entityIds = new Set<string>();
@@ -136,6 +139,10 @@ export class Indexer {
       root: rootForSet(this.roots, set),
       isMatch: picomatch(expandSourcePatterns(set.include, rootForSet(this.roots,set).dir), { dot: true }),
     }));
+    for (const root of this.roots) {
+      const patterns = config.sources.filter(set => rootForSet(this.roots, set).dir === root.dir).flatMap(set => set.exclude ?? []);
+      this.rootExcluded.set(root.dir, patterns.length ? picomatch(expandSourcePatterns(patterns, root.dir), {dot:true,nocase:true}) : () => false);
+    }
     const exclude = config.exclude ?? [];
     this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(expandSourcePatterns(config.workspaceExclude, config.root),{dot:true,nocase:true}) : () => false;
     this.isExcluded = exclude.length ? picomatch(exclude, { dot: true, nocase: true }) : () => false;
@@ -158,6 +165,10 @@ export class Indexer {
   entityFilePaths(): string[] { return [...this.fileRecords.values()].map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
   readable(chunk: StoredChunk): boolean {
+    if (chunk.refType === 'doc-file') {
+      if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
+      return this.classifyDocument(chunk.sourcePath) !== null;
+    }
     return !this.entityIds.has(chunk.sourcePath) || this.validatedFiles.has(chunk.sourcePath);
   }
 
@@ -247,6 +258,7 @@ export class Indexer {
       suppressErrors: false,
       ignore: [
         ...this.ignoreGlobs,
+        ...expandSourcePatterns(set.exclude ?? [], root.dir),
         ...(root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : []),
       ],
     });
@@ -262,6 +274,9 @@ export class Indexer {
         !(await isInsideRealRoot(root.dir, path.resolve(root.dir, rel)))
       )
         continue;
+      if (this.rootExcluded.get(root.dir)?.(rel)) continue;
+      const abs = path.resolve(root.dir, rel);
+      if (locateAbsolute(this.roots, abs)?.root.dir !== root.dir || !await isInsideRealRoot(root.dir, abs)) continue;
       safe.push(toSourcePath(root, rel));
     }
     return safe;
@@ -275,11 +290,13 @@ export class Indexer {
 
     let indexed = 0;
     for (let i = 0; i < files.length; i++) {
+      if (this.cancelled) return { indexed, files: i };
       const f = files[i];
       onProgress?.({ phase: 'index', file: f.sourcePath, done: i, total: files.length, indexed });
       indexed += await this.indexFile(f.sourcePath, f.sourceClass);
     }
 
+    if (this.cancelled) return { indexed, files: files.length };
     // Drop files that no longer exist on disk. Only file-backed sources are
     // considered — virtual records (trackers, sessions) are never pruned here,
     // so a markdown re-index can't wipe the catalog.
@@ -319,12 +336,13 @@ export class Indexer {
     }
     let raw: string;
     try {
-      if (root.id === null && !await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
+      if (!await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
       const bytes = await readFile(abs);
       if (bytes.includes(0)) { this.store.deleteSource(sourcePath); return 0; }
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
       catch { this.store.deleteSource(sourcePath); return 0; }
     } catch (err) {
+      this.store.deleteSource(sourcePath);
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
       this.store.deleteSource(sourcePath);
@@ -444,6 +462,7 @@ export class Indexer {
     raw: string,
     ref?: { refType?: string; refId?: string }
   ): Promise<number> {
+    if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file')) return 0;
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
     if (p.unchanged) return 0;
     if (p.pending.length) {
@@ -452,6 +471,7 @@ export class Indexer {
         p.stored[t.idx].denseEmbedding = vectors[i] ?? null;
       });
     }
+    if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file')) return 0;
     this.store.upsertChunks(p.stored);
     this.store.pruneSource(sourcePath, p.stored.map((c) => c.id));
     return p.pending.length;
@@ -543,6 +563,7 @@ export class Indexer {
     if (!located) return null;
     const { root, rel } = located;
     const posix = rel.split(path.sep).join('/');
+    if (locateAbsolute(this.roots, path.resolve(root.dir, posix))?.root.dir !== root.dir || this.rootExcluded.get(root.dir)?.(posix)) return null;
     if (this.isExcluded(posix) || (root.id === null && this.isWorkspaceExcluded(posix))) return null;
     for (const m of this.matchers) {
       if (m.root.dir === root.dir && m.isMatch(posix)) {

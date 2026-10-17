@@ -165,6 +165,7 @@ export interface BackendServices {
    * Requires: `secrets-read`.
    */
   getApiKey(providerId: string): Promise<BrokerResults['getApiKey']>;
+  memorySourceRoots():Promise<BrokerResults['memorySourceRoots']>;
   memorySessions(payload:BrokerPayloads['memorySessions']):Promise<BrokerResults['memorySessions']>;
 
   /**
@@ -373,6 +374,7 @@ function buildServices(ctx: BackendRuntimeContext, send: SendToHost): BackendSer
       assert('secrets-read' as ExtensionPermissionId);
       return makeBrokerCall(send, 'getApiKey', { providerId });
     },
+    memorySourceRoots: () => makeBrokerCall(send,'memorySourceRoots',{}),
     memorySessions: (payload) => makeBrokerCall(send,'memorySessions',payload),
 
     readWorkspaceFile: (path) => {
