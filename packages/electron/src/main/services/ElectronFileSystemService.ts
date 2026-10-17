@@ -24,7 +24,7 @@ import { SafePathValidator } from '../security/SafePathValidator';
 import { shouldExcludeFile, shouldExcludeDir, shouldExcludePath, GLOB_EXCLUDE_PATTERNS } from '../utils/fileFilters';
 import { getRipgrepPath } from './ripgrepPath';
 import { getWorkspaceRoots } from '../utils/store';
-import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey } from '../utils/workspaceSearchRoots';
+import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey, scanSearchRoots } from '../utils/workspaceSearchRoots';
 
 const execFileAsync = promisify(execFile);
 
@@ -93,7 +93,7 @@ export class ElectronFileSystemService implements FileSystemService {
       // would be remote code execution. execFile already blocks shell
       // metacharacters; `--` blocks argv injection.
       const roots = describeWorkspaceSearchRoots(options?.path ? [searchPath] : getWorkspaceRoots(this.workspacePath));
-      const availableRoots = roots.filter(root => root.available);
+      const availableRoots = scanSearchRoots(roots);
       if (!availableRoots.length) return { success: false, error: 'No search roots are available' };
       rgArgs.push('--', query, ...availableRoots.map(root => root.path));
 

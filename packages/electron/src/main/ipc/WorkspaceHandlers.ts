@@ -1,5 +1,5 @@
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
-import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey } from '../utils/workspaceSearchRoots';
+import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey, scanSearchRoots } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
 import { join, basename, dirname, extname } from 'path';
@@ -366,7 +366,7 @@ export function registerWorkspaceHandlers() {
                 fileContentPattern(trimmedQuery),
                 // ripgrep takes N search roots directly, so a multi-root
                 // workspace is one invocation, not one per root.
-                ...await listContentSearchRoots(getWorkspaceRoots(workspacePath))
+                ...await listContentSearchRoots(scanSearchRoots(describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath))).map(root=>root.path))
             ];
 
             let stdout = '';
