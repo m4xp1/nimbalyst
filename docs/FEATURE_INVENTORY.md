@@ -211,6 +211,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - File tree with expand/collapse and keyboard navigation
 - Virtualized file tree for large repositories
 - Context menu: rename, delete, reveal in Finder, open externally, copy path, move, copy
+- Windows fork: Include/Exclude from Memory index on files and folders, including standard sources. Most-specific literal overrides can be removed from Memory settings to inherit rules. Blue original icons show rule membership (including partial folders), not successful embedding; disabled Memory hides the commands and colors.
 - Drag-and-drop file/folder operations (Option/Alt to copy)
 - File watching with auto-reload on external changes
 - .gitignore-aware filtering
@@ -450,7 +451,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Wiki (the Knowledge extension) -- off by default; disabling it hides the desktop Wiki navigation button and Wiki MCP tools, rejects cached tool calls, and leaves existing pages intact; agent skills (`/wiki:setup`, `/wiki:update`) for writing a project's wiki pages: pages, typed pages and the types the project chooses, relations written as links, decisions and open questions as marked sentences with the person's email, citations pasted from the session's citable inputs, and sources cited as links; setup asks about the wiki's audience, purpose, sources, and desired depth, then populates Home and project-appropriate starter pages with sourced content and navigation, installs an editable "How we write this wiki" guide page (never overwritten on re-run), and adds types and relations when useful. Re-runs reuse existing pages and preserve their content; earlier knowledge-graph content stays in place, with a reference for moving it into pages. Alpha: a curator sorter tool asks TypeSafe's Jev model whether commits, sessions, and tracker changes carry knowledge, which area they belong to, and which existing item they update, gating on confidence; requires the user's TypeSafe API key or Cloudflare Workers AI token, optionally through an AI Gateway (Settings > Knowledge curator), and sends event text to api.typesafe.ai or Cloudflare
 - MockupLM
 - Math -- inline and block LaTeX rendering in documents and agent transcripts
-- Nimbalyst Memory — local project-knowledge brain (hybrid search + facts) for the voice and coding agents, with separate instruction/personal-memory sources, optional on-device embeddings, index/semantic-search readiness controls, and distinct deterministic Coverage colors per source category
+- Nimbalyst Memory — local project-knowledge brain (hybrid search + facts) for the voice and coding agents, with separate instruction/personal-memory sources, optional on-device embeddings, index/semantic-search readiness controls, and distinct deterministic Coverage colors per source category; independent All/main/attached-folder Coverage with scoped counts/errors and physical size only in All. Source-folder selectors appear only with additional roots. Bounded embedding inputs preserve source text across chunks; per-file failures quarantine stale results without disabling observation or other files, while provider-wide errors remain explicit
 - PDF Viewer
 - Planning
 - Playwright -- test explorer and agent tools for running tests and inspecting failures, flaky tests, and history

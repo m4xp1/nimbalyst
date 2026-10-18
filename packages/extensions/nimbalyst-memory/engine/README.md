@@ -16,6 +16,14 @@ A host-agnostic **project-knowledge + facts engine** exposed as an **MCP server*
   - The store records `embedder_id`/`model`/`dims`. Switching the embedder produces non-comparable vectors, so the engine **wipes and forces a full re-index**.
 - **Legacy markdown facts.** The standalone `remember` command currently appends `.md` files with YAML frontmatter (`category`/`scope`/`priority`). The v3 tracker-backed record, resolution, redaction, and dedup modules are exported separately; callers must not describe the standalone command as tracker-backed until the host persistence adapter is wired.
 
+## Bounded inputs and source failures
+
+Chunk bodies are split on Unicode code-point boundaries to at most 5,000 UTF-8 bytes, including continuous words. Embedding heading context is separately bounded; each input is at most 6,000 UTF-8 bytes. The OpenAI adapter validates inputs before sending them and batches at most 128 texts / 240,000 UTF-8 bytes. Stored bodies and heading paths retain their full content across chunks. The page overview is a bounded embedding prefix, not a replacement for document chunks. Changing heading context invalidates reused vectors.
+
+Per-source read/input failures are persisted in derived index metadata and quarantine old search/expand content until recovery or deletion. Other files continue; provider-wide failures stop the current embedding pass. Status exposes safe source paths and error categories rather than provider response text. The watcher starts independently of the initial scan, waits for concurrent scans and handles removals before pending upserts. Empty or failed scans do not disable observation.
+
+The desktop host can request root-scoped status (undefined = All, null = main, string = attached root ID). Counts and failures are scoped; physical database size is only reported for All. The standalone MCP status contract remains compatible.
+
 ## MCP tools
 
 | Tool | Purpose |

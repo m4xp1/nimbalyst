@@ -12,12 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- New features go here -->
 - Reveal the open file from the Files sidebar, including filtered and nested folders on Windows.
 - Preview file-backed Markdown documents inside tracker item details.
+- Inspect Memory Coverage for all sources or one source folder.
+- Include or exclude files and folders from Memory through the Files menu; blue icons show source-rule membership.
 
 ### Changed
 <!-- Changes to existing functionality go here -->
 
 ### Fixed
 <!-- Bug fixes go here -->
+- Keep Memory indexing and file observation working after oversized inputs or individual source errors, and suppress stale failed-source results.
 
 ### Removed
 <!-- Removed features go here -->
