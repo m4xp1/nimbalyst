@@ -339,7 +339,7 @@ const TOOL_DESCRIPTORS = [
   {
     name: 'status',
     description: 'Report index size, the active embedder, and whether a re-index is needed.',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: { type: 'object', properties: {rootId:{type:['string','null'],description:'Omit for All, null for the primary workspace, or use an attached source root ID.'}} },
     voiceAgent: false,
   },
   {
@@ -535,7 +535,7 @@ export async function activate(ctx: ActivateCtx) {
         started!.startWatching();
         log('info', '[memory] watching for changes');
       } catch (err) {
-        log('error', `[memory] initial index failed: ${(err as Error).message}`);
+        log('error', `[memory] initial index failed: ${safeIndexError(err).category}; see Coverage for source diagnostics`);
       }
     })();
   }
@@ -792,7 +792,10 @@ export async function activate(ctx: ActivateCtx) {
         return { found: true, path: doc.path, content, truncated };
       },
 
-      status: async () => {
+      status: async (params?:{rootId?:string|null}) => {
+        const rootId=params?.rootId;
+        const selected=rootId===undefined?undefined:sourceRoots.find(root=>root.id===rootId);
+        if(rootId!==undefined && !selected)throw Error('Unknown or detached source root');
         if (!engine) {
           return {
             ready: false,
@@ -805,10 +808,11 @@ export async function activate(ctx: ActivateCtx) {
         }
         return {
           ready: true,
-          ...buildPublicEngineStatus(engine.status()),
+          ...buildPublicEngineStatus(engine.status(rootId)),
+          ...(selected?{root:selected.path,watching:selected.available && engine.status(rootId).watching}:{}),
           sourceRoots,
-          sourceRootErrors: sourceRoots.filter(root=>!root.available),
-          indexSizeBytes: await engine.indexSizeBytes(),
+          sourceRootErrors: sourceRoots.filter(root=>!root.available && (rootId===undefined || root.id===rootId)),
+          ...(rootId===undefined?{indexSizeBytes:await engine.indexSizeBytes()}:{}),
         };
       },
 

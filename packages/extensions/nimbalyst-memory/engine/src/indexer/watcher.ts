@@ -22,8 +22,9 @@ import { resolveInRoots } from '../roots.js';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import fg from 'fast-glob';
+import { isProviderIndexFailure } from '../indexStatus.js';
 import type { EngineConfig, SourceSet } from '../types.js';
-import { rootForSet, type ResolvedRoot } from '../roots.js';
+import { locateAbsolute, rootForSet, type ResolvedRoot } from '../roots.js';
 import type { Indexer } from './indexer.js';
 
 const DEBOUNCE_MS = 400;
@@ -109,20 +110,29 @@ export class IndexWatcher {
   private discovering: Promise<void> | null = null;
   private flushing: Promise<void> = Promise.resolve();
   private stopped = false;
+  private targetPaths:string[]=[];
+  private readyPromise:Promise<void>=Promise.resolve();
+  ready():Promise<void>{return this.readyPromise;}
 
   constructor(
     private config: EngineConfig,
     private indexer: Indexer,
     private onSettled: () => void,
-    private onError: (error:unknown) => void = () => {}
+    private onError: (error:unknown,sourcePath?:string) => void = () => {},
+    private beforeBatch:()=>Promise<void> = async()=>{}
   ) {}
 
-  isWatching():boolean { return this.watcher !== null && !this.stopped; }
+  isWatching(rootId?:string|null):boolean {
+    if(!this.watcher || this.stopped)return false;
+    if(rootId===undefined)return true;
+    return this.targetPaths.some(target=>{const root=locateAbsolute(this.indexer.sourceRoots(),target)?.root;return (root?.id==='harness-memory'?null:root?.id)===rootId;});
+  }
 
-  start(): void {
+  start(seedOnly=false): void {
     if (this.watcher) return;
     const targets = [...this.resolveWatchTargets(), ...this.indexer.entityFilePaths()];
     this.stopped = false;
+    this.targetPaths=targets;
     if (
       targets.length === 0 &&
       !this.config.sources.some((s) => s.sourceClass === "custom")
@@ -133,8 +143,9 @@ export class IndexWatcher {
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     });
+    this.readyPromise=targets.length?new Promise(resolve=>{this.watcher!.once("ready",resolve);this.watcher!.once("error",()=>resolve());}):Promise.resolve();
+    void this.discover(seedOnly);
     if (this.config.sources.some((s) => s.sourceClass === "custom") || this.indexer.entityFilePaths().length) {
-      void this.discover();
       this.discoveryTimer = setInterval(() => void this.discover(), 3000);
     }
     this.watcher
@@ -185,7 +196,7 @@ export class IndexWatcher {
   }
 
   /** Discover new matches without recursively watching every workspace directory. */
-  private async discover(): Promise<void> {
+  private async discover(seedOnly=false): Promise<void> {
     if (this.stopped || this.discovering) return;
     this.discovering = (async () => {
       const next = new Map<string, string>();
@@ -201,7 +212,7 @@ export class IndexWatcher {
         }
         const stamp = info.mtimeMs + ":" + info.size;
         next.set(abs, stamp);
-        if (this.discovered.get(abs) !== stamp) {
+        if (!seedOnly && this.discovered.get(abs) !== stamp) {
           this.watcher?.add(abs);
           this.queue(abs, "upsert");
         }
@@ -235,10 +246,13 @@ export class IndexWatcher {
     return this.flushing;
   }
   private async flushBatch(): Promise<void> {
+    await this.beforeBatch();
+    if(this.stopped)return;
     const batch = Array.from(this.pending.entries());
     this.pending.clear();
     this.timer = null;
     for (const [sourcePath, op] of batch) {
+      if(this.stopped)break;
       try {
         if (op === "remove") {
           this.indexer.removeFile(sourcePath);
@@ -248,7 +262,8 @@ export class IndexWatcher {
           await this.indexer.indexFile(sourcePath, sourceClass);
         }
       } catch (error) {
-        this.onError(error);
+        this.onError(error,sourcePath);
+        if(isProviderIndexFailure(error))break;
         // Best-effort; a failed file is retried on its next change event.
       }
     }

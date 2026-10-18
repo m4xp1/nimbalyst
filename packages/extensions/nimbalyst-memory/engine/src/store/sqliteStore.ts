@@ -165,6 +165,20 @@ export class SqliteStore {
       .run(String(version));
   }
 
+  /** Sanitized derived diagnostics; never stores provider responses or file bodies. */
+  getIndexDiagnostics(): {failures:import('../indexStatus.js').SourceIndexFailure[];scans:Record<string,import('../indexStatus.js').FileIndexStatus>} {
+    const row=this.db.prepare("SELECT value FROM meta WHERE key='index_diagnostics'").get() as {value:string}|undefined;
+    if(!row)return {failures:[],scans:{}};
+    const value=JSON.parse(row.value);
+    return {failures:Array.isArray(value.failures)?value.failures:[],scans:value.scans??{}};
+  }
+  setIndexDiagnostics(value:ReturnType<SqliteStore['getIndexDiagnostics']>):void {
+    this.db.prepare("INSERT INTO meta(key,value) VALUES('index_diagnostics',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value));
+  }
+  sourceSummaries():Array<{sourcePath:string;sourceClass:string;refType:string;chunks:number;dense:number;updatedAt:number}> {
+    return (this.db.prepare('SELECT source_path AS sourcePath,source_class AS sourceClass,ref_type AS refType,COUNT(*) AS chunks,SUM(CASE WHEN dense_embedding IS NOT NULL THEN 1 ELSE 0 END) AS dense,MAX(updated_at) AS updatedAt FROM chunks GROUP BY source_path,source_class,ref_type').all()) as ReturnType<SqliteStore['sourceSummaries']>;
+  }
+
   getSessionProjection(): {version:number;parents:Record<string,string|null>} {
     const row = this.db.prepare("SELECT value FROM meta WHERE key='session_projection'").get() as {value:string}|undefined;
     if (!row) return {version:0,parents:{}};

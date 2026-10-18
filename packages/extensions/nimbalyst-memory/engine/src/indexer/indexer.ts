@@ -21,6 +21,7 @@ import type {
   FileRecord,
 } from '../types.js';
 import { parseFrontmatter } from '../frontmatter.js';
+import { safeIndexError, isProviderIndexFailure, type SourceIndexFailure } from '../indexStatus.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
 import { embeddingInput, utf8Prefix, MAX_CHUNK_BODY_BYTES } from '../embeddingInput.js';
 import { chunkMarkdown } from '../chunker.js';
@@ -44,6 +45,7 @@ export interface IndexProgress {
   total: number;
   /** Chunks requiring embedding so far; unchanged files do not advance this. */
   indexed?: number;
+  failed?:number; success?:boolean; sources?:FileRef[];
 }
 
 interface FileRef {
@@ -113,6 +115,19 @@ function pageRowFor(
 }
 
 export class Indexer {
+  private failures = new Map<string,SourceIndexFailure>();
+  sourceFailed(sourcePath:string):boolean {return this.failures.has(sourcePath);}
+  failuresForStatus():SourceIndexFailure[] { return [...this.failures.values()]; }
+  private recordFailure(sourcePath:string,error:unknown):void {
+    const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
+    this.failures.set(sourcePath,{sourcePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),updatedAt:Date.now()});
+    this.persistFailures();
+  }
+  private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
+  private persistFailures():void { this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),failures:[...this.failures.values()]}); }
+  private failureKey(sourcePath:string):string {
+    const key=this.entityFileKey(sourcePath);return (key&&this.fileRecords.get(key)?.id)||sourcePath;
+  }
   private cancelled = false;
   cancel(): void { this.cancelled = true; }
   private rootExcluded = new Map<string, (p: string) => boolean>();
@@ -132,6 +147,7 @@ export class Indexer {
     private embedder: Embedder
   ) {
     this.roots = resolveRoots(config.root, config.sources);
+    this.failures = new Map(store.getIndexDiagnostics().failures.map(f=>[f.sourcePath,f]));
     // A matcher is bound to its set's root: `docs/**/*.md` declared against the
     // primary root must not claim a `docs/x.md` that lives under another root.
     this.matchers = config.sources.map((set) => ({
@@ -165,6 +181,7 @@ export class Indexer {
   entityFilePaths(): string[] { return [...this.fileRecords.values()].map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
   readable(chunk: StoredChunk): boolean {
+    if(this.failures.has(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
       return this.classifyDocument(chunk.sourcePath) !== null;
@@ -287,13 +304,21 @@ export class Indexer {
     onProgress?.({ phase: 'enumerate', done: 0, total: 0 });
     const files = await this.enumerate();
     const live = new Set(files.map((f) => f.sourcePath));
+    onProgress?.({phase:'index',done:0,total:files.length,indexed:0,failed:0,sources:files});
 
-    let indexed = 0;
+    let indexed = 0, completed = 0, failed = 0;
     for (let i = 0; i < files.length; i++) {
       if (this.cancelled) return { indexed, files: i };
       const f = files[i];
-      onProgress?.({ phase: 'index', file: f.sourcePath, done: i, total: files.length, indexed });
-      indexed += await this.indexFile(f.sourcePath, f.sourceClass);
+      try {
+        indexed += await this.indexFile(f.sourcePath, f.sourceClass);
+        completed++;
+        onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:true});
+      } catch(error) {
+        failed++;
+        onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:false});
+        if(isProviderIndexFailure(error))throw error;
+      }
     }
 
     if (this.cancelled) return { indexed, files: files.length };
@@ -305,7 +330,9 @@ export class Indexer {
       if (!live.has(sourcePath)) this.store.deleteSource(sourcePath);
     }
 
-    onProgress?.({ phase: 'done', done: files.length, total: files.length });
+    const liveFailures=new Set(files.map(f=>this.failureKey(f.sourcePath)));
+    for(const key of this.failures.keys())if(!liveFailures.has(key))this.clearFailure(key);
+    onProgress?.({ phase: 'done', done: completed, total: files.length,failed });
     return { indexed, files: files.length };
   }
 
@@ -315,7 +342,14 @@ export class Indexer {
     const previous = this.fileLanes.get(key) ?? Promise.resolve(0);
     const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass));
     this.fileLanes.set(key, next);
-    try { return await next; } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
+    try {
+      const result=await next;
+      if(!this.cancelled)this.clearFailure(this.failureKey(sourcePath));
+      return result;
+    } catch(error) {
+      if(!this.cancelled)this.recordFailure(this.failureKey(sourcePath),error);
+      throw error;
+    } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
   }
 
   private async indexFileNow(sourcePath: string, sourceClass: string): Promise<number> {
@@ -342,7 +376,6 @@ export class Indexer {
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
       catch { this.store.deleteSource(sourcePath); return 0; }
     } catch (err) {
-      this.store.deleteSource(sourcePath);
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
       this.store.deleteSource(sourcePath);
@@ -395,10 +428,8 @@ export class Indexer {
       this.validatedFiles.add(record.id);
       return count;
     } catch (error) {
-      this.store.deleteSource(record.id);
-      this.store.deleteSource(rel);
-      if (embedding) throw error;
-      this.config.onLog?.('warn', `[indexer] file entity unavailable: ${rel}`);
+      if (embedding || !['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))throw error;
+      this.store.deleteSource(record.id);this.store.deleteSource(rel);
       return 0;
     }
   }
@@ -529,6 +560,7 @@ export class Indexer {
 
   /** Drop a source file from the index. */
   removeFile(sourcePath: string): void {
+    this.clearFailure(this.failureKey(sourcePath));
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
     if (record) { this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }

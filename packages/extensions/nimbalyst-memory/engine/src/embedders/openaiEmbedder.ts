@@ -73,7 +73,11 @@ export class OpenAIEmbedder implements Embedder {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`OpenAI embeddings failed (${res.status}): ${detail.slice(0, 500)}`);
+      let inputLimit=false,providerCode='EMBEDDING_PROVIDER_ERROR';
+      try { const error=JSON.parse(detail)?.error;inputLimit=/maximum (input|context) length|too (large|long)|input.*exceed.*token/i.test(error?.message??'');
+        if(['insufficient_quota','invalid_api_key','model_not_found','rate_limit_exceeded'].includes(error?.code))providerCode=error.code;
+      } catch { /* Non-JSON failures still retain their HTTP status. */ }
+      throw Object.assign(new Error(inputLimit?'Embedding input exceeds provider input length limit.':`OpenAI embedding request failed (${res.status}).`),{status:res.status,code:inputLimit?'EMBEDDING_INPUT_TOO_LARGE':providerCode});
     }
     const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
     // Preserve input order regardless of response ordering.

@@ -254,3 +254,14 @@ describe('embedding request budgets', () => {
     } finally { vi.unstubAllGlobals(); }
   });
 });
+
+
+describe('sanitized embedding errors',()=>{
+ it('retains a safe HTTP classification without forwarding private provider data',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,status:400,text:async()=>JSON.stringify({error:{message:"Invalid input[121]: maximum input length is 8192 tokens. PRIVATE_SOURCE"}})})));
+  try {
+   await expect(new OpenAIEmbedder({apiKey:'fake'}).embed(['safe'])).rejects.toMatchObject({status:400,code:'EMBEDDING_INPUT_TOO_LARGE'});
+   try {await new OpenAIEmbedder({apiKey:'fake'}).embed(['safe']);}catch(error){expect(String(error)).not.toContain('PRIVATE_SOURCE');}
+  }finally{vi.unstubAllGlobals();}
+ });
+});

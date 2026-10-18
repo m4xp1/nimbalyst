@@ -37,7 +37,61 @@ describe('truthful index status',()=>{
  it('reports failure with no saved text and classifies errors without leaking responses',async()=>{
   const {root,embedder,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\nquartzorchid');vi.spyOn(embedder,'embed').mockRejectedValue(new Error('401 sk-secret document-private'));
   await expect(engine.indexAll()).rejects.toThrow();expect(engine.status().fileIndex?.state).toBe('failed');expect(engine.status().fileIndex?.error?.category).toBe('authentication');
-  expect(JSON.stringify(engine.status().fileIndex)).not.toContain('sk-secret');expect(engine.status().watching).toBe(false);
+  expect(JSON.stringify(engine.status().fileIndex)).not.toContain('sk-secret');expect(engine.status().watching).toBe(true);
   for(const [message,category] of [['429 rate_limit','rate-limit'],['fetch failed','network'],['400 input too large','input'],['unexpected SECRET','other']])expect(safeIndexError(new Error(message)).category).toBe(category);
+ });
+});
+
+
+describe('source failure recovery', () => {
+ it('continues after an invalid source and quarantines old results across restart', async () => {
+  const {root,embedder,engine}=setup();
+  writeFileSync(path.join(root,'docs/b.md'),'# Old\nOLDPRIVATEMARKER');
+  await engine.indexAll();
+  writeFileSync(path.join(root,'docs/a.md'),'# A\nEARLYPROBE624');
+  writeFileSync(path.join(root,'docs/b.md'),'# Bad\nREJECTPROBE624');
+  writeFileSync(path.join(root,'docs/c.md'),'# C\nLATEPROBE624');
+  const original=embedder.embed.bind(embedder);
+  const spy=vi.spyOn(embedder,'embed').mockImplementation(async texts=>{
+   if(texts.some(t=>t.includes('REJECTPROBE624')))throw Object.assign(new Error('maximum input length exceeded PRIVATE_RESPONSE'),{code:'EMBEDDING_INPUT_TOO_LARGE'});
+   return original(texts);
+  });
+  await expect(engine.indexAll()).resolves.toMatchObject({files:3});
+  expect(engine.status().fileIndex).toMatchObject({state:'partial',completedFiles:2,failedFiles:1,remainingFiles:0});
+  expect(engine.status().watching).toBe(true);
+  expect((await engine.search('LATEPROBE624',20)).some(h=>h.text.includes('LATEPROBE624'))).toBe(true);
+  expect((await engine.search('OLDPRIVATEMARKER',20)).some(h=>h.text.includes('OLDPRIVATEMARKER'))).toBe(false);
+  expect(engine.expand('docs/b.md',['Old'])).toBeNull();
+  expect(JSON.stringify(engine.status())).not.toContain('PRIVATE_RESPONSE');
+  spy.mockRestore();
+  await engine.close();engines.splice(engines.indexOf(engine),1);
+  const reopened=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(reopened);
+  expect((await reopened.search('OLDPRIVATEMARKER',20)).some(h=>h.text.includes('OLDPRIVATEMARKER'))).toBe(false);
+  reopened.startWatching();
+  writeFileSync(path.join(root,'docs/b.md'),'# Fresh\nRECOVEREDPROBE624');
+  await vi.waitFor(async()=>expect((await reopened.search('RECOVEREDPROBE624',20)).some(h=>h.text.includes('RECOVEREDPROBE624'))).toBe(true),{timeout:6000});
+  expect(reopened.status().fileIndex?.failedFiles).toBe(0);
+ });
+});
+
+
+describe('scoped diagnostics and provider failures',()=>{
+ it('separates attached-root counts and leaves remaining files on a global error',async()=>{
+  const {root,embedder,engine}=setup();
+  const attached=mkdtempSync(path.join(tmpdir(),'memory-status-attached-'));roots.push(attached);
+  writeFileSync(path.join(root,'docs/a.md'),'# Main\nPRIMARYPROBE624');
+  writeFileSync(path.join(root,'docs/b.md'),'# Main2\nSECONDPROBE624');
+  writeFileSync(path.join(attached,'a.md'),'# Attached\nROOTPROBE624');
+  await engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['*.md'],root:{id:'link',path:attached}}],[]);
+  expect(engine.status(null)).toMatchObject({sourceFiles:2,fileIndex:{discoveredFiles:2,completedFiles:2,failedFiles:0}});
+  expect(engine.status('link')).toMatchObject({sourceFiles:1,fileIndex:{discoveredFiles:1,completedFiles:1,failedFiles:0}});
+  expect(engine.status().chunks).toBe(engine.status(null).chunks+engine.status('link').chunks);
+  writeFileSync(path.join(root,'docs/a.md'),'# Main\nCHANGEDPROBE624');
+  writeFileSync(path.join(root,'docs/b.md'),'# Main2\nCHANGEDSECOND624');
+  const spy=vi.spyOn(embedder,'embed').mockRejectedValue(Object.assign(new Error('provider refused PRIVATE_BODY'),{status:400}));
+  await expect(engine.indexAll()).rejects.toThrow();
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(engine.status().fileIndex).toMatchObject({failedFiles:1,remainingFiles:2,error:{category:'other'}});
+  expect(engine.status().watching).toBe(true);
  });
 });

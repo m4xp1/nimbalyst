@@ -75,6 +75,13 @@ describe('source settings backend bridge',()=>{
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    roots=[...roots,{id:'attached-link',path:link,label:'link',available:true}];
    const found=await runtime.methods.search_project_knowledge({query:'ПодключенныйКореньМаркер',k:8}) as any;
+   const primaryStatus=await runtime.methods.status({rootId:null}) as any;
+   const linkedStatus=await runtime.methods.status({rootId:'attached-link'}) as any;
+   const allStatus=await runtime.methods.status() as any;
+   expect(primaryStatus.sourceFiles).toBe(1);expect(linkedStatus.sourceFiles).toBe(1);
+   expect(allStatus.chunks).toBe(primaryStatus.chunks+linkedStatus.chunks);
+   expect(primaryStatus.indexSizeBytes).toBeUndefined();expect(allStatus.indexSizeBytes).toBeGreaterThan(0);
+   await expect(runtime.methods.status({rootId:'unknown'})).rejects.toThrow(/Unknown/);
    expect(found.chunks).toHaveLength(1);expect(found.chunks[0]).toMatchObject({sourcePath:'@attached-link/docs/a.md',refId:path.join(link,'docs/a.md'),rootLabel:'link',relativePath:'docs/a.md'});
    expect((await runtime.methods.search_project_knowledge({query:'АрхивПодключеннойПапкиМаркер'}) as any).chunks).toEqual([]);
    await runtime.methods.set_sources({rootId:'attached-link',include:['archive/**'],exclude:[]});
