@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
 interface Rules { version: 1; include: string[]; exclude: string[]; }
 type Call = (name: string, params?: any) => Promise<any>;
 const parse = (text: string) => text.split('\n').map(s => s.trim()).filter(Boolean);
-export function SourceSettings({ callBackendTool, onApplied }: {
-  callBackendTool?: Call; onApplied: () => void;
+export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
+  callBackendTool?: Call; onApplied: () => void;onRootsChanged?:(roots:SourceFolder[])=>void;
 }) {
   const [rootId,setRootId]=useState<string|null>(null);
   const [roots,setRoots]=useState<Array<{id:string|null;label:string;path:string;available:boolean}>>([]);
@@ -11,8 +12,8 @@ export function SourceSettings({ callBackendTool, onApplied }: {
   const [exclude, setExclude] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const bridge = useRef({ callBackendTool, onApplied });
-  bridge.current = { callBackendTool, onApplied };
+  const bridge = useRef({ callBackendTool, onApplied, onRootsChanged });
+  bridge.current = { callBackendTool, onApplied, onRootsChanged };
   const draft = useRef({ rootId:null as string|null, include: '', exclude: '', loaded: false, dirty: false });
   const live = useRef(false);
   const saved = useRef('');
@@ -61,8 +62,8 @@ export function SourceSettings({ callBackendTool, onApplied }: {
     void loadRoot(null);
     const refresh=()=>{void bridge.current.callBackendTool?.('memory.get_source_roots').then(value=>{
       if(live.current && Array.isArray(value)){
-        setRoots(value);
-        if(draft.current.rootId && !value.some(root=>root.id===draft.current.rootId))void loadRoot(null);
+        const next=selectableSourceFolders(value);setRoots(next);bridge.current.onRootsChanged?.(next);
+        if(draft.current.rootId && !next.some(root=>root.id===draft.current.rootId))void loadRoot(null);
       }
     }).catch(()=>{});};
     refresh();const timer=setInterval(refresh,2000);
