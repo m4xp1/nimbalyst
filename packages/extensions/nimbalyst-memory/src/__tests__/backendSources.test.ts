@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';import { tmpdir } from 'node:os';import path from 'node:path';
+import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,realpathSync } from 'node:fs';import { tmpdir } from 'node:os';import path from 'node:path';
 import { activate } from '../backend';
 describe('source settings backend bridge',()=>{
  it('adds current-reading guidance only to desktop MCP session hits while preserving mixed search and reader identity',async()=>{
@@ -140,5 +140,23 @@ describe('file-tree Memory rule bridge',()=>{
    expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
    await expect(runtime.methods.set_path_override({path:tmpdir(),mode:'include'})).rejects.toThrow(/outside/);
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+});
+
+describe('tree rules through a canonical workspace alias',()=>{
+ it('keeps a junction/Windows short-path spelling inside its real workspace and colors both tree paths',async()=>{
+  const fixture=mkdtempSync(path.join(tmpdir(),'memory-tree-alias-')),real=path.join(fixture,'real'),alias=path.join(fixture,'alias');
+  mkdirSync(path.join(real,'docs'),{recursive:true});writeFileSync(path.join(real,'docs/a.md'),'# Alias\nAliasTreeMarker');symlinkSync(real,alias,'junction');
+  const runtime=await activate({services:{workspacePath:alias,extensionPath:real,dataDir:path.join(fixture,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{
+   await vi.waitFor(async()=>expect(await runtime.methods.status()).toMatchObject({ready:true,indexing:false}));
+   await runtime.methods.set_path_override({path:path.join(alias,'docs'),mode:'exclude'});
+   expect((await runtime.methods.search_project_knowledge({query:'AliasTreeMarker'})).chunks).toEqual([]);
+   await runtime.methods.set_path_override({path:path.join(alias,'docs/a.md'),mode:'include'});
+   expect((await runtime.methods.search_project_knowledge({query:'AliasTreeMarker'})).chunks).toHaveLength(1);
+   const state=await runtime.methods.get_tree_index_state();if(!('files' in state))throw Error('Expected initial state');
+   expect(state.files).toContain(path.join(alias,'docs/a.md'));expect(state.files).toContain(realpathSync.native(path.join(real,'docs/a.md')));
+   await expect(runtime.methods.set_path_override({path:tmpdir(),mode:'include'})).rejects.toThrow(/outside/);
+  }finally{await runtime.deactivate();rmSync(fixture,{recursive:true,force:true});}
  });
 });

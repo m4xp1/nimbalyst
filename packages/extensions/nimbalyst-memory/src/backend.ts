@@ -17,7 +17,7 @@
  * the host advertises `<ext-short>.<name>` and routes a call back to the RPC
  * method of the same `name`.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { buildTreeIndexState, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
@@ -444,7 +444,7 @@ export async function activate(ctx: ActivateCtx) {
   let sourceChanges: Promise<unknown> = Promise.resolve();
   let sourceRoots: MemorySourceRoot[] = ctx.services.memorySourceRoots
     ? await ctx.services.memorySourceRoots()
-    : [{id:null,path:workspacePath,label:path.basename(workspacePath),available:true}];
+    : [{id:null,path:realpathSync.native(workspacePath),label:path.basename(workspacePath),available:true,treePaths:[workspacePath]}];
   let rootRules = readAttachedRules(dataDir);
   let rootSignature = JSON.stringify(sourceRoots);
   let disposed = false;
