@@ -225,3 +225,19 @@ describe('bounded source embeddings', () => {
     } finally { store.close(); }
   });
 });
+
+
+describe('changed heading context',()=>{
+ it('refreshes unchanged body vectors when their heading context changes',async()=>{
+  const {root,config}=setup();const body='stablebody '.repeat(700),file=path.join(root,'docs/context.md');
+  writeFileSync(file,'# OriginalContext\n\n'+body);
+  const store=new SqliteStore(config.dbPath),fake=new FakeEmbedder(),sent:string[]=[];
+  const indexer=new Indexer(config,store,{info:fake.info,embed:async texts=>{sent.push(...texts);return fake.embed(texts);}});
+  try{
+   await indexer.indexAll();const before=sent.length;
+   writeFileSync(file,'# UpdatedContext\n\n'+body);await indexer.indexAll();
+   expect(sent.length-before).toBe(store.chunksForSource('docs/context.md').length);
+   expect(sent.slice(before).every(input=>input.includes('UpdatedContext'))).toBe(true);
+  }finally{store.close();}
+ });
+});

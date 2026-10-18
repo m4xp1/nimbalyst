@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defaultSources, sourcesWithRules, normalizeSourceRules, type SourceRules, type SourceSet } from '../engine/dist/index.js';
-export interface MemorySourceRoot { id: string | null; path: string; label: string; available: boolean; error?: string; }
+export interface MemorySourceRoot { id: string | null; path: string; label: string; available: boolean; error?: string;treePaths?:string[]; }
 export type AttachedRules = Record<string, SourceRules>;
 export function readAttachedRules(dataDir: string): AttachedRules {
   try {

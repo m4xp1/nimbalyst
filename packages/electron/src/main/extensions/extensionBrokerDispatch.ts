@@ -16,7 +16,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
 import { getProviderApiKeyFromSettings, getWorkspaceRoots } from '../utils/store';
-import { describeWorkspaceSearchRoots } from '../utils/workspaceSearchRoots';
+import { canonicalSearchPath, searchPathKey, describeWorkspaceSearchRoots } from '../utils/workspaceSearchRoots';
 import { logger } from '../utils/logger';
 import { dispatchMetaAgentTool } from '../mcp/metaAgentServer';
 import { dispatchDevAgentTool } from '../mcp/devAgentTools';
@@ -41,7 +41,8 @@ export async function dispatchBrokerMethod(
   switch (method) {
     case 'memorySourceRoots': {
       if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory source capability denied');
-      return describeWorkspaceSearchRoots(getWorkspaceRoots(ctx.workspacePath));
+      const treePaths=getWorkspaceRoots(ctx.workspacePath);
+      return describeWorkspaceSearchRoots(treePaths).map(root=>({...root,treePaths:treePaths.filter(value=>searchPathKey(canonicalSearchPath(value))===searchPathKey(root.path))}));
     }
     case 'memorySessions': {
       if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory session capability denied');

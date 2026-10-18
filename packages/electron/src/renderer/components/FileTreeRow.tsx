@@ -1,5 +1,6 @@
 import React, { memo, useState, useRef, useEffect, useCallback } from 'react';
 import { useAtomValue } from 'jotai';
+import {memoryTreeIncludedAtom,memoryTreeErrorAtom,memoryTreeIndexingAtom} from '../store/atoms/memoryTree';
 import { getFileIcon } from '@nimbalyst/runtime/ui/icons/fileIcons';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
@@ -180,6 +181,14 @@ export const FileTreeRow = memo<FileTreeRowProps>(({
   onRenameConfirm,
   onRenameCancel,
 }) => {
+  const memoryIncluded=useAtomValue(memoryTreeIncludedAtom(node.path));
+  const memoryError=useAtomValue(memoryTreeErrorAtom(node.path));
+  const memoryIndexing=useAtomValue(memoryTreeIndexingAtom);
+  const memoryIconProps={
+    'data-memory-index':memoryIncluded?'included':undefined,
+    title:memoryIncluded?[(node.type==='directory'?'Contains files included by Memory rules; exclusions may apply.':'Included by Memory rules.'),memoryError?'Indexing error: '+memoryError+'.':memoryIndexing?'Indexing is in progress.':'','See Coverage for processing status.'].filter(Boolean).join(' '):undefined,
+    style:memoryIncluded?{color:'var(--nim-blue, #3b82f6)'}:undefined,
+  };
   const indent = node.depth * 16 + 8;
 
   if (node.type === 'directory') {
@@ -209,7 +218,7 @@ export const FileTreeRow = memo<FileTreeRowProps>(({
           />
         </span>
         {showIcons && (
-          <span className="file-tree-icon">
+          <span className="file-tree-icon" {...memoryIconProps}>
             <MaterialSymbol
               icon={node.isExpanded ? "folder_open" : "folder"}
               size={18}
@@ -252,7 +261,7 @@ export const FileTreeRow = memo<FileTreeRowProps>(({
     >
       <span className="file-tree-spacer"></span>
       {showIcons && (
-        <span className="file-tree-icon">
+        <span className="file-tree-icon" {...memoryIconProps}>
           {getFileIcon(node.name)}
         </span>
       )}

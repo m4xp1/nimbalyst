@@ -32,6 +32,7 @@ import {
 import { workspaceRepoPathsAtom } from '../atoms/workspaceRepos';
 import { attachWorkspaceFolderWithPicker } from '../actions/workspaceFolders';
 import { fetchWorkspaceRepos } from '../../utils/workspaceRepos';
+import { initMemoryTreeListeners } from './memoryTreeListeners';
 
 /**
  * Loaded contents per root for the workspace this module is currently
@@ -99,7 +100,7 @@ async function fetchRoots(workspacePath: string): Promise<string[]> {
 export function initFileTreeListeners(workspacePath: string): () => void {
   if (!workspacePath || !window.electronAPI) return () => {};
 
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => void> = [initMemoryTreeListeners(workspacePath)];
   let disposed = false;
   const refreshGenerations = new Map<string, symbol>();
   treesByRoot = {};

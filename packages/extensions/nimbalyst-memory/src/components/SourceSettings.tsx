@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
-interface Rules { version: 1; include: string[]; exclude: string[]; }
+interface PathOverride {path:string;kind:"file"|"directory";mode:"include"|"exclude";}
+interface Rules { version: 1; include: string[]; exclude: string[];overrides?:PathOverride[]; }
 type Call = (name: string, params?: any) => Promise<any>;
 const parse = (text: string) => text.split('\n').map(s => s.trim()).filter(Boolean);
 export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
@@ -10,11 +11,12 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
   const [roots,setRoots]=useState<Array<{id:string|null;label:string;path:string;available:boolean}>>([]);
   const [include, setInclude] = useState('');
   const [exclude, setExclude] = useState('');
+  const [pathOverrides,setPathOverrides]=useState<PathOverride[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bridge = useRef({ callBackendTool, onApplied, onRootsChanged });
   bridge.current = { callBackendTool, onApplied, onRootsChanged };
-  const draft = useRef({ rootId:null as string|null, include: '', exclude: '', loaded: false, dirty: false });
+  const draft = useRef({ rootId:null as string|null, include: '', exclude: '', overrides:undefined as PathOverride[]|undefined, loaded: false, dirty: false });
   const live = useRef(false);
   const saved = useRef('');
   const submitted = useRef('');
@@ -23,7 +25,7 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
   flush.current = () => {
     const call = bridge.current.callBackendTool;
     if (!call || !draft.current.loaded || !draft.current.dirty) return;
-    const rules: Rules = { version: 1, include: parse(draft.current.include), exclude: parse(draft.current.exclude) };
+    const rules: Rules = { version: 1, include: parse(draft.current.include), exclude: parse(draft.current.exclude),...(draft.current.overrides===undefined?{}:{overrides:draft.current.overrides}) };
     const id=draft.current.rootId;
     const key = JSON.stringify({rootId:id,...rules});
     if (key === submitted.current) return;
@@ -46,13 +48,15 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
     flush.current();
     const current=++generation.current;
     setRootId(id);setLoaded(false);
-    draft.current={rootId:id,include:'',exclude:'',loaded:false,dirty:false};
+    draft.current={rootId:id,include:'',exclude:'',overrides:undefined,loaded:false,dirty:false};
+    setPathOverrides([]);
     try {
       await queue.current;
       const rules:Rules=await bridge.current.callBackendTool?.('memory.get_sources',id ? {rootId:id} : undefined);
       if(!live.current || current!==generation.current)return;
       const inc=rules.include.join('\n'),exc=rules.exclude.join('\n');
-      draft.current={rootId:id,include:inc,exclude:exc,loaded:true,dirty:false};
+      draft.current={rootId:id,include:inc,exclude:exc,overrides:rules.overrides,loaded:true,dirty:false};
+      setPathOverrides(rules.overrides??[]);
       saved.current=submitted.current=JSON.stringify({rootId:id,...rules});
       setInclude(inc);setExclude(exc);setLoaded(true);setError(null);
     }catch{if(live.current && current===generation.current)setError('Could not load saved sources.');}
@@ -95,6 +99,16 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
     <label>Exclude<textarea aria-label="Source excludes" disabled={!loaded} style={field}
       value={exclude} onChange={e => { draft.current.exclude = e.target.value; draft.current.dirty = true; setExclude(e.target.value); }}
       onBlur={() => flush.current()} placeholder="research/drafts/**" /></label>
+    {pathOverrides.length>0 && <div className="nimbalyst-memory-path-overrides">
+      <h4>File and folder overrides</h4>
+      <p>The most specific path wins. Include can re-enable a file inside an excluded folder.</p>
+      <ul>{pathOverrides.map((rule,index)=><li key={rule.kind+':'+rule.path}>
+        <code>{rule.path||'.'}</code> — {rule.mode} ({rule.kind}){' '}
+        <button type="button" aria-label={'Remove '+rule.mode+' override for '+(rule.path||'.')} disabled={!loaded} onClick={()=>{
+          const next=pathOverrides.filter((_,i)=>i!==index);setPathOverrides(next);draft.current.overrides=next;draft.current.dirty=true;flush.current();
+        }}>Use inherited rules</button>
+      </li>)}</ul>
+    </div>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }

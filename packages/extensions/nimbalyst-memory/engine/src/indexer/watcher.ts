@@ -248,7 +248,7 @@ export class IndexWatcher {
   private async flushBatch(): Promise<void> {
     await this.beforeBatch();
     if(this.stopped)return;
-    const batch = Array.from(this.pending.entries());
+    const batch = Array.from(this.pending.entries()).sort(([,a],[,b])=>a===b?0:a==='remove'?-1:1);
     this.pending.clear();
     this.timer = null;
     for (const [sourcePath, op] of batch) {

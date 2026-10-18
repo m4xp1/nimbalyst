@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-export interface WorkspaceSearchRoot { id: string | null; path: string; label: string; available: boolean; error?: string; }
+export interface WorkspaceSearchRoot { id: string | null; path: string; label: string; available: boolean; error?: string;treePaths?:string[]; }
 export function canonicalSearchPath(value: string): string {
   const absolute=path.resolve(value), tail:string[]=[];
   let current=absolute;

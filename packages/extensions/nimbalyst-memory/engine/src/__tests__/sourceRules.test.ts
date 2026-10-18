@@ -212,3 +212,23 @@ describe("custom text sources", () => {
     );
   });
 });
+
+
+describe('most-specific literal path overrides',()=>{
+ it('includes a literal child inside an excluded folder and retains built-in source classes',async()=>{
+  const r=root();file(r,'docs/keep[1].md','# Kept\nТочечноеВключениеМаркер');file(r,'docs/hidden.md','# Hidden\nРодительскоеИсключениеМаркер');
+  const rules=normalizeSourceRules({version:1,include:[],exclude:['docs/**'],overrides:[{path:'docs',kind:'directory',mode:'exclude'},{path:'docs/keep[1].md',kind:'file',mode:'include'}]});
+  const cfg={...config(r),sources:sourcesWithRules(config(r).sources,rules),workspaceExclude:rules.exclude};
+  const engine=MemoryEngine.create(cfg,new FakeEmbedder());engines.push(engine);
+  await engine.indexAll();
+  const hits=(await engine.search('ТочечноеВключениеМаркер',20)).filter(h=>h.signals?.sparse);
+  expect(hits.map(h=>h.sourcePath)).toEqual(['docs/keep[1].md']);expect(hits[0].sourceClass).toBe('docs');
+  expect((await engine.search('РодительскоеИсключениеМаркер',20)).filter(h=>h.signals?.sparse)).toEqual([]);
+  writeSourceRules(path.join(r,'state'),rules);expect(readSourceRules(path.join(r,'state'))).toEqual(rules);
+ });
+ it('keeps unsafe paths invalid while accepting root-directory and Unicode literal overrides',()=>{
+  const value=normalizeSourceRules({overrides:[{path:'',kind:'directory',mode:'exclude'},{path:'Архив/a[1].txt',kind:'file',mode:'include'}]});
+  expect(value.overrides).toHaveLength(2);
+  for(const bad of ['../secret','C:/secret','/secret'])expect(()=>normalizeSourceRules({overrides:[{path:bad,kind:'file',mode:'include'}]})).toThrow();
+ });
+});

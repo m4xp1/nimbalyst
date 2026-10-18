@@ -41,7 +41,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
   await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(mainPath))+');require('+JSON.stringify(mainPath)+');');
   const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
-  app=await _electron.launch({...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+path.join(temp,'user')]:[isolate]),'--workspace',workspace],cwd:root,timeout:45000,
+  app=await _electron.launch({...(process.env.NIMBALYST_E2E_RECORD_VIDEO==='1'?{recordVideo:{dir:path.join(root,'e2e_test_output/search-results/attached-videos'),size:{width:1280,height:720}}}:{}),...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+path.join(temp,'user')]:[isolate]),'--workspace',workspace],cwd:root,timeout:45000,
    env:{...clean,PLAYWRIGHT:'1',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',TEMP:path.join(temp,'tmp'),TMP:path.join(temp,'tmp')}});
   page=await app.firstWindow();await page.getByTestId('tracker-mode-button').waitFor();
   expect(realpathSync.native(await app.evaluate(({app})=>app.getPath('userData')))).toBe(realpathSync.native(path.join(temp,'user')));
@@ -59,6 +59,8 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+port+'/mcp/ext/memory?workspacePath='+encodeURIComponent(workspace)+'&sessionId=attached-search-agent'),{requestInit:{headers:{Authorization:'Bearer '+token}}}));
   await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
   await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(tool=>tool.name.endsWith('search_project_knowledge'));},{timeout:30000}).toBe(true);
+  // IPC enablement starts the backend; reload lets normal renderer discovery load its settings contribution.
+  await page.reload();await page.getByTestId('files-mode-button').waitFor();
  },90000);
  test.afterEach(async({},info)=>{if(page&&info.status!==info.expectedStatus)await page.screenshot({path:info.outputPath('attached-search-failure.png')});});
  test.afterAll(async()=>{await client?.close();if(app){const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);}}});
@@ -94,4 +96,50 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await search('In Files','СкрытыйКонтентМаркер');await expect(page.locator('.in-files-pane .unified-quick-open-item')).toHaveCount(0);
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
  },120000);
+ test('controls Memory rules from Files and scopes Coverage to an attached folder',async()=>{
+  await page.keyboard.press('Escape');
+  await fs.writeFile(path.join(workspace,'docs','TreeProbe.md'),'# Tree\nТочечноеДеревоМаркер');
+  await fs.writeFile(path.join(workspace,'docs','Neighbor.md'),'# Neighbor\nИсключенныйСоседМаркер');
+  await fs.writeFile(path.join(workspace,'CLAUDE.md'),'# Instructions\nСтандартныйИсточникМаркер');
+  expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:attached})).success).toBe(true);
+  const link=(await panel('get_source_roots')).find((entry:any)=>realpathSync.native(entry.path)===realpathSync.native(attached));
+  await page.getByTestId('files-mode-button').click();
+  const showFiles=page.getByRole('button',{name:'Show Files sidebar',exact:true});if(await showFiles.isVisible())await showFiles.click();
+  const primaryTreeRoot=page.locator('.file-tree-directory.workspace-root').first();
+  if(await primaryTreeRoot.getAttribute('aria-expanded')!=='true')await primaryTreeRoot.click();
+  const docs=page.locator('.file-tree-directory').filter({has:page.locator('.file-tree-name',{hasText:/^docs$/})}).first();
+  await expect(docs).toBeVisible();
+  await expect(docs.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
+  await docs.click({button:'right'});await page.getByRole('button',{name:'Exclude from Memory index',exact:true}).click();
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
+  const file=page.locator('.file-tree-file').filter({hasText:'TreeProbe.md'}).first();
+  if(!await file.isVisible())await docs.click();await expect(file).toBeVisible();
+  await file.click({button:'right'});await page.getByRole('button',{name:'Include in Memory index',exact:true}).click();
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(1);
+  expect((await call('search_project_knowledge',{query:'ИсключенныйСоседМаркер'})).chunks).toEqual([]);
+  await expect(file.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
+  const standard=page.locator('.file-tree-file').filter({hasText:'CLAUDE.md'}).first();
+  await expect(standard.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
+  await search('Memory','ТочечноеДеревоМаркер');await expect(page.locator('.memory-search-pane .unified-quick-open-item').filter({hasText:'ТочечноеДеревоМаркер'})).toHaveCount(1);await page.keyboard.press('Escape');
+  await app.evaluate(({BrowserWindow})=>{BrowserWindow.getAllWindows().find(window=>!window.isDestroyed())!.webContents.send('open-settings-command',{category:'ext:com.nimbalyst.memory:memory',scope:'project',timestamp:Date.now()});});
+  await page.getByTestId('settings-route-ext:com.nimbalyst.memory:memory').click();
+  const coverage=page.locator('.nimbalyst-memory-coverage');await expect(coverage).toBeVisible();
+  const select=coverage.getByRole('combobox',{name:'Coverage source folder'});await expect(select).toHaveValue('__all__');
+  await select.selectOption(link.id);const linked=await panel('status',{rootId:link.id});
+  await expect(coverage.getByText('saved chunks',{exact:true}).locator('..')).toContainText(String(linked.chunks));
+  await expect(coverage.getByText('Index size',{exact:true})).toHaveCount(0);
+  await expect(page.getByText('docs/TreeProbe.md',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Remove include override for docs/TreeProbe.md'}).click();
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
+  for(const folder of (await invoke('workspace:get-folders',{workspacePath:workspace})).folders.slice(1))expect((await invoke('workspace:detach-folder',{workspacePath:workspace,folderPath:folder})).success).toBe(true);
+  await expect(select).toHaveCount(0);await expect(page.getByRole('combobox',{name:'Source folder',exact:true})).toHaveCount(0);
+  await expect(coverage.getByText('Index size',{exact:true})).toBeVisible();
+  await page.screenshot({path:test.info().outputPath('memory-coverage-and-overrides.png')});
+  await invoke('extensions:set-enabled','com.nimbalyst.memory',false);await page.getByTestId('files-mode-button').click();
+  if(await showFiles.isVisible())await showFiles.click();
+  await expect(page.locator('.file-tree-icon[data-memory-index="included"]')).toHaveCount(0);
+  await docs.click({button:'right'});await expect(page.getByRole('button',{name:'Include in Memory index',exact:true})).toHaveCount(0);await page.keyboard.press('Escape');
+  expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
+ },120000);
+
 });

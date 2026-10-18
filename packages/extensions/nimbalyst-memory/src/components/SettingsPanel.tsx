@@ -681,7 +681,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
       </section>
 
       {/* ---------------- 1. COVERAGE ---------------- */}
-      <section style={SECTION}>
+      <section className="nimbalyst-memory-coverage" style={SECTION}>
         <div style={HEAD}>
           <h4 style={H4}>
             Coverage
@@ -760,7 +760,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               <dt>Saved chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
               <dt>File observation</dt><dd>{status.watching === undefined ? 'Unknown' : status.watching ? 'Active' : 'Inactive'}</dd>
             </dl>
-            {!!status.fileIndex?.failures?.length && <ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{status.fileIndex.failures.map(f=><li key={f.sourcePath}><code>{f.sourcePath}</code>: {f.error.category} — {f.error.action}</li>)}
+            {!!status.fileIndex?.failures?.length && <ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{status.fileIndex.failures.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code>: {f.error.category} — {f.error.action}</li>)}
               {(status.fileIndex.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex.failureCount} errors.</li>}
             </ul>}
             {status.fileIndex?.error && <p role="alert" style={ERR}>{status.fileIndex.error.category}: {status.fileIndex.error.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.fileIndex.error.action}</p>}

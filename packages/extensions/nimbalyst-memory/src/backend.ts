@@ -18,6 +18,7 @@
  * method of the same `name`.
  */
 import { mkdirSync } from 'node:fs';
+import { buildTreeIndexState, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import { MemoryEngine } from '../engine/dist/index.js';
@@ -587,7 +588,7 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_sources','set_sources','get_source_roots'].map(name => ({
+    })), ...['get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
       inputSchema: {type:'object',properties:{rootId:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
@@ -597,6 +598,28 @@ export async function activate(ctx: ActivateCtx) {
   const runtime = {
     methods: {
       get_source_roots: async () => { await syncSourceRoots(); return sourceRoots; },
+      get_tree_index_state: async (params?:{revision?:string}) => {
+        const eng=requireEngine(),status=eng.status();
+        const state=await buildTreeIndexState(eng.ruleFilePaths(),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
+        return state.revision===params?.revision?{unchanged:true,revision:state.revision}:state;
+      },
+      set_path_override: async (params:{path?:string;mode?:'include'|'exclude'|'inherit'}) => {
+        if(!['include','exclude','inherit'].includes(params?.mode??''))throw Error('Choose include, exclude or inherit.');
+        const target=await resolveTreeTarget(sourceRoots,params.path);
+        const apply=async()=>{
+          const currentRoots=ctx.services.memorySourceRoots?await ctx.services.memorySourceRoots():sourceRoots;
+          const checked=await resolveTreeTarget(currentRoots,params.path);
+          if(checked.root.id!==target.root.id || checked.relative!==target.relative || checked.kind!==target.kind)throw Error('The source moved while changing its rules; retry.');
+          const id=target.root.id,current=id?rootRules[id]??{version:1 as const,include:[],exclude:[]}:sourceRules;
+          const key=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
+          const overrides=(current.overrides??[]).filter(item=>key(item.path)!==key(target.relative)||item.kind!==target.kind);
+          if(params.mode!=='inherit')overrides.push({path:target.relative,kind:target.kind,mode:params.mode!});
+          const next=normalizeSourceRules({...current,overrides});
+          if(id){rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);}else{sourceRules=next;writeSourceRules(dataDir,next);}
+          await applySources();return{rules:next,rootId:id};
+        };
+        const task=sourceChanges.catch(()=>{}).then(apply);sourceChanges=task;return task;
+      },
       get_sources: async (params?: {rootId?: string | null}) => {
         await sourceChanges.catch(() => {});
         const id=params?.rootId;
@@ -605,9 +628,13 @@ export async function activate(ctx: ActivateCtx) {
         return rootRules[id] ?? {version:1 as const,include:[],exclude:[]};
       },
       set_sources: (params: unknown) => {
-        const next = normalizeSourceRules(params);
+        let next = normalizeSourceRules(params);
         const id = (params as {rootId?:string})?.rootId;
         const apply = async () => {
+          if(!Object.prototype.hasOwnProperty.call(params??{},'overrides')){
+            const existing=id?rootRules[id]:sourceRules;
+            if(existing?.overrides)next={...next,overrides:existing.overrides};
+          }
           if (id) {
             if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
             rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);
@@ -992,7 +1019,7 @@ export async function activate(ctx: ActivateCtx) {
       await engine?.close();
     },
   };
-  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild'] as const) {
+  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild','set_path_override'] as const) {
     const original=runtime.methods[name] as (...args:any[])=>Promise<any>;
     (runtime.methods as any)[name]=async (...args:any[])=>{await syncSourceRoots();return original(...args);};
   }

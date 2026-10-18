@@ -1,4 +1,4 @@
-export interface SourceIndexFailure { sourcePath:string; rootId:string|null; error:SafeIndexError; updatedAt:number }
+export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number }
 export interface SafeIndexError { category: 'authentication'|'quota'|'rate-limit'|'network'|'access'|'input'|'other'; action:string }
 /** Classify locally; never forward provider responses, credentials or document text. */
 export function safeIndexError(error:unknown):SafeIndexError {
@@ -16,6 +16,7 @@ export function safeIndexError(error:unknown):SafeIndexError {
 /** Source-specific failures allow other files to proceed; provider-wide failures stop paid requests. */
 export function isProviderIndexFailure(error:unknown):boolean {
  const e=error as {status?:number;code?:string};
+ if(['EACCES','EPERM','ENOENT','ENOTDIR','EISDIR'].includes(e?.code??''))return false;
  const category=safeIndexError(error).category;
  return e?.code!=='EMBEDDING_INPUT_TOO_LARGE' && (['authentication','quota','rate-limit','network'].includes(category) || (e?.status!==undefined && category!=='input') || /\b(400|401|403|429|5\d\d)\b/.test(String((error as Error)?.message??'')) && category!=='input');
 }

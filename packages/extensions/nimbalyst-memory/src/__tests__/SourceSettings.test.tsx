@@ -69,3 +69,15 @@ describe('selectable source folders',()=>{
   expect(screen.queryByRole('combobox',{name:'Source folder'})).toBeNull();
  });
 });
+
+
+describe('path overrides in settings',()=>{
+ it('shows and removes a precise override without replacing ordinary includes or excludes',async()=>{
+  const rules={...initial,exclude:['docs/**'],overrides:[{path:'docs/a.md',kind:'file',mode:'include'}]};
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?rules:{});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
+  fireEvent.click(await screen.findByRole('button',{name:'Remove include override for docs/a.md'}));
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...rules,overrides:[]}));
+  expect((screen.getByLabelText('Source excludes') as HTMLTextAreaElement).value).toBe('docs/**');
+ });
+});

@@ -7,7 +7,7 @@
  * not the whole file.
  */
 import { readFile } from 'node:fs/promises';
-import { expandSourcePatterns, isInsideRealRoot } from '../sourceRules.js';
+import { expandSourcePatterns, isInsideRealRoot, pathOverrideFor, type PathOverride } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
 import picomatch from 'picomatch';
@@ -120,7 +120,9 @@ export class Indexer {
   failuresForStatus():SourceIndexFailure[] { return [...this.failures.values()]; }
   private recordFailure(sourcePath:string,error:unknown):void {
     const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
-    this.failures.set(sourcePath,{sourcePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),updatedAt:Date.now()});
+    const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
+    const relativePath=record?.file.path??(rootId&&rootId!=='harness-memory'?sourcePath.slice(rootId.length+2):sourcePath);
+    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),updatedAt:Date.now()});
     this.persistFailures();
   }
   private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
@@ -130,6 +132,9 @@ export class Indexer {
   }
   private cancelled = false;
   cancel(): void { this.cancelled = true; }
+  private rootOverrides=new Map<string,PathOverride[]>();
+  private knownFiles=new Set<string>();
+  private unsupportedFiles=new Set<string>();
   private rootExcluded = new Map<string, (p: string) => boolean>();
   private fileRecords = new Map<string, FileRecord>();
   private validatedFiles = new Set<string>();
@@ -156,6 +161,7 @@ export class Indexer {
       isMatch: picomatch(expandSourcePatterns(set.include, rootForSet(this.roots,set).dir), { dot: true }),
     }));
     for (const root of this.roots) {
+      this.rootOverrides.set(root.dir,config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir).flatMap(set=>set.pathOverrides??[]));
       const patterns = config.sources.filter(set => rootForSet(this.roots, set).dir === root.dir).flatMap(set => set.exclude ?? []);
       this.rootExcluded.set(root.dir, patterns.length ? picomatch(expandSourcePatterns(patterns, root.dir), {dot:true,nocase:true}) : () => false);
     }
@@ -168,6 +174,7 @@ export class Indexer {
       if (key) this.fileRecords.set(key, record);
     }
     this.entityIds = new Set([...this.fileRecords.values()].map(r => r.id));
+    for(const sp of store.fileSourcePaths())this.knownFiles.add(sp);
   }
 
   private entityFileKey(ref: string | undefined): string | null {
@@ -253,6 +260,7 @@ export class Indexer {
       const hit = this.classify(record.file.path);
       if (hit) seen.set(hit.sourcePath, record.sourceClass);
     }
+    this.knownFiles=new Set(seen.keys());
     return Array.from(seen.entries()).map(([sourcePath, sourceClass]) => ({
       sourcePath,
       sourceClass,
@@ -275,15 +283,13 @@ export class Indexer {
       suppressErrors: false,
       ignore: [
         ...this.ignoreGlobs,
-        ...expandSourcePatterns(set.exclude ?? [], root.dir),
-        ...(root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : []),
+        ...((this.rootOverrides.get(root.dir)??[]).some(o=>o.mode==='include')?[]:[...expandSourcePatterns(set.exclude??[],root.dir),...(root.id===null?expandSourcePatterns(this.config.workspaceExclude??[],this.config.root):[])]),
       ],
     });
     const safe: string[] = [];
     for (const rel of rels) {
       if (
-        this.isExcluded(rel) ||
-        (root.id === null && this.isWorkspaceExcluded(rel))
+        this.excludedByRules(root,rel)
       )
         continue;
       if (
@@ -291,7 +297,7 @@ export class Indexer {
         !(await isInsideRealRoot(root.dir, path.resolve(root.dir, rel)))
       )
         continue;
-      if (this.rootExcluded.get(root.dir)?.(rel)) continue;
+      if (!this.classifyDocument(toSourcePath(root,rel))) continue;
       const abs = path.resolve(root.dir, rel);
       if (locateAbsolute(this.roots, abs)?.root.dir !== root.dir || !await isInsideRealRoot(root.dir, abs)) continue;
       safe.push(toSourcePath(root, rel));
@@ -338,6 +344,7 @@ export class Indexer {
 
   /** Index a single file by `sourcePath`. Returns the number of chunks (re)embedded. */
   async indexFile(sourcePath: string, sourceClass: string): Promise<number> {
+    this.knownFiles.add(sourcePath);
     const key = this.entityFileKey(sourcePath) ?? sourcePath;
     const previous = this.fileLanes.get(key) ?? Promise.resolve(0);
     const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass));
@@ -372,9 +379,10 @@ export class Indexer {
     try {
       if (!await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
       const bytes = await readFile(abs);
-      if (bytes.includes(0)) { this.store.deleteSource(sourcePath); return 0; }
+      if (bytes.includes(0)) { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-      catch { this.store.deleteSource(sourcePath); return 0; }
+      catch { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
+      this.unsupportedFiles.delete(sourcePath);
     } catch (err) {
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
@@ -400,7 +408,7 @@ export class Indexer {
     this.store.deleteSource(rel);
     let embedding = false;
     try {
-      if (record.file.disabled || this.isExcluded(rel) || this.isWorkspaceExcluded(rel) || !await isInsideRealRoot(this.config.root, abs)) {
+      if (record.file.disabled || this.excludedByRules(this.roots[0],rel) || !await isInsideRealRoot(this.config.root, abs)) {
         this.store.deleteSource(record.id); return 0;
       }
       const bytes = await readFile(abs);
@@ -533,6 +541,7 @@ export class Indexer {
       const reusable =
         prev &&
         prev.contentHash === c.contentHash &&
+        embedInput(prev.headingPath,prev.text) === embedInput(c.headingPath,c.text) &&
         prev.embedderId === info.id &&
         prev.model === info.model &&
         prev.dims === info.dims &&
@@ -561,6 +570,7 @@ export class Indexer {
   /** Drop a source file from the index. */
   removeFile(sourcePath: string): void {
     this.clearFailure(this.failureKey(sourcePath));
+    this.knownFiles.delete(sourcePath);this.unsupportedFiles.delete(sourcePath);
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
     if (record) { this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }
@@ -588,6 +598,19 @@ export class Indexer {
     return this.classifyDocument(relOrAbs);
   }
 
+  private excludedByRules(root:ResolvedRoot,relative:string):boolean {
+    if(this.isExcluded(relative))return true;
+    const override=pathOverrideFor(this.rootOverrides.get(root.dir)??[],relative);
+    if(override)return override.mode==='exclude';
+    return !!this.rootExcluded.get(root.dir)?.(relative) || root.id===null && this.isWorkspaceExcluded(relative);
+  }
+  /** Rule membership for the file explorer, independent of successful embeddings. */
+  ruleFilePaths():string[]{
+    const paths=new Set<string>();
+    for(const sp of this.knownFiles){if(this.unsupportedFiles.has(sp))continue;let located;try{located=parseSourcePath(this.roots,sp);}catch{continue;}if(this.excludedByRules(located.root,located.rel))continue;const hit=this.classify(sp);if(hit){try{paths.add(resolveInRoots(this.roots,hit.sourcePath).abs);}catch{/* Detached source. */}}}
+    for(const record of this.fileRecords.values())if(!record.file.disabled && !this.excludedByRules(this.roots[0],record.file.path))paths.add(path.resolve(this.config.root,record.file.path));
+    return [...paths];
+  }
   private classifyDocument(relOrAbs: string): { sourceClass: string; sourcePath: string } | null {
     const located = path.isAbsolute(relOrAbs)
       ? locateAbsolute(this.roots, relOrAbs)
@@ -595,8 +618,7 @@ export class Indexer {
     if (!located) return null;
     const { root, rel } = located;
     const posix = rel.split(path.sep).join('/');
-    if (locateAbsolute(this.roots, path.resolve(root.dir, posix))?.root.dir !== root.dir || this.rootExcluded.get(root.dir)?.(posix)) return null;
-    if (this.isExcluded(posix) || (root.id === null && this.isWorkspaceExcluded(posix))) return null;
+    if (locateAbsolute(this.roots, path.resolve(root.dir, posix))?.root.dir !== root.dir || this.excludedByRules(root,posix)) return null;
     for (const m of this.matchers) {
       if (m.root.dir === root.dir && m.isMatch(posix)) {
         return { sourceClass: m.sourceClass, sourcePath: toSourcePath(root, posix) };

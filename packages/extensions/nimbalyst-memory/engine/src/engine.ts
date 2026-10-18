@@ -160,13 +160,16 @@ export class MemoryEngine {
     const remaining=base.remainingFiles??(base.discoveredFiles===null?null:Math.max(0,base.discoveredFiles-(base.completedFiles??0)-(base.failedFiles??0)));
     const error=failures[0]?.error??base.globalError??(base.phase==='enumerate'?base.error:null);
     const settled=base.state!=='not-started' && base.state!=='building';
+    const hasSaved=rootId===undefined?this.store.count()>0:this.store.sourceSummaries().some(row=>this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
     return {...base,remainingFiles:remaining,failedFiles:failures.length,failureCount:failures.length,failures:failures.slice(0,100),error,
       completedFiles:settled&&base.discoveredFiles!==null?Math.max(0,base.discoveredFiles-(remaining??0)-failures.length):base.completedFiles,
-      state:this.indexing?'building':failures.length || error || (remaining??0)>0?(this.store.count()>0?'partial':'failed'):settled?'ready':base.state};
+      state:this.indexing?'building':failures.length || error || (remaining??0)>0?(hasSaved?'partial':'failed'):settled?'ready':base.state};
   }
   private persistDiagnostics():void {
     this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:this.fileStatus(),...Object.fromEntries(Object.keys(this.rootScans).map(key=>[key,this.fileStatus(key==='primary'?null:key)]))}});
   }
+
+  ruleFilePaths():string[]{return this.indexer.ruleFilePaths();}
 
   /** Rebuild the in-memory retrieval snapshot from the store. */
   private refreshSnapshot(): void {
@@ -467,7 +470,7 @@ export class MemoryEngine {
   // --- Lifecycle -----------------------------------------------------------
 
   status(rootId?:string|null): EngineStatus {
-    const summaries=this.store.sourceSummaries().filter(row=>rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
+    const summaries=this.store.sourceSummaries().filter(row=>(!row.sourcePath.startsWith('@')||this.roots.some(root=>root.id&&row.sourcePath.startsWith('@'+root.id+'/'))) && (rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const bySourceClass:Record<string,number>={};
     for(const row of summaries)bySourceClass[row.sourceClass]=(bySourceClass[row.sourceClass]??0)+row.chunks;
     const chunks=summaries.reduce((n,row)=>n+row.chunks,0),dense=summaries.reduce((n,row)=>n+row.dense,0);
