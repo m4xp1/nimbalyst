@@ -119,7 +119,7 @@ describe('source settings backend bridge',()=>{
 
 
 describe('file-tree Memory rule bridge',()=>{
- it('applies literal path overrides, exposes rule membership and preserves overrides from legacy settings',async()=>{
+ it('writes tree actions into editable includes/excludes and manual edits immediately control search',async()=>{
   const root=mkdtempSync(path.join(tmpdir(),'memory-tree-rules-'));
   mkdirSync(path.join(root,'docs'));writeFileSync(path.join(root,'docs/a.md'),'# A\nТочечныйФайлМаркер');writeFileSync(path.join(root,'docs/b.md'),'# B\nСоседнийФайлМаркер');
   const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
@@ -135,9 +135,8 @@ describe('file-tree Memory rule bridge',()=>{
    expect(tree.files).toContain(path.join(root,'docs/a.md'));expect(tree.files).not.toContain(path.join(root,'docs/b.md'));
    expect(tree.directories).toContain(path.join(root,'docs'));
    expect(await runtime.methods.get_tree_index_state({revision:tree.revision})).toEqual({unchanged:true,revision:tree.revision});
-   await runtime.methods.set_sources({version:1,include:[],exclude:[]});
-   expect((await runtime.methods.get_sources()).overrides).toHaveLength(2);
-   await runtime.methods.set_path_override({path:path.join(root,'docs/a.md'),mode:'inherit'});
+   expect(await runtime.methods.get_sources()).toEqual({version:1,include:['docs/a.md'],exclude:['docs']});
+   await runtime.methods.set_sources({version:1,include:[],exclude:['docs']});
    expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
    await expect(runtime.methods.set_path_override({path:tmpdir(),mode:'include'})).rejects.toThrow(/outside/);
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}

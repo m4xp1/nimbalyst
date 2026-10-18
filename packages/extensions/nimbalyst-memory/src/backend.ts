@@ -28,7 +28,7 @@ import {
   createEmbedder,
   defaultSources,
   safeIndexError,
-  normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
+  literalSourceRule, sourceRulePath, normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
 } from '../engine/dist/index.js';
 import type { EngineConfig, SearchHit, VirtualRecord, FileRecord } from '../engine/dist/index.js';
 // The write gate. It runs on the LIVE `remember` path below rather than at
@@ -612,9 +612,11 @@ export async function activate(ctx: ActivateCtx) {
           if(checked.root.id!==target.root.id || checked.relative!==target.relative || checked.kind!==target.kind)throw Error('The source moved while changing its rules; retry.');
           const id=target.root.id,current=id?rootRules[id]??{version:1 as const,include:[],exclude:[]}:sourceRules;
           const key=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
-          const overrides=(current.overrides??[]).filter(item=>key(item.path)!==key(target.relative)||item.kind!==target.kind);
-          if(params.mode!=='inherit')overrides.push({path:target.relative,kind:target.kind,mode:params.mode!});
-          const next=normalizeSourceRules({...current,overrides});
+          const pattern=literalSourceRule(target.relative,target.kind);
+          const next=normalizeSourceRules({version:1,
+            include:current.include.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative)),
+            exclude:current.exclude.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative))});
+          if(params.mode!=='inherit')next[params.mode!].push(pattern);
           if(id){rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);}else{sourceRules=next;writeSourceRules(dataDir,next);}
           await applySources();return{rules:next,rootId:id};
         };
@@ -631,10 +633,6 @@ export async function activate(ctx: ActivateCtx) {
         let next = normalizeSourceRules(params);
         const id = (params as {rootId?:string})?.rootId;
         const apply = async () => {
-          if(!Object.prototype.hasOwnProperty.call(params??{},'overrides')){
-            const existing=id?rootRules[id]:sourceRules;
-            if(existing?.overrides)next={...next,overrides:existing.overrides};
-          }
           if (id) {
             if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
             rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);

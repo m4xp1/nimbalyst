@@ -142,6 +142,7 @@ export interface SourceSet {
   /** Exclusions relative to this source root. */
   exclude?: string[];
   pathOverrides?:import("./sourceRules.js").PathOverride[];
+  sourceRules?:{include:string[];exclude:string[]};
   /** Glob patterns relative to this set's root (fast-glob syntax). */
   include: string[];
   /**

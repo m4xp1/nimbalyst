@@ -211,7 +211,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - File tree with expand/collapse and keyboard navigation
 - Virtualized file tree for large repositories
 - Context menu: rename, delete, reveal in Finder, open externally, copy path, move, copy
-- Windows fork: Include/Exclude from Memory index on files and folders, including standard sources. Most-specific literal overrides can be removed from Memory settings to inherit rules. Blue original icons show rule membership (including partial folders), not successful embedding; disabled Memory hides the commands and colors.
+- Windows fork: one context action per file/folder — Exclude when included by Memory rules, Include otherwise — including standard sources. Actions write directly into the editable Include/Exclude lists. Narrower paths take priority (Exclude docs + Include docs/myfile.md), with exclusions winning equal specificity; legacy overrides migrate to these lists. Blue original icons show rule membership (including partial folders), not successful embedding; disabled Memory hides the commands and colors.
 - Drag-and-drop file/folder operations (Option/Alt to copy)
 - File watching with auto-reload on external changes
 - .gitignore-aware filtering

@@ -71,13 +71,14 @@ describe('selectable source folders',()=>{
 });
 
 
-describe('path overrides in settings',()=>{
- it('shows and removes a precise override without replacing ordinary includes or excludes',async()=>{
-  const rules={...initial,exclude:['docs/**'],overrides:[{path:'docs/a.md',kind:'file',mode:'include'}]};
+describe('editable tree source rules',()=>{
+ it('edits a tree include in the ordinary lists without a separate overrides section',async()=>{
+  const rules={...initial,include:['docs/a.md'],exclude:['docs']};
   const call=vi.fn(async(name:string)=>name==='memory.get_sources'?rules:{});
-  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
-  fireEvent.click(await screen.findByRole('button',{name:'Remove include override for docs/a.md'}));
-  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...rules,overrides:[]}));
-  expect((screen.getByLabelText('Source excludes') as HTMLTextAreaElement).value).toBe('docs/**');
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);const f=await field();
+  expect(screen.queryByText('File and folder overrides')).toBeNull();
+  expect((f as HTMLTextAreaElement).value).toBe('docs/a.md');
+  fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...rules,include:[]}));
  });
 });

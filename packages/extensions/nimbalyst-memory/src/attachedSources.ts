@@ -7,7 +7,9 @@ export function readAttachedRules(dataDir: string): AttachedRules {
   try {
     const value=JSON.parse(fs.readFileSync(path.join(dataDir,'root-sources.json'),'utf8'));
     if(value.version!==1 || !value.roots || typeof value.roots!=='object')throw Error('Invalid attached source settings');
-    return Object.fromEntries(Object.entries(value.roots).map(([id,rules])=>[id,normalizeSourceRules(rules)]));
+    const normalized=Object.fromEntries(Object.entries(value.roots).map(([id,rules])=>[id,normalizeSourceRules(rules)]));
+    if(Object.values(value.roots).some((rules:any)=>rules?.overrides!==undefined))writeAttachedRules(dataDir,normalized);
+    return normalized;
   } catch(error) { if((error as NodeJS.ErrnoException).code==='ENOENT')return {};throw error; }
 }
 export function writeAttachedRules(dataDir: string, roots: AttachedRules): void {

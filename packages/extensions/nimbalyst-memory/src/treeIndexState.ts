@@ -2,7 +2,7 @@ import path from 'node:path';
 import {realpath,stat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import type {MemorySourceRoot} from './attachedSources';
-import type {SourceRules} from '../engine/dist/index.js';
+import {compileSourceRules,sourceRulePath,type SourceRules} from '../engine/dist/index.js';
 const key=(p:string)=>process.platform==='win32'?path.resolve(p).toLowerCase():path.resolve(p);
 function inside(base:string,file:string){const a=key(base),b=key(file);return a===b||b.startsWith(a+path.sep);}
 export function treeOwningRoot(roots:MemorySourceRoot[],file:string):MemorySourceRoot|undefined{
@@ -23,9 +23,10 @@ export async function buildTreeIndexState(filePaths:string[],roots:MemorySourceR
    directories.set(dir,true);if(key(dir)===key(root.path))break;
   }
  }
- for(const root of roots.filter(root=>root.available))for(const override of rulesForRoot(root.id).overrides??[]){
-  if(override.mode!=='include'||override.kind!=='directory')continue;
-  const target=path.resolve(root.path,override.path);
+ for(const root of roots.filter(root=>root.available))for(const pattern of rulesForRoot(root.id).include){
+  const relative=sourceRulePath(pattern);if(relative===undefined)continue;
+  if(compileSourceRules(rulesForRoot(root.id),root.path)(relative)==='exclude')continue;
+  const target=path.resolve(root.path,relative);
   try{const resolved=await resolveTreeTarget(roots,target);if(resolved.root.id!==root.id||resolved.kind!=='directory')continue;
    directories.set(resolved.absolute,true);
    for(let dir=path.dirname(resolved.absolute);inside(root.path,dir);dir=path.dirname(dir)){directories.set(dir,true);if(key(dir)===key(root.path))break;}

@@ -7,7 +7,7 @@
  * not the whole file.
  */
 import { readFile } from 'node:fs/promises';
-import { expandSourcePatterns, isInsideRealRoot, pathOverrideFor, type PathOverride } from '../sourceRules.js';
+import { compileSourceRules, expandSourcePatterns, isInsideRealRoot, pathOverrideFor, type PathOverride } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
 import picomatch from 'picomatch';
@@ -132,6 +132,8 @@ export class Indexer {
   }
   private cancelled = false;
   cancel(): void { this.cancelled = true; }
+  private rootDecisions=new Map<string,ReturnType<typeof compileSourceRules>>();
+  private rootRuleIncludes=new Set<string>();
   private rootOverrides=new Map<string,PathOverride[]>();
   private knownFiles=new Set<string>();
   private unsupportedFiles=new Set<string>();
@@ -161,6 +163,8 @@ export class Indexer {
       isMatch: picomatch(expandSourcePatterns(set.include, rootForSet(this.roots,set).dir), { dot: true }),
     }));
     for (const root of this.roots) {
+      const rules=config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir&&set.sourceRules).map(set=>set.sourceRules!);
+      if(rules.length){const merged={include:rules.flatMap(r=>r.include),exclude:[...rules.flatMap(r=>r.exclude),...config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir).flatMap(set=>set.exclude??[]),...(root.id===null?config.workspaceExclude??[]:[])]};this.rootDecisions.set(root.dir,compileSourceRules(merged,root.dir));if(merged.include.length)this.rootRuleIncludes.add(root.dir);}
       this.rootOverrides.set(root.dir,config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir).flatMap(set=>set.pathOverrides??[]));
       const patterns = config.sources.filter(set => rootForSet(this.roots, set).dir === root.dir).flatMap(set => set.exclude ?? []);
       this.rootExcluded.set(root.dir, patterns.length ? picomatch(expandSourcePatterns(patterns, root.dir), {dot:true,nocase:true}) : () => false);
@@ -283,7 +287,7 @@ export class Indexer {
       suppressErrors: false,
       ignore: [
         ...this.ignoreGlobs,
-        ...((this.rootOverrides.get(root.dir)??[]).some(o=>o.mode==='include')?[]:[...expandSourcePatterns(set.exclude??[],root.dir),...(root.id===null?expandSourcePatterns(this.config.workspaceExclude??[],this.config.root):[])]),
+        ...((this.rootRuleIncludes.has(root.dir)||(this.rootOverrides.get(root.dir)??[]).some(o=>o.mode==='include'))?[]:[...expandSourcePatterns(set.exclude??[],root.dir),...(root.id===null?expandSourcePatterns(this.config.workspaceExclude??[],this.config.root):[])]),
       ],
     });
     const safe: string[] = [];
@@ -600,6 +604,8 @@ export class Indexer {
 
   private excludedByRules(root:ResolvedRoot,relative:string):boolean {
     if(this.isExcluded(relative))return true;
+    const decision=this.rootDecisions.get(root.dir)?.(relative);
+    if(decision)return decision==='exclude';
     const override=pathOverrideFor(this.rootOverrides.get(root.dir)??[],relative);
     if(override)return override.mode==='exclude';
     return !!this.rootExcluded.get(root.dir)?.(relative) || root.id===null && this.isWorkspaceExcluded(relative);

@@ -24,6 +24,10 @@ Per-source read/input failures are persisted in derived index metadata and quara
 
 The desktop host can request root-scoped status (undefined = All, null = main, string = attached root ID). Counts and failures are scoped; physical database size is only reported for All. The standalone MCP status contract remains compatible.
 
+## Editable source rules
+
+Source settings use only Include/Exclude arrays. Tree actions and manual edits share those arrays: a narrower path takes precedence, so Include `docs/myfile.md` can re-enable one file inside Exclude `docs`. Equal specificity favors exclusion. Glob exclusions remain effective alongside broad includes; literal filenames from tree actions are escaped. Legacy `overrides` settings are read, validated and migrated into the arrays; they are not retained as a second hidden state.
+
 ## MCP tools
 
 | Tool | Purpose |

@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "no
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { SourceSet } from "./types.js";
-import fg from "fast-glob";
+import picomatch from "picomatch";
 export interface PathOverride {path:string;kind:"file"|"directory";mode:"include"|"exclude";}
 export interface SourceRules {
   version: 1;
@@ -15,8 +15,8 @@ export function normalizeSourceRules(value: unknown): SourceRules {
   const v = value as Partial<SourceRules> | null;
   function rules(input: unknown): string[] {
     if (input === undefined) return [];
-    if (!Array.isArray(input) || input.length > 200)
-      throw new Error("Use at most 200 source rules.");
+    if (!Array.isArray(input) || input.length > 400)
+      throw new Error("Use at most 400 source rules.");
     return [
       ...new Set(
         input.map((raw) => {
@@ -59,17 +59,16 @@ export function normalizeSourceRules(value: unknown): SourceRules {
     overrides=[...unique.values()];
   }
   return {
-    ...(overrides===undefined?{}:{overrides}),
     version: 1,
-    include: rules(v?.include),
-    exclude: rules(v?.exclude),
+    ...visibleRules(rules(v?.include),rules(v?.exclude),overrides??[]),
   };
 }
 export function readSourceRules(dataDir: string): SourceRules {
   try {
-    return normalizeSourceRules(
-      JSON.parse(readFileSync(path.join(dataDir, "sources.json"), "utf8"))
-    );
+    const saved=JSON.parse(readFileSync(path.join(dataDir, "sources.json"), "utf8"));
+    const normalized=normalizeSourceRules(saved);
+    if(saved.overrides!==undefined)writeSourceRules(dataDir,normalized);
+    return normalized;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT")
       return { version: 1, include: [], exclude: [] };
@@ -81,7 +80,7 @@ export function readSourceRules(dataDir: string): SourceRules {
 export function writeSourceRules(dataDir: string, rules: SourceRules): void {
   mkdirSync(dataDir, { recursive: true });
   const target = path.join(dataDir, "sources.json");
-  writeFileSync(target + ".tmp", JSON.stringify(rules, null, 2) + "\n", "utf8");
+  writeFileSync(target + ".tmp", JSON.stringify(normalizeSourceRules(rules), null, 2) + "\n", "utf8");
   renameSync(target + ".tmp", target);
 }
 /** A literal may name a file or a directory; preserve the user's spelling. */
@@ -99,13 +98,11 @@ export function sourcesWithRules(
   builtins: SourceSet[],
   rules: SourceRules
 ): SourceSet[] {
-  const explicit=(rules.overrides??[]).filter(o=>o.mode==='include').map(o=>{
-    const literal=fg.posix.escapePath(o.path);
-    return o.kind==='directory'?(literal?literal+'/**':'**'):literal;
-  });
-  return rules.include.length || rules.overrides?.length
-    ? [...builtins, {sourceClass:'custom',include:[...rules.include,...explicit],pathOverrides:rules.overrides}]
-    : [...builtins];
+  const normalized=normalizeSourceRules(rules);
+  const base=builtins.filter(set=>!set.sourceRules);
+  return normalized.include.length || normalized.exclude.length
+    ? [...base,{sourceClass:'custom',include:normalized.include,sourceRules:{include:normalized.include,exclude:normalized.exclude}}]
+    : [...base];
 }
 /** Most-specific literal path wins; globs and text content never determine identity. */
 export function pathOverrideFor(overrides:PathOverride[],relative:string):PathOverride|undefined {
@@ -129,4 +126,51 @@ export async function isInsideRealRoot(
     !relative.startsWith(".." + path.sep) &&
     !path.isAbsolute(relative)
   );
+}
+
+/** Literal paths from the tree use ordinary, editable glob escaping. */
+export function literalSourceRule(relative:string,kind:'file'|'directory'):string {
+ if(!relative && kind==='directory')return '**';
+ return relative.replace(/[*?{}\[\]()!]/g,char=>'['+char+']');
+}
+/** Decode only literal patterns (including the tree's bracket escapes). */
+export function sourceRulePath(rule:string):string|undefined {
+ if(rule==='**')return '';
+ const pattern=rule.replace(/\/\*\*$/,'');
+ const decoded=pattern.replace(/\[([*?{}\[\]()!])\]/g,(_,char)=>'\u0001'+char+'\u0001');
+ if(/[*?{}\[\]()!]/.test(decoded.replace(/\u0001.\u0001/g,'')))return undefined;
+ return decoded.replace(/\u0001(.)\u0001/g,'$1');
+}
+function visibleRules(include:string[],exclude:string[],legacy:PathOverride[]){
+ const same=(a:string,b:string)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
+ for(const item of legacy){const rule=literalSourceRule(item.path,item.kind);
+  include=include.filter(p=>!same(sourceRulePath(p)??p,item.path));exclude=exclude.filter(p=>!same(sourceRulePath(p)??p,item.path));
+  (item.mode==='include'?include:exclude).push(rule);
+ }
+ const result={include:[...new Set(include)],exclude:[...new Set(exclude)]};
+ if(result.include.length>400||result.exclude.length>400)throw Error('Use at most 400 source rules.');
+ return result;
+}
+/** Narrower matched path constraints win; equally specific exclusions win. */
+export function compileSourceRules(rules:Pick<SourceRules,'include'|'exclude'>,root:string){
+ const options={dot:true,nocase:process.platform==='win32'};
+ const entries=(['include','exclude'] as const).flatMap(mode=>expandSourcePatterns(rules[mode],root).map(pattern=>{
+  const segments=pattern.split('/');
+  const prefixes=segments.flatMap((part,index)=>{
+   if(part==='**'||part==='*')return[];
+   const prefix=segments.slice(0,index+1).join('/'),literal=sourceRulePath(prefix),partLiteral=sourceRulePath(part)!==undefined;
+   const anchored=segments[0]!=='**'&&segments[0]!=='*'&&sourceRulePath(segments[0])!==undefined;
+   if(!partLiteral&&!anchored&&mode==='include')return[];
+   return[{match:picomatch(prefix,options),literal:partLiteral,weight:(literal??prefix.replace(/[*?{}\[\]()!+@|]/g,'')).length}];
+  });
+  return{mode,match:picomatch(pattern,options),prefixes};
+ }));
+ return(relative:string):'include'|'exclude'|undefined=>{
+  const parts=relative.replace(/\\/g,'/').split('/');let best=-1,decision:'include'|'exclude'|undefined;
+  for(const entry of entries){if(!entry.match(relative))continue;let score=0;
+   for(const prefix of entry.prefixes)for(let depth=1;depth<=parts.length;depth++)if(prefix.match(parts.slice(0,depth).join('/')))score=Math.max(score,depth*1000000+(prefix.literal?100000:0)+prefix.weight);
+   if(score>best||score===best&&entry.mode==='exclude'){best=score;decision=entry.mode;}
+  }
+  return decision;
+ };
 }
