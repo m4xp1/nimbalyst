@@ -10,7 +10,8 @@
  * the model's business and are covered by the golden-set harness, not by unit
  * tests.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { OpenAIEmbedder } from '../embedders/openaiEmbedder.js';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -228,5 +229,28 @@ describe('local embedding preferences', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'memprefs-'));
     writeLocalEmbeddingPrefs(dir, { enabled: true, modelId: 'minilm' });
     expect(readLocalEmbeddingPrefs(dir)).toEqual({ enabled: true, modelId: 'minilm' });
+  });
+});
+
+
+describe('embedding request budgets', () => {
+  it('bounds request bytes and preserves response order without a real provider', async () => {
+    const requests: string[][] = [];
+    const fetchMock = vi.fn(async (_url: unknown, options: any) => {
+      const input = JSON.parse(options.body).input as string[];
+      requests.push(input);
+      return { ok: true, json: async () => ({ data: input.map((text, index) => ({ index, embedding: [Number(text.slice(0, 3))] })).reverse() }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const embedder = new OpenAIEmbedder({apiKey: 'fake-not-a-key'});
+      const texts = Array.from({length: 129}, (_, i) => String(i).padStart(3, '0') + 'x'.repeat(5997));
+      const vectors = await embedder.embed(texts);
+      expect(vectors).toEqual(texts.map((_, i) => [i]));
+      expect(requests.every(batch => batch.length <= 128 && batch.reduce((n, t) => n + Buffer.byteLength(t), 0) <= 240000)).toBe(true);
+      const before = fetchMock.mock.calls.length;
+      await expect(embedder.embed(['x'.repeat(6001)])).rejects.toThrow(/input|size|length|limit/i);
+      expect(fetchMock.mock.calls.length).toBe(before);
+    } finally { vi.unstubAllGlobals(); }
   });
 });

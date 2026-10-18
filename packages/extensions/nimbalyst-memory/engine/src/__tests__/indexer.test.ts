@@ -197,3 +197,31 @@ describe('Indexer with a second source root', () => {
     store.close();
   });
 });
+
+
+describe('bounded source embeddings', () => {
+  it('indexes long headings, continuous payloads and page vectors without dropping the tail', async () => {
+    const { root, config } = setup();
+    const heading = 'ДлинныйЗаголовок😀'.repeat(700);
+    const raw = '# ' + heading + '\n\n' + 'Qx7Zm9'.repeat(20000) + '\n\nTAILPROBE624';
+    writeFileSync(path.join(root, 'docs/large.md'), raw);
+    const store = new SqliteStore(config.dbPath);
+    try {
+      const fake = new FakeEmbedder();
+      const requests: string[] = [];
+      const embedder = { info: fake.info, embed: async (texts: string[]) => {
+        expect(texts.every(text => Buffer.byteLength(text, 'utf8') <= 6000)).toBe(true);
+        requests.push(...texts); return fake.embed(texts);
+      }};
+      const indexer = new Indexer(config, store, embedder);
+      await indexer.indexAll();
+      const rows = store.chunksForSource('docs/large.md');
+      expect(rows.some(row => row.granularity === 'page')).toBe(true);
+      expect(rows.filter(row => row.granularity !== 'page').every(row => row.headingPath[0] === heading)).toBe(true);
+      expect(rows.some(row => row.text.includes('TAILPROBE624'))).toBe(true);
+      const sent = requests.length;
+      await indexer.indexAll();
+      expect(requests).toHaveLength(sent);
+    } finally { store.close(); }
+  });
+});

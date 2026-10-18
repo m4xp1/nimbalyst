@@ -22,6 +22,7 @@ import type {
 } from '../types.js';
 import { parseFrontmatter } from '../frontmatter.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
+import { embeddingInput, utf8Prefix, MAX_CHUNK_BODY_BYTES } from '../embeddingInput.js';
 import { chunkMarkdown } from '../chunker.js';
 import { sha256 } from '../hash.js';
 import { termFrequencies } from '../retrieval/bm25.js';
@@ -71,8 +72,7 @@ function sameChunk(next: Chunk, prev: StoredChunk): boolean {
 
 /** Embed input includes the heading breadcrumb for extra context. */
 function embedInput(headingPath: string[], text: string): string {
-  const crumb = headingPath.join(' > ');
-  return crumb ? `${crumb}\n${text}` : text;
+  return embeddingInput(headingPath, text);
 }
 
 /**
@@ -95,7 +95,7 @@ function pageRowFor(
   ref?: { refType?: string; refId?: string }
 ): Chunk | null {
   if (chunkCount <= 1) return null;
-  const text = raw.slice(0, PAGE_VECTOR_BYTES);
+  const text = utf8Prefix(raw, Math.min(PAGE_VECTOR_BYTES, MAX_CHUNK_BODY_BYTES));
   if (!text.trim()) return null;
   return {
     id: `${sourcePath}#page`,
@@ -513,7 +513,7 @@ export class Indexer {
         // Page rows stay out of BM25 entirely: giving one terms would both
         // double-count the document's vocabulary in the IDF statistics and let
         // the same source surface twice in the keyword arm.
-        sparseTerms: c.granularity === 'page' ? {} : termFrequencies(embedInput(c.headingPath, c.text)),
+        sparseTerms: c.granularity === 'page' ? {} : termFrequencies(c.headingPath.length ? c.headingPath.join(' > ') + '\n' + c.text : c.text),
         embedderId: info.id,
         model: info.model,
         dims: info.dims,

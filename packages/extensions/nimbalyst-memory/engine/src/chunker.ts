@@ -4,10 +4,11 @@
  * Splits a markdown document into ~minTokens..maxTokens chunks that never cross
  * a heading boundary, each carrying its full heading breadcrumb (`headingPath`)
  * so a hit can later expand to its whole section. Frontmatter is stripped and
- * fenced code blocks are treated atomically (their `#` lines are not headings,
- * and they are never split mid-fence).
+ * fenced code headings are ignored. Oversized blocks, including code, are split
+ * without losing their text so embedding input always stays bounded.
  */
 import { sha256 } from './hash.js';
+import { MAX_CHUNK_BODY_BYTES, splitUtf8 } from './embeddingInput.js';
 import type { Chunk } from './types.js';
 
 const CHARS_PER_TOKEN = 4;
@@ -110,9 +111,9 @@ function toBlocks(lines: string[]): string[] {
 
 /** Hard-split an oversized single block on word boundaries. */
 function splitOversized(block: string, maxTokens: number): string[] {
-  const maxChars = maxTokens * CHARS_PER_TOKEN;
-  if (block.length <= maxChars) return [block];
-  const words = block.split(/(\s+)/);
+  const maxChars = Math.max(2, Math.floor(maxTokens * CHARS_PER_TOKEN));
+  if (block.length <= maxChars && new TextEncoder().encode(block).length <= MAX_CHUNK_BODY_BYTES) return [block];
+  const words = block.split(/(\s+)/).flatMap(word => splitUtf8(word, MAX_CHUNK_BODY_BYTES, maxChars));
   const out: string[] = [];
   let buf = '';
   for (const w of words) {
@@ -168,7 +169,7 @@ export function chunkMarkdown(
     flush();
   }
 
-  return texts.map((c, ordinal) => ({
+  return texts.flatMap(c => splitUtf8(c.text, MAX_CHUNK_BODY_BYTES).map(text => ({ ...c, text }))).map((c, ordinal) => ({
     id: `${sourcePath}#${ordinal}`,
     sourcePath,
     sourceClass,
