@@ -59,3 +59,26 @@ describe('automatic source settings',()=>{
   await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{version:1,rootId:'attached-link',include:['archive/**'],exclude:[]}));
  });
 });
+
+
+describe('selectable source folders',()=>{
+ it('hides the selector for one physical workspace even with duplicate or harness roots',async()=>{
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?initial:name==='memory.get_source_roots'?[{id:null,path:'C:/Main',label:'Main',available:true},{id:'duplicate',path:'c:/main/',label:'alias',available:true},{id:'harness-memory',path:'C:/private/memory',label:'harness',available:true}]:{});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.get_source_roots'));
+  expect(screen.queryByRole('combobox',{name:'Source folder'})).toBeNull();
+ });
+});
+
+
+describe('editable tree source rules',()=>{
+ it('edits a tree include in the ordinary lists without a separate overrides section',async()=>{
+  const rules={...initial,include:['docs/a.md'],exclude:['docs']};
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?rules:{});
+  render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);const f=await field();
+  expect(screen.queryByText('File and folder overrides')).toBeNull();
+  expect((f as HTMLTextAreaElement).value).toBe('docs/a.md');
+  fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...rules,include:[]}));
+ });
+});

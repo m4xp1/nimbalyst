@@ -197,3 +197,47 @@ describe('Indexer with a second source root', () => {
     store.close();
   });
 });
+
+
+describe('bounded source embeddings', () => {
+  it('indexes long headings, continuous payloads and page vectors without dropping the tail', async () => {
+    const { root, config } = setup();
+    const heading = 'ДлинныйЗаголовок😀'.repeat(700);
+    const raw = '# ' + heading + '\n\n' + 'Qx7Zm9'.repeat(20000) + '\n\nTAILPROBE624';
+    writeFileSync(path.join(root, 'docs/large.md'), raw);
+    const store = new SqliteStore(config.dbPath);
+    try {
+      const fake = new FakeEmbedder();
+      const requests: string[] = [];
+      const embedder = { info: fake.info, embed: async (texts: string[]) => {
+        expect(texts.every(text => Buffer.byteLength(text, 'utf8') <= 6000)).toBe(true);
+        requests.push(...texts); return fake.embed(texts);
+      }};
+      const indexer = new Indexer(config, store, embedder);
+      await indexer.indexAll();
+      const rows = store.chunksForSource('docs/large.md');
+      expect(rows.some(row => row.granularity === 'page')).toBe(true);
+      expect(rows.filter(row => row.granularity !== 'page').every(row => row.headingPath[0] === heading)).toBe(true);
+      expect(rows.some(row => row.text.includes('TAILPROBE624'))).toBe(true);
+      const sent = requests.length;
+      await indexer.indexAll();
+      expect(requests).toHaveLength(sent);
+    } finally { store.close(); }
+  });
+});
+
+
+describe('changed heading context',()=>{
+ it('refreshes unchanged body vectors when their heading context changes',async()=>{
+  const {root,config}=setup();const body='stablebody '.repeat(700),file=path.join(root,'docs/context.md');
+  writeFileSync(file,'# OriginalContext\n\n'+body);
+  const store=new SqliteStore(config.dbPath),fake=new FakeEmbedder(),sent:string[]=[];
+  const indexer=new Indexer(config,store,{info:fake.info,embed:async texts=>{sent.push(...texts);return fake.embed(texts);}});
+  try{
+   await indexer.indexAll();const before=sent.length;
+   writeFileSync(file,'# UpdatedContext\n\n'+body);await indexer.indexAll();
+   expect(sent.length-before).toBe(store.chunksForSource('docs/context.md').length);
+   expect(sent.slice(before).every(input=>input.includes('UpdatedContext'))).toBe(true);
+  }finally{store.close();}
+ });
+});

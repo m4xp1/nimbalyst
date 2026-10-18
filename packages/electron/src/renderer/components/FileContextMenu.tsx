@@ -7,6 +7,10 @@ import { useFloatingMenu, FloatingPortal, virtualElement } from '../hooks/useFlo
 import { historyDialogFileAtom, workspaceRootPathsAtom } from '../store';
 import { relativeWorkspacePath } from '../utils/relativeWorkspacePath';
 import { requestConfirmation } from '../dialogs/requestConfirmation';
+import {memoryTreeAvailableAtom,memoryTreeIncludedAtom} from '../store/atoms/memoryTree';
+import {changeMemoryTreeRule} from '../store/listeners/memoryTreeListeners';
+import {dialogRef} from '../contexts/DialogContext';
+import {DIALOG_IDS} from '../dialogs/registry';
 
 interface FileContextMenuProps {
   x: number;
@@ -55,6 +59,15 @@ export function FileContextMenu({
   isPrimaryRoot = false,
   onDetachFolder,
 }: FileContextMenuProps) {
+  const memoryAvailable=useAtomValue(memoryTreeAvailableAtom);
+  const memoryIncluded=useAtomValue(memoryTreeIncludedAtom(filePath));
+  const [memoryBusy,setMemoryBusy]=useState(false);
+  const applyMemoryRule=async(mode:'include'|'exclude')=>{
+    if(memoryBusy)return;setMemoryBusy(true);
+    try{await changeMemoryTreeRule(filePath,mode);onClose();}
+    catch(error){dialogRef.current?.open(DIALOG_IDS.ERROR,{title:'Memory source update failed',message:'Could not update this source rule.',details:error instanceof Error?error.message:String(error)});}
+    finally{setMemoryBusy(false);}
+  };
   const openHistoryDialog = useSetAtom(historyDialogFileAtom);
   const roots = useAtomValue(workspaceRootPathsAtom);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -285,6 +298,10 @@ export function FileContextMenu({
           relativePath={relativeWorkspacePath(filePath, roots)}
         />
 
+        {memoryAvailable && <>
+          <div className={separatorClasses}/>
+          <button type="button" className={menuItemClasses} aria-label={memoryIncluded?'Exclude from Memory index':'Include in Memory index'} disabled={memoryBusy} onClick={()=>void applyMemoryRule(memoryIncluded?'exclude':'include')}><MaterialSymbol icon={memoryIncluded?'remove_circle':'add_circle'} size={18}/><span>{memoryIncluded?'Exclude from Memory index':'Include in Memory index'}</span></button>
+        </>}
         {isWorkspaceRoot ? (
           !isPrimaryRoot && onDetachFolder && (
             <>

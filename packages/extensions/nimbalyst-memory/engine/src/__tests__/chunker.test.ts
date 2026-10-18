@@ -92,3 +92,15 @@ describe('stripFrontmatter', () => {
     expect(stripFrontmatter('no frontmatter here')).toBe('no frontmatter here');
   });
 });
+
+
+describe('oversized searchable text', () => {
+  it('retains continuous text and Unicode in bounded chunks', () => {
+    for (const raw of ['Qx7Zm9'.repeat(20000), 'Я😀ё'.repeat(12000)]) {
+      const chunks = chunkMarkdown('synthetic.txt', 'custom', raw, { plainText: true });
+      expect(chunks.map(c => c.text).join('')).toBe(raw);
+      expect(chunks.every(c => Buffer.byteLength(c.text, 'utf8') <= 5000)).toBe(true);
+      expect(chunks.every(c => !/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/u.test(c.text))).toBe(true);
+    }
+  });
+});

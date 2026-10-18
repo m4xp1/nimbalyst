@@ -12,7 +12,8 @@
  *                   surfaced each hit.
  * When the bridge is absent (older host) it degrades to informational copy.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
 import type { ReactNode } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
 import { SourceSettings } from './SourceSettings';
@@ -31,6 +32,7 @@ interface IndexStatus {
   indexing?: boolean;
   fileIndex?: FileIndexStatus;
   sourceRootErrors?: Array<{label:string;path:string}>;
+  sourceRoots?:SourceFolder[];
   indexedFiles?: number;
   watching?: boolean;
   chunksWithoutVectors?: number;
@@ -129,6 +131,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [coverageRootId,setCoverageRootId]=useState<string|null|undefined>(undefined);
+  const coverageSelection=useRef<string|null|undefined>(undefined);
+  const statusGeneration=useRef(0);
+  const rootSignature=useRef('');
+  const [coverageRoots,setCoverageRoots]=useState<SourceFolder[]>([]);
+  const selectCoverageRoot=(id:string|null|undefined)=>{coverageSelection.current=id;statusGeneration.current++;setStatus(null);setCoverageRootId(id);};
   const [facts, setFacts] = useState<FactRow[] | null>(null);
   const [factsError, setFactsError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -178,10 +186,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
 
   const refreshStatus = useCallback(async () => {
     if (!callBackendTool) return;
+    const generation=++statusGeneration.current,id=coverageSelection.current;
     setLoadingStatus(true);
     setStatusError(null);
     try {
-      const s = (await callBackendTool('memory.status')) as IndexStatus;
+      const s = (await (id===undefined?callBackendTool('memory.status'):callBackendTool('memory.status',{rootId:id}))) as IndexStatus;
+      if(generation!==statusGeneration.current)return;
       setStatus(s);
       const api = (window as { electronAPI?: { invoke?: (c: string) => Promise<unknown> } }).electronAPI;
       if (api?.invoke) {
@@ -191,11 +201,21 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         } catch { /* Older hosts do not expose reconciliation errors. */ }
       }
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : String(err));
+      if(generation===statusGeneration.current)setStatusError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoadingStatus(false);
+      if(generation===statusGeneration.current)setLoadingStatus(false);
     }
   }, [callBackendTool]);
+
+  const updateCoverageRoots=(value:SourceFolder[])=>{
+    const next=selectableSourceFolders(value),signature=JSON.stringify(next);
+    if(signature===rootSignature.current)return;
+    rootSignature.current=signature;setCoverageRoots(next);
+    const id=coverageSelection.current;
+    if(id!==undefined && (next.length<=1 || !next.some(root=>root.id===id)))selectCoverageRoot(undefined);
+    else void refreshStatus();
+  };
+  useEffect(()=>{void refreshStatus();},[coverageRootId,refreshStatus]);
 
   const toggleIndexSessions = useCallback(async (next: boolean) => {
     const api = (window as { electronAPI?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } })
@@ -516,7 +536,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         </p>
       )}
 
-      <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} />
+      <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} onRootsChanged={updateCoverageRoots} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>
@@ -661,7 +681,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
       </section>
 
       {/* ---------------- 1. COVERAGE ---------------- */}
-      <section style={SECTION}>
+      <section className="nimbalyst-memory-coverage" style={SECTION}>
         <div style={HEAD}>
           <h4 style={H4}>
             Coverage
@@ -698,11 +718,16 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               title="Scan sources and reuse unchanged embeddings; new or changed text may call the provider"
               style={btnStyle(isDark)}
             >
-              {rebuilding ? 'Rebuilding…' : 'Rebuild'}
+              {rebuilding ? 'Rebuilding…' : 'Rebuild all'}
             </button>
           </div>
         </div>
 
+        {coverageRoots.length>1 && <label className="nimbalyst-memory-coverage-source">Source folder <select aria-label="Coverage source folder" value={coverageRootId===undefined?'__all__':coverageRootId??''}
+          onChange={event=>selectCoverageRoot(event.target.value==='__all__'?undefined:event.target.value||null)}>
+          <option value="__all__">All</option>
+          {coverageRoots.map(root=><option key={root.id??'primary'} value={root.id??''}>{root.label} — {root.path}{root.available?'':' (unavailable)'}</option>)}
+        </select></label>}
         {statusError && <p style={ERR}>{statusError}</p>}
         {!!status?.sourceRootErrors?.length && <p role="alert" style={ERR}>Unavailable source folders: {status.sourceRootErrors.map(root=>root.path).join(', ')}. Their old results are excluded.</p>}
 
@@ -731,9 +756,13 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               <dt>Files processed in last scan</dt><dd>{countLabel(status.fileIndex?.completedFiles)}</dd>
               <dt>Files currently saved</dt><dd>{countLabel(status.indexedFiles)}</dd>
               <dt>Files failed in last operation</dt><dd>{countLabel(status.fileIndex?.failedFiles)}</dd>
+              <dt>Files remaining in last scan</dt><dd>{countLabel(status.fileIndex?.remainingFiles)}</dd>
               <dt>Saved chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
               <dt>File observation</dt><dd>{status.watching === undefined ? 'Unknown' : status.watching ? 'Active' : 'Inactive'}</dd>
             </dl>
+            {!!status.fileIndex?.failures?.length && <ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{status.fileIndex.failures.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code>: {f.error.category} — {f.error.action}</li>)}
+              {(status.fileIndex.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex.failureCount} errors.</li>}
+            </ul>}
             {status.fileIndex?.error && <p role="alert" style={ERR}>{status.fileIndex.error.category}: {status.fileIndex.error.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.fileIndex.error.action}</p>}
             {status.embeddingError && <p role="alert" style={ERR}>{status.embeddingError.category}: {status.embeddingError.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.embeddingError.action}</p>}
 
@@ -779,11 +808,11 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               <dd style={{ margin: 0 }}>
                 {relativeTime(status.lastIndexedAt)}{status.watching ? ' · observing file changes' : ''}
               </dd>
-              <dt style={{ color: 'var(--nim-text-muted)' }}>Index size</dt>
+              {coverageRootId===undefined && <><dt style={{ color: 'var(--nim-text-muted)' }}>Index size</dt>
               <dd style={{ margin: 0 }}>
                 {formatBytes(status.indexSizeBytes)}{' '}
                 <span style={{ color: 'var(--nim-text-muted)' }}>(rebuildable)</span>
-              </dd>
+              </dd></>}
             </dl>
 
             {keywordOnly && (

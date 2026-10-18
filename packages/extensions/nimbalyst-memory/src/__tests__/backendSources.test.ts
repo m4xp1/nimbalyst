@@ -75,6 +75,13 @@ describe('source settings backend bridge',()=>{
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    roots=[...roots,{id:'attached-link',path:link,label:'link',available:true}];
    const found=await runtime.methods.search_project_knowledge({query:'ПодключенныйКореньМаркер',k:8}) as any;
+   const primaryStatus=await runtime.methods.status({rootId:null}) as any;
+   const linkedStatus=await runtime.methods.status({rootId:'attached-link'}) as any;
+   const allStatus=await runtime.methods.status() as any;
+   expect(primaryStatus.sourceFiles).toBe(1);expect(linkedStatus.sourceFiles).toBe(1);
+   expect(allStatus.chunks).toBe(primaryStatus.chunks+linkedStatus.chunks);
+   expect(primaryStatus.indexSizeBytes).toBeUndefined();expect(allStatus.indexSizeBytes).toBeGreaterThan(0);
+   await expect(runtime.methods.status({rootId:'unknown'})).rejects.toThrow(/Unknown/);
    expect(found.chunks).toHaveLength(1);expect(found.chunks[0]).toMatchObject({sourcePath:'@attached-link/docs/a.md',refId:path.join(link,'docs/a.md'),rootLabel:'link',relativePath:'docs/a.md'});
    expect((await runtime.methods.search_project_knowledge({query:'АрхивПодключеннойПапкиМаркер'}) as any).chunks).toEqual([]);
    await runtime.methods.set_sources({rootId:'attached-link',include:['archive/**'],exclude:[]});
@@ -107,5 +114,31 @@ describe('source settings backend bridge',()=>{
    expect((await runtime.methods.get_sources({rootId:'attached-link'})).include).toEqual(['archive/**']);
    expect((await runtime.methods.search_project_knowledge({query:'ОбновленныйАрхивМаркер'}) as any).chunks).toHaveLength(1);
   }finally{await runtime.deactivate();rmSync(base,{recursive:true,force:true});}
+ });
+});
+
+
+describe('file-tree Memory rule bridge',()=>{
+ it('writes tree actions into editable includes/excludes and manual edits immediately control search',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-tree-rules-'));
+  mkdirSync(path.join(root,'docs'));writeFileSync(path.join(root,'docs/a.md'),'# A\nТочечныйФайлМаркер');writeFileSync(path.join(root,'docs/b.md'),'# B\nСоседнийФайлМаркер');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{
+   await vi.waitFor(async()=>expect(await runtime.methods.status()).toMatchObject({ready:true,indexing:false}));
+   await runtime.methods.set_path_override({path:path.join(root,'docs'),mode:'exclude'});
+   expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
+   await runtime.methods.set_path_override({path:path.join(root,'docs/a.md'),mode:'include'});
+   expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toHaveLength(1);
+   expect((await runtime.methods.search_project_knowledge({query:'СоседнийФайлМаркер'})).chunks).toEqual([]);
+   const tree=await runtime.methods.get_tree_index_state();
+   if(!('files' in tree))throw Error('Expected the complete initial tree snapshot');
+   expect(tree.files).toContain(path.join(root,'docs/a.md'));expect(tree.files).not.toContain(path.join(root,'docs/b.md'));
+   expect(tree.directories).toContain(path.join(root,'docs'));
+   expect(await runtime.methods.get_tree_index_state({revision:tree.revision})).toEqual({unchanged:true,revision:tree.revision});
+   expect(await runtime.methods.get_sources()).toEqual({version:1,include:['docs/a.md'],exclude:['docs']});
+   await runtime.methods.set_sources({version:1,include:[],exclude:['docs']});
+   expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
+   await expect(runtime.methods.set_path_override({path:tmpdir(),mode:'include'})).rejects.toThrow(/outside/);
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
 });

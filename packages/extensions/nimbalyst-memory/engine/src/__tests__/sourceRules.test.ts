@@ -212,3 +212,41 @@ describe("custom text sources", () => {
     );
   });
 });
+
+
+describe('most-specific literal path overrides',()=>{
+ it('includes a literal child inside an excluded folder and retains built-in source classes',async()=>{
+  const r=root();file(r,'docs/keep[1].md','# Kept\nТочечноеВключениеМаркер');file(r,'docs/hidden.md','# Hidden\nРодительскоеИсключениеМаркер');
+  const rules=normalizeSourceRules({version:1,include:[],exclude:['docs/**'],overrides:[{path:'docs',kind:'directory',mode:'exclude'},{path:'docs/keep[1].md',kind:'file',mode:'include'}]});
+  const cfg={...config(r),sources:sourcesWithRules(config(r).sources,rules),workspaceExclude:rules.exclude};
+  const engine=MemoryEngine.create(cfg,new FakeEmbedder());engines.push(engine);
+  await engine.indexAll();
+  const hits=(await engine.search('ТочечноеВключениеМаркер',20)).filter(h=>h.signals?.sparse);
+  expect(hits.map(h=>h.sourcePath)).toEqual(['docs/keep[1].md']);expect(hits[0].sourceClass).toBe('docs');
+  expect((await engine.search('РодительскоеИсключениеМаркер',20)).filter(h=>h.signals?.sparse)).toEqual([]);
+  writeSourceRules(path.join(r,'state'),rules);expect(readSourceRules(path.join(r,'state'))).toEqual(rules);
+ });
+ it('keeps unsafe paths invalid while accepting root-directory and Unicode literal overrides',()=>{
+  const value=normalizeSourceRules({overrides:[{path:'',kind:'directory',mode:'exclude'},{path:'Архив/a[1].txt',kind:'file',mode:'include'}]});
+  expect(value.overrides).toBeUndefined();expect(value.exclude).toEqual(['**']);expect(value.include).toEqual(['Архив/a[[]1[]].txt']);
+  for(const bad of ['../secret','C:/secret','/secret'])expect(()=>normalizeSourceRules({overrides:[{path:bad,kind:'file',mode:'include'}]})).toThrow();
+ });
+});
+
+describe('editable include/exclude specificity',()=>{
+ it('prefers a narrow child to an excluded parent, then applies manual edits and nested excludes',async()=>{
+  const r=root();file(r,'docs/myfile.md','# Child\nVisibleChildMarker');file(r,'docs/neighbor.md','# Neighbor\nHiddenNeighborMarker');file(r,'docs/sub/keep.md','# Kept\nKeptSubMarker');file(r,'docs/sub/private.md','# Private\nHiddenPrivateMarker');
+  const cfg=config(r),engine=MemoryEngine.create(cfg,new FakeEmbedder());engines.push(engine);
+  const apply=async(include:string[],exclude:string[])=>{const rules=normalizeSourceRules({include,exclude});await engine.waitForIndexing();await engine.updateSources(sourcesWithRules(cfg.sources,rules),rules.exclude);};
+  await engine.indexAll();await apply(['docs/myfile.md','docs/sub'],['docs','docs/**/private.md']);
+  expect(engine.expand('docs/myfile.md',[])).not.toBeNull();expect(engine.expand('docs/neighbor.md',[])).toBeNull();expect(engine.expand('docs/sub/keep.md',[])).not.toBeNull();expect(engine.expand('docs/sub/private.md',[])).toBeNull();
+  await apply([],['docs']);expect(engine.expand('docs/myfile.md',[])).toBeNull();
+  await apply(['docs/myfile.md'],['docs/myfile.md']);expect(engine.expand('docs/myfile.md',[])).toBeNull();
+ });
+ it('converts legacy overrides into visible escaped patterns without a second hidden state',()=>{
+  const r=root(),legacy={version:1,include:['notes'],exclude:[],overrides:[{path:'docs',kind:'directory',mode:'exclude'},{path:'docs/a[1].md',kind:'file',mode:'include'}]};
+  writeFileSync(path.join(r,'sources.json'),JSON.stringify(legacy));const rules=readSourceRules(r);
+  expect(rules).toEqual({version:1,include:['notes','docs/a[[]1[]].md'],exclude:['docs']});
+  expect(readSourceRules(r)).toEqual(rules);
+ });
+});

@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.3] - 2026-10-18
+
+### Added
+- Inspect Memory Coverage for all sources or one source folder.
+- Include or exclude files and folders from Memory through the Files menu; blue icons show source-rule membership.
+
+### Fixed
+- Keep Memory indexing and file observation working after oversized inputs or individual source errors, and suppress stale failed-source results.
+
 ## [0.81.7+m4xp1.2] - 2026-10-17
 
 ### Fixed

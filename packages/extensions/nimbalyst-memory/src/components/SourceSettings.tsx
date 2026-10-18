@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-interface Rules { version: 1; include: string[]; exclude: string[]; }
+import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
+interface Rules { version: 1; include: string[]; exclude: string[];}
 type Call = (name: string, params?: any) => Promise<any>;
 const parse = (text: string) => text.split('\n').map(s => s.trim()).filter(Boolean);
-export function SourceSettings({ callBackendTool, onApplied }: {
-  callBackendTool?: Call; onApplied: () => void;
+export function SourceSettings({ callBackendTool, onApplied, onRootsChanged }: {
+  callBackendTool?: Call; onApplied: () => void;onRootsChanged?:(roots:SourceFolder[])=>void;
 }) {
   const [rootId,setRootId]=useState<string|null>(null);
   const [roots,setRoots]=useState<Array<{id:string|null;label:string;path:string;available:boolean}>>([]);
@@ -11,8 +12,8 @@ export function SourceSettings({ callBackendTool, onApplied }: {
   const [exclude, setExclude] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const bridge = useRef({ callBackendTool, onApplied });
-  bridge.current = { callBackendTool, onApplied };
+  const bridge = useRef({ callBackendTool, onApplied, onRootsChanged });
+  bridge.current = { callBackendTool, onApplied, onRootsChanged };
   const draft = useRef({ rootId:null as string|null, include: '', exclude: '', loaded: false, dirty: false });
   const live = useRef(false);
   const saved = useRef('');
@@ -61,8 +62,8 @@ export function SourceSettings({ callBackendTool, onApplied }: {
     void loadRoot(null);
     const refresh=()=>{void bridge.current.callBackendTool?.('memory.get_source_roots').then(value=>{
       if(live.current && Array.isArray(value)){
-        setRoots(value);
-        if(draft.current.rootId && !value.some(root=>root.id===draft.current.rootId))void loadRoot(null);
+        const next=selectableSourceFolders(value);setRoots(next);bridge.current.onRootsChanged?.(next);
+        if(draft.current.rootId && !next.some(root=>root.id===draft.current.rootId))void loadRoot(null);
       }
     }).catch(()=>{});};
     refresh();const timer=setInterval(refresh,2000);
@@ -80,7 +81,8 @@ export function SourceSettings({ callBackendTool, onApplied }: {
     <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
       Add files relative to the selected source folder, folders or globs, one per line. Additional sources
       support UTF-8 text of any extension, including JSON, YAML, code and files without
-      an extension. Binary files are skipped.
+      an extension. Binary files are skipped. A narrower path takes precedence: Include docs/myfile.md
+      re-enables that file inside Exclude docs. Equally specific exclusions win.
     </p>
     <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
       Built-in Markdown sources: docs/, design/, nimbalyst-local/plans/,

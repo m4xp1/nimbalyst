@@ -7,7 +7,7 @@
  * not the whole file.
  */
 import { readFile } from 'node:fs/promises';
-import { expandSourcePatterns, isInsideRealRoot } from '../sourceRules.js';
+import { compileSourceRules, expandSourcePatterns, isInsideRealRoot, pathOverrideFor, type PathOverride } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
 import picomatch from 'picomatch';
@@ -21,7 +21,9 @@ import type {
   FileRecord,
 } from '../types.js';
 import { parseFrontmatter } from '../frontmatter.js';
+import { safeIndexError, isProviderIndexFailure, type SourceIndexFailure } from '../indexStatus.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
+import { embeddingInput, utf8Prefix, MAX_CHUNK_BODY_BYTES } from '../embeddingInput.js';
 import { chunkMarkdown } from '../chunker.js';
 import { sha256 } from '../hash.js';
 import { termFrequencies } from '../retrieval/bm25.js';
@@ -43,6 +45,7 @@ export interface IndexProgress {
   total: number;
   /** Chunks requiring embedding so far; unchanged files do not advance this. */
   indexed?: number;
+  failed?:number; success?:boolean; sources?:FileRef[];
 }
 
 interface FileRef {
@@ -71,8 +74,7 @@ function sameChunk(next: Chunk, prev: StoredChunk): boolean {
 
 /** Embed input includes the heading breadcrumb for extra context. */
 function embedInput(headingPath: string[], text: string): string {
-  const crumb = headingPath.join(' > ');
-  return crumb ? `${crumb}\n${text}` : text;
+  return embeddingInput(headingPath, text);
 }
 
 /**
@@ -95,7 +97,7 @@ function pageRowFor(
   ref?: { refType?: string; refId?: string }
 ): Chunk | null {
   if (chunkCount <= 1) return null;
-  const text = raw.slice(0, PAGE_VECTOR_BYTES);
+  const text = utf8Prefix(raw, Math.min(PAGE_VECTOR_BYTES, MAX_CHUNK_BODY_BYTES));
   if (!text.trim()) return null;
   return {
     id: `${sourcePath}#page`,
@@ -113,8 +115,28 @@ function pageRowFor(
 }
 
 export class Indexer {
+  private failures = new Map<string,SourceIndexFailure>();
+  sourceFailed(sourcePath:string):boolean {return this.failures.has(sourcePath);}
+  failuresForStatus():SourceIndexFailure[] { return [...this.failures.values()]; }
+  private recordFailure(sourcePath:string,error:unknown):void {
+    const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
+    const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
+    const relativePath=record?.file.path??(rootId&&rootId!=='harness-memory'?sourcePath.slice(rootId.length+2):sourcePath);
+    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),updatedAt:Date.now()});
+    this.persistFailures();
+  }
+  private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
+  private persistFailures():void { this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),failures:[...this.failures.values()]}); }
+  private failureKey(sourcePath:string):string {
+    const key=this.entityFileKey(sourcePath);return (key&&this.fileRecords.get(key)?.id)||sourcePath;
+  }
   private cancelled = false;
   cancel(): void { this.cancelled = true; }
+  private rootDecisions=new Map<string,ReturnType<typeof compileSourceRules>>();
+  private rootRuleIncludes=new Set<string>();
+  private rootOverrides=new Map<string,PathOverride[]>();
+  private knownFiles=new Set<string>();
+  private unsupportedFiles=new Set<string>();
   private rootExcluded = new Map<string, (p: string) => boolean>();
   private fileRecords = new Map<string, FileRecord>();
   private validatedFiles = new Set<string>();
@@ -132,6 +154,7 @@ export class Indexer {
     private embedder: Embedder
   ) {
     this.roots = resolveRoots(config.root, config.sources);
+    this.failures = new Map(store.getIndexDiagnostics().failures.map(f=>[f.sourcePath,f]));
     // A matcher is bound to its set's root: `docs/**/*.md` declared against the
     // primary root must not claim a `docs/x.md` that lives under another root.
     this.matchers = config.sources.map((set) => ({
@@ -140,6 +163,9 @@ export class Indexer {
       isMatch: picomatch(expandSourcePatterns(set.include, rootForSet(this.roots,set).dir), { dot: true }),
     }));
     for (const root of this.roots) {
+      const rules=config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir&&set.sourceRules).map(set=>set.sourceRules!);
+      if(rules.length){const merged={include:rules.flatMap(r=>r.include),exclude:[...rules.flatMap(r=>r.exclude),...config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir).flatMap(set=>set.exclude??[]),...(root.id===null?config.workspaceExclude??[]:[])]};this.rootDecisions.set(root.dir,compileSourceRules(merged,root.dir));if(merged.include.length)this.rootRuleIncludes.add(root.dir);}
+      this.rootOverrides.set(root.dir,config.sources.filter(set=>rootForSet(this.roots,set).dir===root.dir).flatMap(set=>set.pathOverrides??[]));
       const patterns = config.sources.filter(set => rootForSet(this.roots, set).dir === root.dir).flatMap(set => set.exclude ?? []);
       this.rootExcluded.set(root.dir, patterns.length ? picomatch(expandSourcePatterns(patterns, root.dir), {dot:true,nocase:true}) : () => false);
     }
@@ -152,6 +178,7 @@ export class Indexer {
       if (key) this.fileRecords.set(key, record);
     }
     this.entityIds = new Set([...this.fileRecords.values()].map(r => r.id));
+    for(const sp of store.fileSourcePaths())this.knownFiles.add(sp);
   }
 
   private entityFileKey(ref: string | undefined): string | null {
@@ -165,6 +192,7 @@ export class Indexer {
   entityFilePaths(): string[] { return [...this.fileRecords.values()].map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
   readable(chunk: StoredChunk): boolean {
+    if(this.failures.has(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
       return this.classifyDocument(chunk.sourcePath) !== null;
@@ -236,6 +264,7 @@ export class Indexer {
       const hit = this.classify(record.file.path);
       if (hit) seen.set(hit.sourcePath, record.sourceClass);
     }
+    this.knownFiles=new Set(seen.keys());
     return Array.from(seen.entries()).map(([sourcePath, sourceClass]) => ({
       sourcePath,
       sourceClass,
@@ -258,15 +287,13 @@ export class Indexer {
       suppressErrors: false,
       ignore: [
         ...this.ignoreGlobs,
-        ...expandSourcePatterns(set.exclude ?? [], root.dir),
-        ...(root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : []),
+        ...((this.rootRuleIncludes.has(root.dir)||(this.rootOverrides.get(root.dir)??[]).some(o=>o.mode==='include'))?[]:[...expandSourcePatterns(set.exclude??[],root.dir),...(root.id===null?expandSourcePatterns(this.config.workspaceExclude??[],this.config.root):[])]),
       ],
     });
     const safe: string[] = [];
     for (const rel of rels) {
       if (
-        this.isExcluded(rel) ||
-        (root.id === null && this.isWorkspaceExcluded(rel))
+        this.excludedByRules(root,rel)
       )
         continue;
       if (
@@ -274,7 +301,7 @@ export class Indexer {
         !(await isInsideRealRoot(root.dir, path.resolve(root.dir, rel)))
       )
         continue;
-      if (this.rootExcluded.get(root.dir)?.(rel)) continue;
+      if (!this.classifyDocument(toSourcePath(root,rel))) continue;
       const abs = path.resolve(root.dir, rel);
       if (locateAbsolute(this.roots, abs)?.root.dir !== root.dir || !await isInsideRealRoot(root.dir, abs)) continue;
       safe.push(toSourcePath(root, rel));
@@ -287,13 +314,21 @@ export class Indexer {
     onProgress?.({ phase: 'enumerate', done: 0, total: 0 });
     const files = await this.enumerate();
     const live = new Set(files.map((f) => f.sourcePath));
+    onProgress?.({phase:'index',done:0,total:files.length,indexed:0,failed:0,sources:files});
 
-    let indexed = 0;
+    let indexed = 0, completed = 0, failed = 0;
     for (let i = 0; i < files.length; i++) {
       if (this.cancelled) return { indexed, files: i };
       const f = files[i];
-      onProgress?.({ phase: 'index', file: f.sourcePath, done: i, total: files.length, indexed });
-      indexed += await this.indexFile(f.sourcePath, f.sourceClass);
+      try {
+        indexed += await this.indexFile(f.sourcePath, f.sourceClass);
+        completed++;
+        onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:true});
+      } catch(error) {
+        failed++;
+        onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:false});
+        if(isProviderIndexFailure(error))throw error;
+      }
     }
 
     if (this.cancelled) return { indexed, files: files.length };
@@ -305,17 +340,27 @@ export class Indexer {
       if (!live.has(sourcePath)) this.store.deleteSource(sourcePath);
     }
 
-    onProgress?.({ phase: 'done', done: files.length, total: files.length });
+    const liveFailures=new Set(files.map(f=>this.failureKey(f.sourcePath)));
+    for(const key of this.failures.keys())if(!liveFailures.has(key))this.clearFailure(key);
+    onProgress?.({ phase: 'done', done: completed, total: files.length,failed });
     return { indexed, files: files.length };
   }
 
   /** Index a single file by `sourcePath`. Returns the number of chunks (re)embedded. */
   async indexFile(sourcePath: string, sourceClass: string): Promise<number> {
+    this.knownFiles.add(sourcePath);
     const key = this.entityFileKey(sourcePath) ?? sourcePath;
     const previous = this.fileLanes.get(key) ?? Promise.resolve(0);
     const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass));
     this.fileLanes.set(key, next);
-    try { return await next; } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
+    try {
+      const result=await next;
+      if(!this.cancelled)this.clearFailure(this.failureKey(sourcePath));
+      return result;
+    } catch(error) {
+      if(!this.cancelled)this.recordFailure(this.failureKey(sourcePath),error);
+      throw error;
+    } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
   }
 
   private async indexFileNow(sourcePath: string, sourceClass: string): Promise<number> {
@@ -338,11 +383,11 @@ export class Indexer {
     try {
       if (!await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
       const bytes = await readFile(abs);
-      if (bytes.includes(0)) { this.store.deleteSource(sourcePath); return 0; }
+      if (bytes.includes(0)) { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-      catch { this.store.deleteSource(sourcePath); return 0; }
+      catch { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
+      this.unsupportedFiles.delete(sourcePath);
     } catch (err) {
-      this.store.deleteSource(sourcePath);
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // File vanished mid-pass; treat as deletion.
       this.store.deleteSource(sourcePath);
@@ -367,7 +412,7 @@ export class Indexer {
     this.store.deleteSource(rel);
     let embedding = false;
     try {
-      if (record.file.disabled || this.isExcluded(rel) || this.isWorkspaceExcluded(rel) || !await isInsideRealRoot(this.config.root, abs)) {
+      if (record.file.disabled || this.excludedByRules(this.roots[0],rel) || !await isInsideRealRoot(this.config.root, abs)) {
         this.store.deleteSource(record.id); return 0;
       }
       const bytes = await readFile(abs);
@@ -395,10 +440,8 @@ export class Indexer {
       this.validatedFiles.add(record.id);
       return count;
     } catch (error) {
-      this.store.deleteSource(record.id);
-      this.store.deleteSource(rel);
-      if (embedding) throw error;
-      this.config.onLog?.('warn', `[indexer] file entity unavailable: ${rel}`);
+      if (embedding || !['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))throw error;
+      this.store.deleteSource(record.id);this.store.deleteSource(rel);
       return 0;
     }
   }
@@ -502,6 +545,7 @@ export class Indexer {
       const reusable =
         prev &&
         prev.contentHash === c.contentHash &&
+        embedInput(prev.headingPath,prev.text) === embedInput(c.headingPath,c.text) &&
         prev.embedderId === info.id &&
         prev.model === info.model &&
         prev.dims === info.dims &&
@@ -513,7 +557,7 @@ export class Indexer {
         // Page rows stay out of BM25 entirely: giving one terms would both
         // double-count the document's vocabulary in the IDF statistics and let
         // the same source surface twice in the keyword arm.
-        sparseTerms: c.granularity === 'page' ? {} : termFrequencies(embedInput(c.headingPath, c.text)),
+        sparseTerms: c.granularity === 'page' ? {} : termFrequencies(c.headingPath.length ? c.headingPath.join(' > ') + '\n' + c.text : c.text),
         embedderId: info.id,
         model: info.model,
         dims: info.dims,
@@ -529,6 +573,8 @@ export class Indexer {
 
   /** Drop a source file from the index. */
   removeFile(sourcePath: string): void {
+    this.clearFailure(this.failureKey(sourcePath));
+    this.knownFiles.delete(sourcePath);this.unsupportedFiles.delete(sourcePath);
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
     if (record) { this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }
@@ -556,6 +602,21 @@ export class Indexer {
     return this.classifyDocument(relOrAbs);
   }
 
+  private excludedByRules(root:ResolvedRoot,relative:string):boolean {
+    if(this.isExcluded(relative))return true;
+    const decision=this.rootDecisions.get(root.dir)?.(relative);
+    if(decision)return decision==='exclude';
+    const override=pathOverrideFor(this.rootOverrides.get(root.dir)??[],relative);
+    if(override)return override.mode==='exclude';
+    return !!this.rootExcluded.get(root.dir)?.(relative) || root.id===null && this.isWorkspaceExcluded(relative);
+  }
+  /** Rule membership for the file explorer, independent of successful embeddings. */
+  ruleFilePaths():string[]{
+    const paths=new Set<string>();
+    for(const sp of this.knownFiles){if(this.unsupportedFiles.has(sp))continue;let located;try{located=parseSourcePath(this.roots,sp);}catch{continue;}if(this.excludedByRules(located.root,located.rel))continue;const hit=this.classify(sp);if(hit){try{paths.add(resolveInRoots(this.roots,hit.sourcePath).abs);}catch{/* Detached source. */}}}
+    for(const record of this.fileRecords.values())if(!record.file.disabled && !this.excludedByRules(this.roots[0],record.file.path))paths.add(path.resolve(this.config.root,record.file.path));
+    return [...paths];
+  }
   private classifyDocument(relOrAbs: string): { sourceClass: string; sourcePath: string } | null {
     const located = path.isAbsolute(relOrAbs)
       ? locateAbsolute(this.roots, relOrAbs)
@@ -563,8 +624,7 @@ export class Indexer {
     if (!located) return null;
     const { root, rel } = located;
     const posix = rel.split(path.sep).join('/');
-    if (locateAbsolute(this.roots, path.resolve(root.dir, posix))?.root.dir !== root.dir || this.rootExcluded.get(root.dir)?.(posix)) return null;
-    if (this.isExcluded(posix) || (root.id === null && this.isWorkspaceExcluded(posix))) return null;
+    if (locateAbsolute(this.roots, path.resolve(root.dir, posix))?.root.dir !== root.dir || this.excludedByRules(root,posix)) return null;
     for (const m of this.matchers) {
       if (m.root.dir === root.dir && m.isMatch(posix)) {
         return { sourceClass: m.sourceClass, sourcePath: toSourcePath(root, posix) };

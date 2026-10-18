@@ -18,6 +18,7 @@
  * method of the same `name`.
  */
 import { mkdirSync } from 'node:fs';
+import { buildTreeIndexState, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import { MemoryEngine } from '../engine/dist/index.js';
@@ -27,7 +28,7 @@ import {
   createEmbedder,
   defaultSources,
   safeIndexError,
-  normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
+  literalSourceRule, sourceRulePath, normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules,
 } from '../engine/dist/index.js';
 import type { EngineConfig, SearchHit, VirtualRecord, FileRecord } from '../engine/dist/index.js';
 // The write gate. It runs on the LIVE `remember` path below rather than at
@@ -339,7 +340,7 @@ const TOOL_DESCRIPTORS = [
   {
     name: 'status',
     description: 'Report index size, the active embedder, and whether a re-index is needed.',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: { type: 'object', properties: {rootId:{type:['string','null'],description:'Omit for All, null for the primary workspace, or use an attached source root ID.'}} },
     voiceAgent: false,
   },
   {
@@ -535,7 +536,7 @@ export async function activate(ctx: ActivateCtx) {
         started!.startWatching();
         log('info', '[memory] watching for changes');
       } catch (err) {
-        log('error', `[memory] initial index failed: ${(err as Error).message}`);
+        log('error', `[memory] initial index failed: ${safeIndexError(err).category}; see Coverage for source diagnostics`);
       }
     })();
   }
@@ -587,7 +588,7 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_sources','set_sources','get_source_roots'].map(name => ({
+    })), ...['get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
       inputSchema: {type:'object',properties:{rootId:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
@@ -597,6 +598,30 @@ export async function activate(ctx: ActivateCtx) {
   const runtime = {
     methods: {
       get_source_roots: async () => { await syncSourceRoots(); return sourceRoots; },
+      get_tree_index_state: async (params?:{revision?:string}) => {
+        const eng=requireEngine(),status=eng.status();
+        const state=await buildTreeIndexState(eng.ruleFilePaths(),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
+        return state.revision===params?.revision?{unchanged:true,revision:state.revision}:state;
+      },
+      set_path_override: async (params:{path?:string;mode?:'include'|'exclude'|'inherit'}) => {
+        if(!['include','exclude','inherit'].includes(params?.mode??''))throw Error('Choose include, exclude or inherit.');
+        const target=await resolveTreeTarget(sourceRoots,params.path);
+        const apply=async()=>{
+          const currentRoots=ctx.services.memorySourceRoots?await ctx.services.memorySourceRoots():sourceRoots;
+          const checked=await resolveTreeTarget(currentRoots,params.path);
+          if(checked.root.id!==target.root.id || checked.relative!==target.relative || checked.kind!==target.kind)throw Error('The source moved while changing its rules; retry.');
+          const id=target.root.id,current=id?rootRules[id]??{version:1 as const,include:[],exclude:[]}:sourceRules;
+          const key=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
+          const pattern=literalSourceRule(target.relative,target.kind);
+          const next=normalizeSourceRules({version:1,
+            include:current.include.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative)),
+            exclude:current.exclude.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative))});
+          if(params.mode!=='inherit')next[params.mode!].push(pattern);
+          if(id){rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);}else{sourceRules=next;writeSourceRules(dataDir,next);}
+          await applySources();return{rules:next,rootId:id};
+        };
+        const task=sourceChanges.catch(()=>{}).then(apply);sourceChanges=task;return task;
+      },
       get_sources: async (params?: {rootId?: string | null}) => {
         await sourceChanges.catch(() => {});
         const id=params?.rootId;
@@ -605,7 +630,7 @@ export async function activate(ctx: ActivateCtx) {
         return rootRules[id] ?? {version:1 as const,include:[],exclude:[]};
       },
       set_sources: (params: unknown) => {
-        const next = normalizeSourceRules(params);
+        let next = normalizeSourceRules(params);
         const id = (params as {rootId?:string})?.rootId;
         const apply = async () => {
           if (id) {
@@ -792,7 +817,10 @@ export async function activate(ctx: ActivateCtx) {
         return { found: true, path: doc.path, content, truncated };
       },
 
-      status: async () => {
+      status: async (params?:{rootId?:string|null}) => {
+        const rootId=params?.rootId;
+        const selected=rootId===undefined?undefined:sourceRoots.find(root=>root.id===rootId);
+        if(rootId!==undefined && !selected)throw Error('Unknown or detached source root');
         if (!engine) {
           return {
             ready: false,
@@ -805,10 +833,11 @@ export async function activate(ctx: ActivateCtx) {
         }
         return {
           ready: true,
-          ...buildPublicEngineStatus(engine.status()),
+          ...buildPublicEngineStatus(engine.status(rootId)),
+          ...(selected?{root:selected.path,watching:selected.available && engine.status(rootId).watching}:{}),
           sourceRoots,
-          sourceRootErrors: sourceRoots.filter(root=>!root.available),
-          indexSizeBytes: await engine.indexSizeBytes(),
+          sourceRootErrors: sourceRoots.filter(root=>!root.available && (rootId===undefined || root.id===rootId)),
+          ...(rootId===undefined?{indexSizeBytes:await engine.indexSizeBytes()}:{}),
         };
       },
 
@@ -988,7 +1017,7 @@ export async function activate(ctx: ActivateCtx) {
       await engine?.close();
     },
   };
-  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild'] as const) {
+  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild','set_path_override'] as const) {
     const original=runtime.methods[name] as (...args:any[])=>Promise<any>;
     (runtime.methods as any)[name]=async (...args:any[])=>{await syncSourceRoots();return original(...args);};
   }

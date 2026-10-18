@@ -57,9 +57,9 @@ export interface Chunk {
 export type ChunkGranularity = 'chunk' | 'page';
 
 /**
- * How much of a source the page-level vector covers. The amendment proposes
- * ~8 KB, which is also the soft page-size limit discussed for authored memory
- * pages, and comfortably inside a typical embedding context window.
+ * Legacy upper bound for the page overview. The actual excerpt is additionally
+ * constrained by the byte-safe embedding body budget. Chunk rows retain full
+ * source coverage; this overview is only a retrieval signal.
  */
 export const PAGE_VECTOR_BYTES = 8192;
 
@@ -141,6 +141,8 @@ export interface SourceSet {
   sourceClass: string;
   /** Exclusions relative to this source root. */
   exclude?: string[];
+  pathOverrides?:import("./sourceRules.js").PathOverride[];
+  sourceRules?:{include:string[];exclude:string[]};
   /** Glob patterns relative to this set's root (fast-glob syntax). */
   include: string[];
   /**
