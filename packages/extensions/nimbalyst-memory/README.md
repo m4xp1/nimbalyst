@@ -34,6 +34,8 @@ Desktop search responses with session hits include an optional `sessionReadHint`
 
 ## Attached folders in the Windows fork
 
+Source-rule changes are acknowledged after the rules are durably saved, independently of background indexing. File-tree actions reconcile the selected file or subtree; unchanged sources retain their vectors. Settings updates may supply `expectedRevision` to reject an outdated draft. Read/status/root polling never retries a failed indexing job. Startup, Rebuild, rule reconciliation and file watchers share one file-work lane; an obsolete policy cannot publish a late file response.
+
 **Attach Folder To Workspace** adds a search root to Files, In Files, agent file search and Memory. Each root uses the standard Markdown source rules; attaching a folder does not index every text file or import its project database, Wiki, sessions or personal harness memory.
 
 In Project settings → Memory → **Additional text sources**, select **Source folder** when additional roots are attached, then enter rules relative to that folder. With only the main workspace, this selector is hidden. For example, choose **link** and include `archive/**`. Include/Exclude rules of the main workspace keep their existing `sources.json` format; attached-root rules live separately in the extension's local data. The project files are not rewritten.

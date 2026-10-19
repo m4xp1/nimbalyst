@@ -6,7 +6,7 @@
  * chunks reuse their stored embedding so a one-line edit re-embeds one chunk,
  * not the whole file.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { compileSourceRules, expandSourcePatterns, isInsideRealRoot, pathOverrideFor, type PathOverride } from '../sourceRules.js';
 import path from 'node:path';
 import fg from 'fast-glob';
@@ -181,6 +181,55 @@ export class Indexer {
     for(const sp of store.fileSourcePaths())this.knownFiles.add(sp);
   }
 
+  /** Carry confirmed entities and known candidates across policy changes, not old matchers. */
+  inheritState(previous:Indexer):void {
+    for(const file of previous.knownFiles)this.knownFiles.add(file);
+    this.unsupportedFiles=new Set(previous.unsupportedFiles);
+    const unchanged=new Set([...this.fileRecords].filter(([key,record])=>JSON.stringify(previous.fileRecords.get(key))===JSON.stringify(record)).map(([,record])=>record.id));
+    this.validatedFiles=new Set([...previous.validatedFiles].filter(id=>unchanged.has(id)));
+  }
+  noteRulePaths(paths:string[]):void {
+    for(const file of paths){const hit=this.classify(file);if(hit)this.knownFiles.add(hit.sourcePath);}
+  }
+  /** Enumerate only a literal target/subtree; excluded saved files are still visited for eviction. */
+  async reconcile(paths:string[]|undefined,previous:Indexer,onProgress?:(p:IndexProgress)=>void):Promise<{indexed:number;files:number}> {
+    const candidates=new Map<string,string>();
+    const add=(file:string)=>{const located=path.isAbsolute(file)?locateAbsolute(this.roots,file):parseSourcePath(this.roots,file);if(!located)return;
+      const sp=toSourcePath(located.root,located.rel);candidates.set(sp,this.classify(sp)?.sourceClass??'unknown');};
+    if(paths){
+      for(const target of paths){
+        const inside=(file:string)=>{const rel=path.relative(target,file);return rel===''||(!rel.startsWith('..'+path.sep)&&rel!=='..'&&!path.isAbsolute(rel));};
+        for(const sp of this.knownFiles){try{if(inside(resolveInRoots(this.roots,sp).abs))add(sp);}catch{/* Removed root. */}}
+        for(const record of this.fileRecords.values())if(inside(path.resolve(this.config.root,record.file.path)))add(record.file.path);
+        try{const info=await stat(target);if(info.isDirectory()){
+          for(const file of await fg('**/*',{cwd:target,absolute:true,dot:true,onlyFiles:true,followSymbolicLinks:false,ignore:this.ignoreGlobs}))add(file);
+        }else if(info.isFile())add(target);}catch(error){if(!['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))throw error;}
+      }
+    }else{
+      const storedSources=new Set(this.store.sourcePaths());
+      for(const file of await this.enumerate()){
+        const old=previous.classify(file.sourcePath);
+        if(!old||old.sourceClass!==file.sourceClass||!storedSources.has(this.failureKey(file.sourcePath)))add(file.sourcePath);
+      }
+      for(const sp of this.store.fileSourcePaths())if(!this.classify(sp))add(sp);
+      for(const record of this.fileRecords.values())if(!this.classifyDocument(record.file.path)){
+        // Entity attributes have their own include rules; indexEntityFile checks those rules.
+        if(this.excludedByRules(this.roots[0],record.file.path))add(record.file.path);
+      }
+    }
+    // A detached root is removed by identity, never resolved as an alternate primary path.
+    for(const sp of this.store.fileSourcePaths())if(sp.startsWith('@')&&!this.roots.some(r=>r.id&&sp.startsWith('@'+r.id+'/')))this.store.deleteSource(sp);
+    const files=[...candidates].map(([sourcePath,sourceClass])=>({sourcePath,sourceClass}));
+    onProgress?.({phase:'index',done:0,total:files.length,indexed:0,failed:0,sources:files});
+    let indexed=0,done=0,failed=0;
+    for(const file of files){if(this.cancelled)break;
+      try{if(this.classify(file.sourcePath))indexed+=await this.indexFile(file.sourcePath,file.sourceClass);else this.removeFile(file.sourcePath);
+        if(this.cancelled)break;done++;onProgress?.({phase:'index',file:file.sourcePath,done,total:files.length,indexed,failed,success:true});
+      }catch(error){failed++;onProgress?.({phase:'index',file:file.sourcePath,done,total:files.length,indexed,failed,success:false});if(isProviderIndexFailure(error))throw error;}
+    }
+    return{indexed,files:files.length};
+  }
+
   private entityFileKey(ref: string | undefined): string | null {
     if (!ref || /^[a-z][a-z\d+.-]*:\/\//i.test(ref)) return null;
     const abs = path.resolve(this.config.root, ref.replace(/[\\/]/g, path.sep));
@@ -197,7 +246,8 @@ export class Indexer {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
       return this.classifyDocument(chunk.sourcePath) !== null;
     }
-    return !this.entityIds.has(chunk.sourcePath) || this.validatedFiles.has(chunk.sourcePath);
+    const record=[...this.fileRecords.values()].find(record=>record.id===chunk.sourcePath);
+    return !record || !record.file.disabled && !this.excludedByRules(this.roots[0],record.file.path) && this.validatedFiles.has(chunk.sourcePath);
   }
 
   /** Replace the complete ownership manifest; never persist a copy of the file body here. */

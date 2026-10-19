@@ -20,6 +20,11 @@ export function isProviderIndexFailure(error:unknown):boolean {
  const category=safeIndexError(error).category;
  return e?.code!=='EMBEDDING_INPUT_TOO_LARGE' && (['authentication','quota','rate-limit','network'].includes(category) || (e?.status!==undefined && category!=='input') || /\b(400|401|403|429|5\d\d)\b/.test(String((error as Error)?.message??'')) && category!=='input');
 }
+export interface FileOperation {
+ id:number;kind:'scan'|'rules'|'watch';state:'queued'|'running'|'completed'|'partial'|'failed'|'cancelled';
+ phase:string|null;totalFiles:number|null;completedFiles:number;failedFiles:number;remainingFiles:number|null;
+ error:SafeIndexError|null;rootId?:string|null;
+}
 export interface FileIndexStatus {
  state:'not-started'|'building'|'ready'|'partial'|'failed';
  phase:string|null; discoveredFiles:number|null; completedFiles:number|null; failedFiles:number|null;

@@ -184,11 +184,11 @@ export class Retriever {
     queryText: string,
     queryVector: number[] | null,
     k = 5,
-    opts?: { sourceClasses?: string[] },
+    opts?: { sourceClasses?: string[]; accepts?: (chunk:StoredChunk)=>boolean },
   ): SearchHit[] {
     const allowed =
       opts?.sourceClasses && opts.sourceClasses.length ? new Set(opts.sourceClasses) : null;
-    const inScope = (c: StoredChunk): boolean => !allowed || allowed.has(c.sourceClass);
+    const inScope = (c: StoredChunk): boolean => (!allowed || allowed.has(c.sourceClass)) && (!opts?.accepts || opts.accepts(c));
 
     // Raw per-arm scores are kept alongside the ranks. RRF output is a rank
     // reciprocal, not a similarity: it is not comparable across queries, so a

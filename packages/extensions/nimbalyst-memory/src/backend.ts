@@ -21,6 +21,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { buildTreeIndexState, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import { MemoryEngine } from '../engine/dist/index.js';
 import {
   buildProjectSearchResponse,
@@ -441,7 +442,12 @@ export async function activate(ctx: ActivateCtx) {
   const dbPath = path.join(dataDir, 'index.db');
 
   let sourceRules = readSourceRules(dataDir);
-  let sourceChanges: Promise<unknown> = Promise.resolve();
+  let sourceChanges:Promise<unknown>=Promise.resolve();
+  let sourceIndexing:Promise<unknown>=Promise.resolve();
+  const revision=(rules:unknown)=>createHash('sha256').update(JSON.stringify(rules)).digest('hex');
+  function queueRuleChange<T>(apply:()=>Promise<T>):Promise<T>{
+    const task=sourceChanges.then(apply);sourceChanges=task.then(()=>{},()=>{});return task;
+  }
   let sourceRoots: MemorySourceRoot[] = ctx.services.memorySourceRoots
     ? await ctx.services.memorySourceRoots()
     : [{id:null,path:realpathSync.native(workspacePath),label:path.basename(workspacePath),available:true,treePaths:[workspacePath]}];
@@ -533,7 +539,7 @@ export async function activate(ctx: ActivateCtx) {
         if (status.embedderChanged) log('info', '[memory] embedder changed — full re-index');
         const result = await started!.indexAll();
         log('info', `[memory] indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
-        started!.startWatching();
+        if(engine===started&&!disposed)started!.startWatching();
         log('info', '[memory] watching for changes');
       } catch (err) {
         log('error', `[memory] initial index failed: ${safeIndexError(err).category}; see Coverage for source diagnostics`);
@@ -547,6 +553,10 @@ export async function activate(ctx: ActivateCtx) {
     log('error', `[memory] engine init failed: ${(err as Error).message}`);
   }
 
+  async function restartEngine(want:typeof selection):Promise<void>{
+    await queueRuleChange(async()=>{const previous=engine;engine=null;await previous?.close();if(!disposed)await startEngine(want);});
+  }
+
   function requireEngine(): MemoryEngine {
     if (!engine) {
       throw new Error('Local project index is unavailable.');
@@ -558,8 +568,10 @@ export async function activate(ctx: ActivateCtx) {
     const root=sourceRoots.find(root=>root.id && hit.sourcePath.startsWith('@'+root.id+'/'));
     return root ? {...hit,rootLabel:root.label,rootPath:root.path,relativePath:hit.sourcePath.slice(root.id!.length+2)} : hit;
   }
-  async function applySources() {
-    return requireEngine().updateSources(attachedSources(FACTS_DIR, workspacePath, sourceRoots, sourceRules, rootRules), sourceRules.exclude);
+  function applySources(paths?:string[]):void {
+    config.sources=attachedSources(FACTS_DIR,workspacePath,sourceRoots,sourceRules,rootRules);config.workspaceExclude=sourceRules.exclude;
+    const task=requireEngine().updateSources(config.sources,config.workspaceExclude,{paths,incremental:true});
+    sourceIndexing=task.catch(error=>{log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');});
   }
   async function syncSourceRoots(): Promise<void> {
     if (disposed || !ctx.services.memorySourceRoots) return;
@@ -569,11 +581,9 @@ export async function activate(ctx: ActivateCtx) {
     if (signature !== rootSignature) {
       sourceRoots = next; rootSignature = signature;
       engine?.cancelFileIndexing();
-      const task = sourceChanges.catch(() => {}).then(applySources);
-      sourceChanges = task;
-      await task;
+      await queueRuleChange(async()=>{applySources();});
     } else {
-      try { await sourceChanges; } catch { rootSignature=''; throw Error('Source indexing failed; retry to reconcile sources.'); }
+      await sourceChanges;
     }
   }
   const sourcePoll = ctx.services.memorySourceRoots ? setInterval(() => {
@@ -590,14 +600,14 @@ export async function activate(ctx: ActivateCtx) {
       scope: 'global' as const,
     })), ...['get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: {type:'object',properties:{rootId:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: {type:'object',properties:{rootId:{type:'string'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
 
   const runtime = {
     methods: {
-      get_source_roots: async () => { await syncSourceRoots(); return sourceRoots; },
+      get_source_roots: async () => { await syncSourceRoots(); return sourceRoots.map(root=>({...root,rulesRevision:revision(root.id?rootRules[root.id]??{version:1,include:[],exclude:[]}:sourceRules)})); },
       get_tree_index_state: async (params?:{revision?:string}) => {
         const eng=requireEngine(),status=eng.status();
         const state=await buildTreeIndexState(eng.ruleFilePaths(),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
@@ -617,32 +627,35 @@ export async function activate(ctx: ActivateCtx) {
             include:current.include.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative)),
             exclude:current.exclude.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative))});
           if(params.mode!=='inherit')next[params.mode!].push(pattern);
-          if(id){rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);}else{sourceRules=next;writeSourceRules(dataDir,next);}
-          await applySources();return{rules:next,rootId:id};
+          if(id){const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;}else{writeSourceRules(dataDir,next);sourceRules=next;}
+          applySources([target.absolute]);
+          const state=await runtime.methods.get_tree_index_state();
+          return{rules:next,rootId:id,revision:revision(next),indexingQueued:true,treeState:state};
         };
-        const task=sourceChanges.catch(()=>{}).then(apply);sourceChanges=task;return task;
+        return queueRuleChange(apply);
       },
       get_sources: async (params?: {rootId?: string | null}) => {
         await sourceChanges.catch(() => {});
         const id=params?.rootId;
-        if (!id) return sourceRules;
+        if (!id) return {...sourceRules,revision:revision(sourceRules)};
         if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
-        return rootRules[id] ?? {version:1 as const,include:[],exclude:[]};
+        const rules=rootRules[id]??{version:1 as const,include:[],exclude:[]};return {...rules,revision:revision(rules)};
       },
       set_sources: (params: unknown) => {
         let next = normalizeSourceRules(params);
         const id = (params as {rootId?:string})?.rootId;
+        const expected=(params as {expectedRevision?:string})?.expectedRevision;
         const apply = async () => {
+          const current=id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules;
+          if(expected!==undefined&&expected!==revision(current))throw Error('Source rules changed elsewhere. Keep your draft and reload the saved rules before saving again.');
           if (id) {
             if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
-            rootRules={...rootRules,[id]:next};writeAttachedRules(dataDir,rootRules);
+            const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;
           } else { writeSourceRules(dataDir,next);sourceRules=next; }
-          const result=await applySources();
-          return {...result,rules:next};
+          applySources();
+          return {rules:next,revision:revision(next),rootId:id??null,indexingQueued:true};
         };
-        const task=sourceChanges.catch(()=>{}).then(apply);
-        sourceChanges=task;
-        return task;
+        return queueRuleChange(apply);
       },
       search_project_knowledge: async (params: { query?: string; k?: number }) => {
         const query = String(params?.query ?? '');
@@ -909,8 +922,7 @@ export async function activate(ctx: ActivateCtx) {
           writeLocalEmbeddingPrefs(modelDir, { enabled: false, modelId: model.id });
           // The weights stay on disk. Turning the feature off should not make
           // turning it back on cost another download.
-          await engine?.close();
-          await startEngine(
+          await restartEngine(
             selectEmbedder({
               apiKeyConfigured: retrievalKindForOptionalProvider(Boolean(apiKey)) === 'openai',
               apiKey,
@@ -952,8 +964,7 @@ export async function activate(ctx: ActivateCtx) {
         }
 
         writeLocalEmbeddingPrefs(modelDir, { enabled: true, modelId: model.id });
-        await engine?.close();
-        await startEngine(
+        await restartEngine(
           selectEmbedder({
             apiKeyConfigured: retrievalKindForOptionalProvider(Boolean(apiKey)) === 'openai',
             apiKey,
@@ -1013,6 +1024,8 @@ export async function activate(ctx: ActivateCtx) {
       disposed=true;
       if(sourcePoll)clearInterval(sourcePoll);
       await sourceChanges.catch(() => {});
+      engine?.cancelFileIndexing();
+      await sourceIndexing;
       await engine?.waitForIndexing();
       await engine?.close();
     },

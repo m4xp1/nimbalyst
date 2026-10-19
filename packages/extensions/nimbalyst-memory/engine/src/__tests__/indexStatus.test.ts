@@ -2,7 +2,8 @@
 import { describe,it,expect,afterEach,vi } from 'vitest';
 import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';import path from 'node:path';
-import { MemoryEngine } from '../engine.js';import { FakeEmbedder } from './fakeEmbedder.js';
+import { MemoryEngine } from '../engine.js';
+import { Indexer } from '../indexer/indexer.js';import { FakeEmbedder } from './fakeEmbedder.js';
 import { safeIndexError } from '../indexStatus.js';import { buildPublicEngineStatus } from '../searchResponse.js';
 const roots:string[]=[],engines:MemoryEngine[]=[];
 function setup(){const root=mkdtempSync(path.join(tmpdir(),'memory-status-'));roots.push(root);mkdirSync(path.join(root,'docs'));const embedder=new FakeEmbedder();const engine=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(engine);return{root,embedder,engine};}
@@ -93,5 +94,33 @@ describe('scoped diagnostics and provider failures',()=>{
   expect(spy).toHaveBeenCalledTimes(1);
   expect(engine.status().fileIndex).toMatchObject({failedFiles:1,remainingFiles:2,error:{category:'other'}});
   expect(engine.status().watching).toBe(true);
+ });
+});
+
+
+describe('responsive source policy updates',()=>{
+ it('publishes a policy before embeddings and touches only its target',async()=>{
+  const {root,embedder,engine}=setup();
+  writeFileSync(path.join(root,'docs/a.md'),'# A\nUNCHANGED_TARGET_A');
+  writeFileSync(path.join(root,'extra.md'),'# Extra\nNEW_TARGET_EXTRA');
+  await engine.indexAll();
+  let release!:()=>void,entered!:()=>void;const hold=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r);
+  const original=embedder.embed.bind(embedder);const calls=vi.spyOn(embedder,'embed').mockImplementation(async texts=>{if(texts.some(t=>t.includes('NEW_TARGET_EXTRA'))){entered();await hold;}return original(texts);});
+  const files=vi.spyOn(Indexer.prototype,'indexFile');
+  const update=(engine.updateSources as any)([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['extra.md']}],[],{paths:[path.join(root,'extra.md')],incremental:true});
+  try {
+   await started;
+   expect(engine.ruleFilePaths()).toContain(path.join(root,'extra.md'));
+   expect((engine.status() as any).operation).toMatchObject({state:'running',totalFiles:1,completedFiles:0});
+   expect(files.mock.calls.map(([file])=>file)).toEqual(['extra.md']);
+   expect(calls.mock.calls.flat(2).every(t=>!t.includes('UNCHANGED_TARGET_A'))).toBe(true);
+  }finally{release();await update;files.mockRestore();calls.mockRestore();}
+ });
+ it('separates available chunks from stored page rows and quarantined sources',async()=>{
+  const {root,embedder,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\nFIRST_AVAILABLE\n## Second\nSECOND_AVAILABLE');await engine.indexAll();
+  expect((engine.status() as any).available).toMatchObject({chunks:2,sourceFiles:1});
+  writeFileSync(path.join(root,'docs/a.md'),'# Changed\nINVALID_SOURCE');
+  const spy=vi.spyOn(embedder,'embed').mockRejectedValue(Object.assign(new Error('input rejected'),{code:'EMBEDDING_INPUT_TOO_LARGE'}));
+  try{await engine.indexAll();expect((engine.status() as any).available).toMatchObject({chunks:0,sourceFiles:0});expect(engine.status().chunks).toBeGreaterThan(0);}finally{spy.mockRestore();}
  });
 });
