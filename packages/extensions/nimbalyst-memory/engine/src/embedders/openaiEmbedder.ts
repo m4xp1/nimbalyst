@@ -4,7 +4,7 @@
  * construction. The engine never reads it from the environment implicitly.
  */
 import type { Embedder, EmbedderInfo } from '../types.js';
-import { MAX_EMBEDDING_INPUT_BYTES, MAX_EMBEDDING_BATCH_BYTES, utf8Bytes } from '../embeddingInput.js';
+import { MAX_EMBEDDING_INPUT_BYTES, MAX_EMBEDDING_BATCH_BYTES, utf8Bytes,validateEmbeddingResponse } from '../embeddingInput.js';
 
 export interface OpenAIEmbedderConfig {
   apiKey: string;
@@ -80,10 +80,8 @@ export class OpenAIEmbedder implements Embedder {
       throw Object.assign(new Error(inputLimit?'Embedding input exceeds provider input length limit.':`OpenAI embedding request failed (${res.status}).`),{status:res.status,code:inputLimit?'EMBEDDING_INPUT_TOO_LARGE':providerCode});
     }
     const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
-    // Preserve input order regardless of response ordering.
-    return json.data
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((d) => d.embedding);
+    if(!Array.isArray(json.data)||json.data.length!==batch.length||json.data.some(row=>!row||typeof row!=='object'||!Number.isInteger(row.index)||row.index<0||row.index>=batch.length)||new Set(json.data.map(row=>row.index)).size!==batch.length)throw Object.assign(Error('Invalid embedding response: input indices do not match the request.'),{code:'EMBEDDING_RESPONSE_INVALID',status:502});
+    const vectors=json.data.slice().sort((a,b)=>a.index-b.index).map(row=>row.embedding);
+    validateEmbeddingResponse(vectors,batch.length,this.info.dims);return vectors;
   }
 }

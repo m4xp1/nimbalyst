@@ -34,6 +34,10 @@ Desktop search responses with session hits include an optional `sessionReadHint`
 
 ## Attached folders in the Windows fork
 
+Source-rule changes are acknowledged after the rules are durably saved, independently of background indexing. File-tree actions reconcile the selected file or subtree; unchanged sources retain their vectors. Settings updates may supply `expectedRevision` to reject an outdated draft. Read/status/root polling never retries a failed indexing job. Startup, Rebuild, rule reconciliation and file watchers share one file-work lane; an obsolete policy cannot publish a late file response.
+
+The file tree and source editor share durable rule receipts within the current workspace. Icons describe policy membership, independently of embedding completion; unsaved editor drafts survive an external rule change and require an explicit reload on conflict. Coverage keeps the last response visible during refresh and separates searchable chunks/sources from stored auxiliary or quarantined rows. Current file-operation counts are independent of the last full scan; raw storage and missing-vector counts remain under Index diagnostics.
+
 **Attach Folder To Workspace** adds a search root to Files, In Files, agent file search and Memory. Each root uses the standard Markdown source rules; attaching a folder does not index every text file or import its project database, Wiki, sessions or personal harness memory.
 
 In Project settings → Memory → **Additional text sources**, select **Source folder** when additional roots are attached, then enter rules relative to that folder. With only the main workspace, this selector is hidden. For example, choose **link** and include `archive/**`. Include/Exclude rules of the main workspace keep their existing `sources.json` format; attached-root rules live separately in the extension's local data. The project files are not rewritten.
@@ -43,6 +47,14 @@ Primary source paths remain unchanged. Attached sources use `@<rootId>/<relative
 Changes, renames and deletions update the index. Detaching or losing access to a root removes its old results, cancels pending file indexing and leaves other roots available. Coverage reports unavailable roots. Attached content is local and is not automatically added to facts, export or synchronization. Model selection, RRF and recall are unchanged.
 
 **Agent Permissions → Additional Directories** is a separate access setting. It grants agent access under the active sandbox mode and does not add a search root. Codex merges effective user/project/local permissions (including worktree inheritance) with its automatic roots, applies changes on the next turn, and reports unreadable settings or invalid paths. This release does not restrict reading outside the workspace or change permission modes.
+
+## Structured indexed text
+
+Markdown fragments preserve verbatim source spans, code indentation and complete table rows whenever a row fits the byte budget. Continued code/table chunks carry a separate synthetic `context`; it is not quoted source text. Oversized lines remain bounded without dropping characters, and prose prefers word boundaries. Fence closing must match the opening character and minimum length.
+
+Search hits optionally include `chunkId`, `sectionId`, `sourceRange` and `coordinateSpace`. Ranges are UTF-16, with an exclusive end: `source-text` refers to the text supplied to the file chunker; `record-projection` refers to the normalized virtual/file-card projection, including its added attributes. Pass `sectionId` to `expand` to distinguish repeated heading paths; a stale anchor returns no section. Session history still uses `read_session` for current discussion.
+
+Vector reuse is keyed by the complete actual embedding input plus provider/model/dimensions, independently of shifted ordinals. Existing bounded-projection inputs are reconstructed before reuse; per-source metadata is backfilled during normal background traversal without clearing the index. Changed input is embedded again. Provider responses must have every input index exactly once, matching dimensions and finite values representable in storage. Auxiliary page vectors are disabled by default because the default retrieval arm does not consume them; evaluation opts in explicitly. Model, RRF and recall are unchanged.
 
 ## Coverage and file-tree controls
 

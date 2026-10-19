@@ -1,6 +1,6 @@
 {
   "name": "@nimbalyst/electron",
-  "version": "0.81.7+m4xp1.3",
+  "version": "0.81.7+m4xp1.4",
   "private": true,
   "license": "MIT",
   "author": "Nimbalyst Team",
@@ -552,7 +552,7 @@
       "category": "Development",
       "maintainer": "Nimbalyst Team <support@nimbalyst.com>"
     },
-    "buildVersion": "0.81.7.3",
-    "buildNumber": "3"
+    "buildVersion": "0.81.7.4",
+    "buildNumber": "4"
   }
 }

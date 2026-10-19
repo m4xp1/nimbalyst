@@ -199,3 +199,18 @@ describe('MCP server adapter (end-to-end over in-memory transport)', () => {
     await engine.close();
   });
 });
+
+
+describe('precise indexed-section expansion',()=>{
+ it('keeps repeated headings distinct through standalone MCP search and expand',async()=>{
+  const engine=await bootEngine('keyword-only'),client=await connect(engine);
+  try{
+   writeFileSync(path.join(engine.status().root,'docs/repeated.md'),'# Repeated\nFIRST_SECTION_MARKER\n## Child\nCHILD_SECTION_MARKER\n# Repeated\nSECOND_SECTION_MARKER');await engine.indexAll();
+   const result=parse(await client.callTool({name:'search_project_knowledge',arguments:{query:'FIRST_SECTION_MARKER',k:10}})) as any;
+   const hit=result.chunks.find((c:any)=>c.text.includes('FIRST_SECTION_MARKER'));expect(hit).toMatchObject({sectionId:expect.any(String),sourceRange:{start:0,end:expect.any(Number)},coordinateSpace:'source-text'});
+   const expanded=parse(await client.callTool({name:'expand',arguments:{sourcePath:hit.sourcePath,headingPath:hit.headingPath,sectionId:hit.sectionId}})) as any;
+   expect(expanded.text).toContain('FIRST_SECTION_MARKER');expect(expanded.text).toContain('CHILD_SECTION_MARKER');expect(expanded.text).not.toContain('SECOND_SECTION_MARKER');
+   expect(parse(await client.callTool({name:'expand',arguments:{sourcePath:hit.sourcePath,sectionId:'stale-section-id'}}))).toBeNull();
+  }finally{await client.close();await engine.close();}
+ });
+});

@@ -9,7 +9,7 @@ describe('Memory status UI',()=>{
    if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return {};
   });
   render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
-  await screen.findByText('Partial index');screen.getByText('Inactive');screen.getByText(/Embedding coverage describes saved chunks/);
+  await screen.findByText('Partial index');screen.getByText('Inactive');screen.getByText(/Available to search now/);
   call.mockClear();fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.status'));
   expect(call.mock.calls.every(([name])=>name==='memory.status')).toBe(true);
   expect(screen.queryByText('Ready')).toBeNull();
@@ -32,16 +32,31 @@ describe('scoped Coverage',()=>{
    return{};
   });
   render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
-  await screen.findByText('33');
+  await screen.findAllByText('33');
   const select=await screen.findByRole('combobox',{name:'Coverage source folder'});
   expect((select as HTMLSelectElement).selectedOptions[0].textContent).toBe('All');
   fireEvent.change(select,{target:{value:'attached-link'}});
   await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.status',{rootId:'attached-link'}));
   fireEvent.change(select,{target:{value:''}});
-  await screen.findByText('11');
+  await screen.findAllByText('11');
   late(status(22));await new Promise(resolve=>setTimeout(resolve,20));
-  expect(screen.queryByText('22')).toBeNull();expect(screen.getByText('11')).toBeDefined();
+  expect(screen.queryByText('22')).toBeNull();expect(screen.getAllByText('11')[0]).toBeDefined();
   expect(screen.queryByText('Index size')).toBeNull();
   expect(screen.getByRole('button',{name:'Rebuild all'})).toBeDefined();
+ });
+});
+
+
+describe('truthful live Coverage',()=>{
+ it('uses searchable counts, shows file operation progress and keeps the card during a delayed refresh',async()=>{
+  let hold=false,release!:(v:unknown)=>void;
+  const current={ready:true,indexing:true,chunks:9,denseChunks:9,sourceFiles:3,available:{chunks:4,sourceFiles:2,indexedFiles:2,bySourceClass:{docs:4}},operation:{kind:'rules',state:'running',totalFiles:7,completedFiles:2,remainingFiles:4,failedFiles:1},fileIndex:{state:'ready',discoveredFiles:20,completedFiles:20,failedFiles:0}};
+  const call=vi.fn(async(name:string)=>name==='memory.status'?(hold?new Promise(r=>release=r):current):name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
+  render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  await screen.findByText('searchable chunks');
+  expect(screen.queryByText('saved chunks with vectors')).toBeNull();
+  expect(screen.getByText('Files remaining in current operation').nextSibling?.textContent).toBe('4');
+  hold=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  expect(screen.getByText('searchable chunks')).toBeDefined();release(current);
  });
 });

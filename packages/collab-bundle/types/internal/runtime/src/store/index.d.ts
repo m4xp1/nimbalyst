@@ -14,3 +14,4 @@ export { editorDirtyAtom, editorProcessingAtom, editorHasUnacceptedChangesAtom, 
 export { documentDirtyAtom, documentDiffStateAtom, documentAttachCountAtom, registeredDocumentPathsAtom, dirtyDocumentCountAtom, hasAnyPendingDiffAtom, type DocumentDiffState, } from './atoms/documents';
 export { type GitCommitProposalData } from './atoms/gitCommitProposals';
 export { interactiveWidgetHostAtom, setInteractiveWidgetHost, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost, getInteractiveWidgetHost, cleanupInteractiveWidgetHost, } from './atoms/interactiveWidgetHost';
+export { memorySourceChangeAtom, sameMemoryWorkspace, type MemorySourceChange } from './atoms/memorySources';

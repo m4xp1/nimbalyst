@@ -17,11 +17,14 @@ import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
 import type { ReactNode } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
 import { SourceSettings } from './SourceSettings';
-import type { FileIndexStatus, SafeIndexError } from '../../engine/dist/index.js';
+import type { FileIndexStatus, SafeIndexError,FileOperation } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 import { coveragePalette } from './coveragePalette';
 
 interface IndexStatus {
+  available?:{chunks:number;sourceFiles:number;indexedFiles:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
+  operation?:FileOperation|null;
+  lastFullScan?:FileIndexStatus;
   ready?: boolean;
   chunks?: number;
   denseChunks?: number;
@@ -123,7 +126,7 @@ function relativeTime(ms: number | null | undefined): string {
   return `${mo}mo ago`;
 }
 
-export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPanelProps) {
+export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }: SettingsPanelProps) {
   const isDark = theme === 'dark' || theme === 'crystal-dark';
   const muted = 'var(--nim-text-muted)';
 
@@ -135,8 +138,14 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
   const coverageSelection=useRef<string|null|undefined>(undefined);
   const statusGeneration=useRef(0);
   const rootSignature=useRef('');
+  const statusCache=useRef(new Map<string,IndexStatus>());
+  const statusRequests=useRef(new Map<string,Promise<IndexStatus>>());
+  const live=useRef(true);
+  const workspace=useRef(workspacePath);workspace.current=workspacePath;
+  useEffect(()=>{statusGeneration.current++;statusCache.current.clear();statusRequests.current.clear();rootSignature.current='';coverageSelection.current=undefined;setCoverageRootId(undefined);setCoverageRoots([]);setStatus(null);void refreshStatus();},[workspacePath]);
+  useEffect(()=>{live.current=true;return()=>{live.current=false;statusGeneration.current++;};},[]);
   const [coverageRoots,setCoverageRoots]=useState<SourceFolder[]>([]);
-  const selectCoverageRoot=(id:string|null|undefined)=>{coverageSelection.current=id;statusGeneration.current++;setStatus(null);setCoverageRootId(id);};
+  const selectCoverageRoot=(id:string|null|undefined)=>{coverageSelection.current=id;statusGeneration.current++;setStatus(statusCache.current.get(id===undefined?'all':id??'primary')??null);setCoverageRootId(id);};
   const [facts, setFacts] = useState<FactRow[] | null>(null);
   const [factsError, setFactsError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -186,12 +195,14 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
 
   const refreshStatus = useCallback(async () => {
     if (!callBackendTool) return;
-    const generation=++statusGeneration.current,id=coverageSelection.current;
+    const generation=statusGeneration.current,id=coverageSelection.current,key=id===undefined?'all':id??'primary',requestedWorkspace=workspacePath;
     setLoadingStatus(true);
     setStatusError(null);
     try {
-      const s = (await (id===undefined?callBackendTool('memory.status'):callBackendTool('memory.status',{rootId:id}))) as IndexStatus;
-      if(generation!==statusGeneration.current)return;
+      let request=statusRequests.current.get(key);
+      if(!request){request=(id===undefined?callBackendTool('memory.status'):callBackendTool('memory.status',{rootId:id})) as Promise<IndexStatus>;statusRequests.current.set(key,request);void request.finally(()=>{if(statusRequests.current.get(key)===request)statusRequests.current.delete(key);}).catch(()=>{});}
+      const s=await request;if(workspace.current!==requestedWorkspace)return;statusCache.current.set(key,s);
+      if(!live.current||generation!==statusGeneration.current)return;
       setStatus(s);
       const api = (window as { electronAPI?: { invoke?: (c: string) => Promise<unknown> } }).electronAPI;
       if (api?.invoke) {
@@ -201,11 +212,11 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         } catch { /* Older hosts do not expose reconciliation errors. */ }
       }
     } catch (err) {
-      if(generation===statusGeneration.current)setStatusError(err instanceof Error ? err.message : String(err));
+      if(live.current&&generation===statusGeneration.current)setStatusError(err instanceof Error ? err.message : String(err));
     } finally {
-      if(generation===statusGeneration.current)setLoadingStatus(false);
+      if(live.current&&generation===statusGeneration.current)setLoadingStatus(false);
     }
-  }, [callBackendTool]);
+  }, [callBackendTool,workspacePath]);
 
   const updateCoverageRoots=(value:SourceFolder[])=>{
     const next=selectableSourceFolders(value),signature=JSON.stringify(next);
@@ -453,11 +464,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
 
   // --- Derived ------------------------------------------------------------
 
-  const bySourceClass = status?.bySourceClass ?? {};
-  const totalChunks = status?.chunks ?? 0;
-  const coverage =
-    totalChunks > 0 ? Math.round(((status?.denseChunks ?? 0) / totalChunks) * 100) : 0;
-  const indexLabel = status?.indexing ? 'Indexing…' : status?.sourceRootErrors?.length ? 'Partial index' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
+  const available=status?.available;
+  const bySourceClass = available?.bySourceClass ?? status?.bySourceClass ?? {};
+  const totalChunks = available?.chunks ?? status?.chunks ?? 0;
+  const operation=status?.operation;
+  const lastScan=status?.lastFullScan??status?.fileIndex;
+  const indexLabel = status?.indexing ? 'Indexing…' : status?.sourceRootErrors?.length||operation?.state==='partial' ? 'Partial index' : operation?.state==='failed'?'Index failed' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
   const countLabel = (n:number|null|undefined) => n == null ? 'Unknown' : n.toLocaleString();
   const keywordOnly = isKeywordOnly(status);
   // The provider's error text stays out of the UI; only the fact of it surfaces.
@@ -536,7 +548,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
         </p>
       )}
 
-      <SourceSettings callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} onRootsChanged={updateCoverageRoots} />
+      <SourceSettings key={workspacePath} workspacePath={workspacePath} callBackendTool={callBackendTool} onApplied={() => void refreshStatus()} onRootsChanged={updateCoverageRoots} />
 
       {/* ---------------- QUICK OPEN ---------------- */}
       <section style={SECTION}>
@@ -740,26 +752,31 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
 
         {status && status.ready !== false && (
           <div style={CARD}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-              <Stat value={countLabel(status.chunks)} label="saved chunks" />
-              <Stat
-                value={status.chunks == null || status.denseChunks == null ? 'Unknown' : status.chunks === 0 ? '—' : `${coverage}`}
-                unit={status.chunks ? '%' : undefined}
-                label="saved chunks with vectors"
-              />
-              <Stat value={countLabel(status.sourceFiles)} label="saved sources (files + records)" />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <Stat value={countLabel(available?.chunks??status.chunks)} label="searchable chunks" />
+              <Stat value={countLabel(available?.sourceFiles??status.sourceFiles)} label="searchable sources (files + records)" />
             </div>
-
-            <p style={{margin:0,color:muted}}>Embedding coverage describes saved chunks, not all workspace files. Unfinished or failed files may be absent from this index.</p>
+            <p style={{margin:0,color:muted}}>Available to search now. Excluded or failed sources and auxiliary page rows are not counted.</p>
             <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
-              <dt>Files discovered in last scan</dt><dd>{countLabel(status.fileIndex?.discoveredFiles)}</dd>
-              <dt>Files processed in last scan</dt><dd>{countLabel(status.fileIndex?.completedFiles)}</dd>
-              <dt>Files currently saved</dt><dd>{countLabel(status.indexedFiles)}</dd>
-              <dt>Files failed in last operation</dt><dd>{countLabel(status.fileIndex?.failedFiles)}</dd>
-              <dt>Files remaining in last scan</dt><dd>{countLabel(status.fileIndex?.remainingFiles)}</dd>
-              <dt>Saved chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
+              <dt>Current operation</dt><dd>{operation ? operation.kind+' · '+operation.state : 'None'}</dd>
+              <dt>Files in current operation</dt><dd>{operation?countLabel(operation.totalFiles):'—'}</dd>
+              <dt>Files processed in current operation</dt><dd>{operation?countLabel(operation.completedFiles):'—'}</dd>
+              <dt>Files remaining in current operation</dt><dd>{operation?countLabel(operation.remainingFiles):'—'}</dd>
+              <dt>Files failed in current operation</dt><dd>{operation?countLabel(operation.failedFiles):'—'}</dd>
               <dt>File observation</dt><dd>{status.watching === undefined ? 'Unknown' : status.watching ? 'Active' : 'Inactive'}</dd>
             </dl>
+            {operation?.error&&<p role="alert" style={ERR}>{operation.error.category}: {operation.error.action}</p>}
+            <details><summary>Index diagnostics</summary>
+              <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
+                <dt>Files discovered in last full scan</dt><dd>{countLabel(lastScan?.discoveredFiles)}</dd>
+                <dt>Files processed in last full scan</dt><dd>{countLabel(lastScan?.completedFiles)}</dd>
+                <dt>Files failed in last full scan</dt><dd>{countLabel(lastScan?.failedFiles)}</dd>
+                <dt>Files remaining in last full scan</dt><dd>{countLabel(lastScan?.remainingFiles)}</dd>
+                <dt>Stored chunks (including auxiliary rows)</dt><dd>{countLabel(status.chunks)}</dd>
+                <dt>Stored chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
+                <dt>Files currently available</dt><dd>{countLabel(available?.indexedFiles??status.indexedFiles)}</dd>
+              </dl>
+            </details>
             {!!status.fileIndex?.failures?.length && <ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{status.fileIndex.failures.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code>: {f.error.category} — {f.error.action}</li>)}
               {(status.fileIndex.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex.failureCount} errors.</li>}
             </ul>}
@@ -806,7 +823,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool }: SettingsPane
               </dd>
               <dt style={{ color: 'var(--nim-text-muted)' }}>Last indexed</dt>
               <dd style={{ margin: 0 }}>
-                {relativeTime(status.lastIndexedAt)}{status.watching ? ' · observing file changes' : ''}
+                {relativeTime(available?.lastIndexedAt??status.lastIndexedAt)}{status.watching ? ' · observing file changes' : ''}
               </dd>
               {coverageRootId===undefined && <><dt style={{ color: 'var(--nim-text-muted)' }}>Index size</dt>
               <dd style={{ margin: 0 }}>

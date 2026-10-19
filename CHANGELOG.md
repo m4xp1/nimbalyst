@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.4] - 2026-10-19
+
+### Fixed
+- Apply Memory source rules immediately while indexing runs in the background; keep Coverage visible with file-operation progress.
+- Preserve code and table context in Memory fragments and reuse unchanged embeddings without auxiliary page-vector requests.
+
 ## [0.81.7+m4xp1.3] - 2026-10-18
 
 ### Added

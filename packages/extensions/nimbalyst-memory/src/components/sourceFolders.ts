@@ -1,4 +1,4 @@
-export interface SourceFolder {id:string|null;path:string;label:string;available:boolean;}
+export interface SourceFolder {id:string|null;path:string;label:string;available:boolean;rulesRevision?:string;}
 /** Selectable workspace roots only, with aliases collapsed using host path spelling. */
 export function selectableSourceFolders(value:unknown):SourceFolder[]{
  if(!Array.isArray(value))return[];

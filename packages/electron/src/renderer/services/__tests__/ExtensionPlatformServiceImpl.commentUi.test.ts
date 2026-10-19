@@ -50,6 +50,7 @@ describe('ExtensionPlatformServiceImpl comment UI external', () => {
       '/extension.js'
     );
 
+    expect((window as any).__nimbalyst_extensions?.['@nimbalyst/runtime'].memorySourceChanges).toHaveProperty('subscribe',expect.any(Function));
     const registry = (window as any).__nimbalyst_extensions?.[
       COMMENT_UI_SPECIFIER
     ];

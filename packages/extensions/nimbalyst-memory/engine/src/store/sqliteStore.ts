@@ -42,6 +42,7 @@ interface ChunkRow {
   ref_type: string;
   ref_id: string;
   granularity: string;
+  projection:string|null;
 }
 
 export class SqliteStore {
@@ -61,10 +62,10 @@ export class SqliteStore {
     if (version && Number(version.value) >= LEXICAL_INDEX_VERSION) return;
     this.db.transaction(() => {
       const update = this.db.prepare('UPDATE chunks SET sparse_terms = ? WHERE id = ?');
-      const rows = this.db.prepare('SELECT id, content, heading_path, granularity FROM chunks').all() as Pick<ChunkRow, 'id' | 'content' | 'heading_path' | 'granularity'>[];
+      const rows = this.db.prepare('SELECT id, content, heading_path, granularity, projection FROM chunks').all() as Pick<ChunkRow, 'id' | 'content' | 'heading_path' | 'granularity' | 'projection'>[];
       for (const row of rows) {
         const heading = (JSON.parse(row.heading_path) as string[]).join(' > ');
-        const input = heading ? heading + '\n' + row.content : row.content;
+        const input=[heading,row.projection?JSON.parse(row.projection).context:undefined,row.content].filter(Boolean).join('\n');
         update.run(JSON.stringify(row.granularity === 'page' ? {} : termFrequencies(input)), row.id);
       }
       this.db.prepare("INSERT INTO meta(key,value) VALUES('lexical_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(LEXICAL_INDEX_VERSION));
@@ -107,6 +108,7 @@ export class SqliteStore {
   private migrate(): void {
     const cols = this.db.prepare(`PRAGMA table_info(chunks)`).all() as { name: string }[];
     const names = new Set(cols.map((c) => c.name));
+    if(!names.has('projection'))this.db.exec('ALTER TABLE chunks ADD COLUMN projection TEXT');
     if (!names.has('ref_type')) {
       this.db.exec(`ALTER TABLE chunks ADD COLUMN ref_type TEXT NOT NULL DEFAULT 'doc-file'`);
     }
@@ -246,10 +248,10 @@ export class SqliteStore {
     return this.db.prepare(`
       INSERT INTO chunks (id, source_path, source_class, heading_path, ordinal,
         content, content_hash, dense_embedding, sparse_terms, embedder_id, model, dims, updated_at,
-        ref_type, ref_id, granularity)
+        ref_type, ref_id, granularity, projection)
       VALUES (@id, @source_path, @source_class, @heading_path, @ordinal,
         @content, @content_hash, @dense_embedding, @sparse_terms, @embedder_id, @model, @dims, @updated_at,
-        @ref_type, @ref_id, @granularity)
+        @ref_type, @ref_id, @granularity, @projection)
       ON CONFLICT(id) DO UPDATE SET
         source_path = excluded.source_path,
         source_class = excluded.source_class,
@@ -265,7 +267,8 @@ export class SqliteStore {
         updated_at = excluded.updated_at,
         ref_type = excluded.ref_type,
         ref_id = excluded.ref_id,
-        granularity = excluded.granularity
+        granularity = excluded.granularity,
+        projection = excluded.projection
     `);
   }
 
@@ -290,6 +293,7 @@ export class SqliteStore {
           ref_type: c.refType,
           ref_id: c.refId,
           granularity: c.granularity ?? 'chunk',
+          projection:JSON.stringify({sourceRange:c.sourceRange,coordinateSpace:c.coordinateSpace,sectionId:c.sectionId,context:c.context,embeddingInputHash:c.embeddingInputHash,projectionVersion:c.projectionVersion}),
         });
       }
     });
@@ -324,6 +328,7 @@ export class SqliteStore {
 
   private rowToChunk(r: ChunkRow): StoredChunk {
     return {
+      ...(r.projection?JSON.parse(r.projection):{}),
       id: r.id,
       sourcePath: r.source_path,
       sourceClass: r.source_class,

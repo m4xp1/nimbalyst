@@ -36,12 +36,13 @@ const TOOLS = [
     name: 'expand',
     description:
       'Expand a search hit to its full heading section. Pass the sourcePath and ' +
-      'headingPath from a search_project_knowledge result.',
+      'headingPath from a search_project_knowledge result. Pass its sectionId, when present, to distinguish repeated headings.',
     inputSchema: {
       type: 'object',
       properties: {
         sourcePath: { type: 'string' },
         headingPath: { type: 'array', items: { type: 'string' } },
+        sectionId: {type:'string'},
       },
       required: ['sourcePath'],
     },
@@ -131,7 +132,7 @@ export function createMcpServer(engine: MemoryEngine): Server {
           const headingPath = Array.isArray(args.headingPath)
             ? (args.headingPath as unknown[]).map(String)
             : [];
-          return jsonResult(engine.expand(sourcePath, headingPath));
+          return jsonResult(engine.expand(sourcePath, headingPath,typeof args.sectionId==='string'?args.sectionId:undefined));
         }
         case 'read_doc': {
           const p = String(args.path ?? '');

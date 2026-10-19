@@ -9,7 +9,7 @@
  * these methods.
  */
 import { readFile, stat } from 'node:fs/promises';
-import { safeIndexError, type FileIndexStatus, type SafeIndexError } from './indexStatus.js';
+import { safeIndexError, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
 import type {
   Embedder,
   EngineConfig,
@@ -19,16 +19,22 @@ import type {
   VirtualRecord,
   FileRecord,
   SourceSet,
+  StoredChunk,
 } from './types.js';
 import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, type ResolvedRoot } from './roots.js';
+import {validateEmbeddingResponse} from './embeddingInput.js';
 import { isInsideRealRoot } from './sourceRules.js';
 import { Indexer, type IndexProgress } from './indexer/indexer.js';
 import { IndexWatcher } from './indexer/watcher.js';
+import { FileWork } from './indexer/fileWork.js';
 import { Retriever } from './retrieval/retriever.js';
 import { FactsStore, type RecallQuery, type RememberInput } from './facts/facts.js';
 
 export interface EngineStatus {
+  available?: {chunks:number;sourceFiles:number;indexedFiles:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
+  operation?:FileOperation|null;
+  lastFullScan?:FileIndexStatus;
   chunks: number;
   /** Chunks that carry a dense vector (the dense retrieval arm). */
   denseChunks: number;
@@ -89,6 +95,16 @@ export class MemoryEngine {
   private retriever: Retriever;
   private watcher: IndexWatcher | null = null;
   private indexing = false;
+  private fileWork=new FileWork();
+  private policyGeneration=0;
+  private closed=false;
+  private snapshot:StoredChunk[]=[];
+  private operation:FileOperation|null=null;
+  private rootOperations:Record<string,FileOperation>={};
+  private pendingPaths=new Set<string>();
+  private pendingDiscovery=false;
+  private activeSourcePaths:string[]|null|undefined;
+  private interruptedScan=false;
   private indexFinished: Promise<void> = Promise.resolve();
   private finishIndex: (() => void) | null = null;
   private fileIndex:FileIndexStatus={state:'not-started',phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
@@ -113,7 +129,8 @@ export class MemoryEngine {
     this.fileIndex=saved.all??this.fileIndex;
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
-    this.retriever = new Retriever(store.loadAll().filter(chunk => this.indexer.readable(chunk)));
+    this.snapshot=store.loadAll();
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.indexer.readable(chunk)));
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -166,18 +183,43 @@ export class MemoryEngine {
       state:this.indexing?'building':failures.length || error || (remaining??0)>0?(hasSaved?'partial':'failed'):settled?'ready':base.state};
   }
   private persistDiagnostics():void {
-    this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:this.fileStatus(),...Object.fromEntries(Object.keys(this.rootScans).map(key=>[key,this.fileStatus(key==='primary'?null:key)]))}});
+    this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:{...this.fileIndex},...this.rootScans}});
   }
 
-  ruleFilePaths():string[]{return this.indexer.ruleFilePaths();}
+  ruleFilePaths(visiblePaths:string[]=[]):string[]{return this.indexer.ruleFilePaths(visiblePaths);}
 
   /** Rebuild the in-memory retrieval snapshot from the store. */
   private refreshSnapshot(): void {
-    this.retriever = new Retriever(this.store.loadAll().filter(chunk => this.indexer.readable(chunk)));
+    this.snapshot=this.store.loadAll();
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.indexer.readable(chunk)));
   }
 
-  async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
+  indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
+    return this.fileWork.run(()=>this.indexAllNow(onProgress));
+  }
+  private beginOperation(kind:FileOperation['kind'],state:'queued'|'running'='running'):FileOperation {
+    const op:FileOperation={id:(this.operation?.id??0)+1,kind,state,phase:'enumerate',totalFiles:null,completedFiles:0,failedFiles:0,remainingFiles:null,error:null};
+    this.operation=op;this.rootOperations={};return op;
+  }
+  private progressOperation(op:FileOperation,p:IndexProgress):void {
+    if(this.operation!==op)return;
+    op.phase=p.phase;op.totalFiles=p.phase==='enumerate'?null:p.total;op.completedFiles=p.done;op.failedFiles=p.failed??0;
+    op.remainingFiles=op.totalFiles===null?null:Math.max(0,p.total-p.done-(p.failed??0));
+    if(p.sources){for(const source of p.sources){const key=this.coverageRoot(source.sourcePath,source.sourceClass)??'primary';
+      const scoped=this.rootOperations[key]??={...op,rootId:key==='primary'?null:key,totalFiles:0,completedFiles:0,failedFiles:0,remainingFiles:0};scoped.totalFiles!++;scoped.remainingFiles!++;
+    }}
+    if(p.file&&p.success!==undefined){const scoped=this.rootOperations[this.coverageRoot(p.file)??'primary'];if(scoped){if(p.success)scoped.completedFiles++;else scoped.failedFiles++;scoped.remainingFiles=Math.max(0,(scoped.remainingFiles??0)-1);}}
+  }
+  private finishOperation(op:FileOperation,error?:unknown,cancelled=false):void {
+    if(this.operation!==op)return;
+    op.error=error?(typeof error==='object'&&error!==null&&'category' in error&&'action' in error?error as SafeIndexError:safeIndexError(error)):null;
+    op.state=cancelled?'cancelled':error?'failed':op.failedFiles?'partial':'completed';
+    for(const scoped of Object.values(this.rootOperations)){scoped.error=op.error;scoped.state=cancelled?'cancelled':error&&(scoped.remainingFiles??0)>0?'failed':scoped.failedFiles?'partial':'completed';}
+  }
+  private async indexAllNow(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
     if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
+    if(this.closed)throw Error('Memory is closed.');
+    const indexer=this.indexer,generation=this.policyGeneration,op=this.beginOperation('scan');let passError:unknown;
     this.indexing = true;
     this.indexFinished = new Promise(resolve => { this.finishIndex = resolve; });
     this.fileIndex={state:'building',phase:'enumerate',discoveredFiles:null,completedFiles:0,failedFiles:0,remainingFiles:null,error:null};
@@ -187,7 +229,9 @@ export class MemoryEngine {
       // Publish changed chunks during a long pass, but do not deserialize the
       // entire catalog (including virtual records) for unchanged file batches.
       let snapshotIndexed = 0;
-      const result = await this.indexer.indexAll((p) => {
+      const result = await indexer.indexAll((p) => {
+        if(generation!==this.policyGeneration)return;
+        this.progressOperation(op,p);
         this.fileIndex.phase=p.phase;
         if (p.phase === 'index' || p.phase === 'done') {
           this.fileIndex.discoveredFiles=p.total;this.fileIndex.completedFiles=p.done;this.fileIndex.failedFiles=p.failed??0;
@@ -213,17 +257,19 @@ export class MemoryEngine {
         if(p.success===false)this.refreshSnapshot();
         onProgress?.(p);
       });
-      this.fileIndex.state='ready';
+      if(generation===this.policyGeneration)this.fileIndex.state='ready';
       this.embedderChanged = false;
       // Pruning and metadata-only changes are published in finally.
       return result;
     } catch (error) {
+      passError=error;
       this.fileIndex.error=safeIndexError(error);
       this.fileIndex.failedFiles=this.indexer.failuresForStatus().length;
       this.fileIndex.state=this.store.count()>0 ? 'partial' : 'failed';
       throw error;
     } finally {
       this.refreshSnapshot();
+      this.finishOperation(op,passError,generation!==this.policyGeneration);
       this.indexing = false;
       for(const scan of Object.values(this.rootScans))scan.state=(scan.failedFiles??0)>0 || (scan.remainingFiles??0)>0?'partial':'ready';
       this.persistDiagnostics();
@@ -240,34 +286,50 @@ export class MemoryEngine {
   /** Invalidate pending file embeddings before a host root change is queued. */
   cancelFileIndexing(): void { this.indexer.cancel(); }
 
-  async updateSources(
-    sources: SourceSet[],
-    workspaceExclude: string[]
-  ): Promise<{ indexed: number; files: number }> {
-    this.indexer.cancel();
-    await this.waitForIndexing();
-    await this.watcher?.stop();
-    this.watcher = null;
-    this.config.sources = sources;
-    this.config.workspaceExclude = workspaceExclude;
-    this.roots = resolveRoots(this.config.root, sources);
-    this.indexer = new Indexer(this.config, this.store, this.embedder);
-    this.refreshSnapshot();
-    try {
-      return await this.indexAll();
-    } finally {
-      this.refreshSnapshot();
-      this.startWatching();
-    }
+  updateSources(
+    sources:SourceSet[],workspaceExclude:string[],options?:{paths?:string[];incremental?:boolean}
+  ):Promise<{indexed:number;files:number}> {
+    if(this.closed)return Promise.reject(Error('Memory is closed.'));
+    const previous=this.indexer;
+    previous.cancel();
+    if(this.indexing)this.interruptedScan=true;
+    if(this.activeSourcePaths===null)this.pendingDiscovery=true;
+    else for(const path of this.activeSourcePaths??[])this.pendingPaths.add(path);
+    for(const path of options?.paths??[])this.pendingPaths.add(path);
+    if(!options?.paths)this.pendingDiscovery=true;
+    this.config={...this.config,sources,workspaceExclude};
+    this.roots=resolveRoots(this.config.root,sources);
+    this.indexer=new Indexer(this.config,this.store,this.embedder);
+    this.indexer.inheritState(previous);this.indexer.noteRulePaths([...this.pendingPaths]);
+    const generation=++this.policyGeneration;
+    this.watcher?.configure(this.config,this.indexer);
+    const queued=this.beginOperation('rules','queued');
+    return this.fileWork.run(async()=>{
+      if(generation!==this.policyGeneration||this.closed)return{indexed:0,files:0};
+      const indexer=this.indexer,paths=this.pendingDiscovery?undefined:[...this.pendingPaths];
+      this.pendingPaths.clear();this.pendingDiscovery=false;this.activeSourcePaths=paths??null;
+      try {
+        this.startWatching(true);await this.watcher?.refreshConfiguration();
+        if(this.interruptedScan || !options?.incremental){this.interruptedScan=false;return await this.indexAllNow();}
+        const op=queued;op.state='running';let error:unknown;
+        try{return await indexer.reconcile(paths,previous,p=>this.progressOperation(op,p),files=>this.watcher?.acknowledge(files.flatMap(file=>{try{return[resolveInRoots(this.roots,file.sourcePath).abs];}catch{return[];}}))??Promise.resolve());}
+        catch(e){error=e;throw e;}
+        finally{this.refreshSnapshot();this.finishOperation(op,error,generation!==this.policyGeneration);this.persistDiagnostics();}
+      }finally{this.activeSourcePaths=undefined;}
+    });
   }
 
-  startWatching(seedOnly=false): void {
-    if (this.watcher) return;
-    this.watcher = new IndexWatcher(this.config, this.indexer, () => { this.refreshSnapshot();this.persistDiagnostics(); }, (error,sourcePath) => {
+  startWatching(seedOnly=false):void {
+    if(this.watcher)return;
+    this.watcher=new IndexWatcher(this.config,this.indexer,()=>{this.refreshSnapshot();this.persistDiagnostics();},(error,sourcePath)=>{
       this.refreshSnapshot();
+      if(this.operation){this.operation.error=safeIndexError(error);this.operation.state='failed';}
       if(!sourcePath)this.fileIndex.globalError=safeIndexError(error);
-      this.fileIndex={...this.fileIndex,state:this.store.count()>0 ? 'partial' : 'failed',error:safeIndexError(error),failedFiles:null};
-    },()=>this.waitForIndexing());
+    },async()=>{},work=>this.fileWork.run(async()=>{
+      if(this.closed)return;
+      const op=this.beginOperation('watch');
+      try{await work();if(op.state==='failed')this.finishOperation(op,op.error);else this.finishOperation(op);}catch(error){this.finishOperation(op,error);throw error;}finally{this.activeSourcePaths=undefined;}
+    }),p=>{if(this.operation?.kind==='watch'){if(p.sources)this.activeSourcePaths=p.sources.flatMap(source=>{try{return[resolveInRoots(this.roots,source.sourcePath).abs];}catch{return[];}});this.progressOperation(this.operation,p);}});
     this.watcher.start(seedOnly);
   }
 
@@ -292,13 +354,17 @@ export class MemoryEngine {
   }
 
   async syncFileRecords(records: FileRecord[], obsoleteIds: string[] = []): Promise<void> {
+    await this.fileWork.run(async()=>{
+    this.activeSourcePaths=[...new Set([...this.store.getFileRecords(),...records].flatMap(record=>{try{return[resolveInRoots(this.roots,record.file.path).abs];}catch{return[];}}))];
     try {
       for (const id of obsoleteIds) this.store.deleteSource(id);
       await this.indexer.syncFileRecords(records);
     } finally {
       this.refreshSnapshot();
       this.watcher?.refreshEntityPaths();
+      this.activeSourcePaths=undefined;
     }
+    });
   }
 
   /**
@@ -336,7 +402,8 @@ export class MemoryEngine {
   ): Promise<SearchHit[]> {
     let vec: number[] | null = null;
     try {
-      const [embedded] = await this.embedder.embed([query]);
+      const vectors=await this.embedder.embed([query]);validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
+      const [embedded]=vectors;
       vec = embedded ?? null;
       if (this.lastEmbedError) {
         this.log('info', '[engine] query embedding recovered; dense retrieval re-enabled');
@@ -354,13 +421,13 @@ export class MemoryEngine {
       this.lastEmbedError = msg;
     }
     const parents=this.store.getSessionProjection().parents;
-    return this.retriever.search(query, vec, k, opts).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
+    return this.retriever.search(query, vec, k, {...opts,accepts:chunk=>this.indexer.readable(chunk)}).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
       ? {...hit,parentSessionId:parents[hit.sourcePath]??null}:hit);
   }
 
-  expand(sourcePath: string, headingPath: string[]): { sourcePath: string; headingPath: string[]; text: string } | null {
-    if(this.indexer.sourceFailed(sourcePath))return null;
-    return this.retriever.expandSection(sourcePath, headingPath);
+  expand(sourcePath: string, headingPath: string[],sectionId?:string): { sourcePath: string; headingPath: string[]; text: string } | null {
+    if(!this.snapshot.some(chunk=>chunk.sourcePath===sourcePath&&this.indexer.readable(chunk)))return null;
+    return this.retriever.expandSection(sourcePath, headingPath,sectionId);
   }
 
   /**
@@ -474,6 +541,9 @@ export class MemoryEngine {
     const bySourceClass:Record<string,number>={};
     for(const row of summaries)bySourceClass[row.sourceClass]=(bySourceClass[row.sourceClass]??0)+row.chunks;
     const chunks=summaries.reduce((n,row)=>n+row.chunks,0),dense=summaries.reduce((n,row)=>n+row.dense,0);
+    const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.indexer.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
+    const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
+    const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
     const semanticAvailable = this.embedder.info.dims > 0 && !this.lastEmbedError;
     const retrieval: RetrievalCapabilities = {
       mode: semanticAvailable ? 'hybrid' : 'keyword-only',
@@ -486,6 +556,7 @@ export class MemoryEngine {
       keyword: { available: true, source: 'local-project-index' },
     };
     return {
+      available,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
       chunks,
       denseChunks:dense,
       bySourceClass,
@@ -493,7 +564,7 @@ export class MemoryEngine {
       lastIndexedAt: summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,
       embedder: this.embedder.info,
       embedderChanged: this.embedderChanged,
-      indexing: this.indexing,
+      indexing: rootId===undefined?this.operation?.state==='running'||this.operation?.state==='queued':this.rootOperations[rootId??'primary']?.state==='running',
       fileIndex:this.fileStatus(rootId),
       indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,
       watching: this.watcher?.isWatching(rootId) ?? false,
@@ -511,7 +582,8 @@ export class MemoryEngine {
   }
 
   async close(): Promise<void> {
-    this.indexer.cancel();
+    this.closed=true;this.indexer.cancel();
+    await this.fileWork.idle();
     await this.waitForIndexing();
     await this.watcher?.stop();
     this.store.close();

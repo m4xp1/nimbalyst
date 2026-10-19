@@ -29,3 +29,21 @@ describe('workspace-scoped Memory tree cache',()=>{
   expect(store.get(memoryTreeIncludedAtom('/new/docs/a.md'))).toBe(true);expect(store.get(memoryTreeIncludedAtom('/old/private.md'))).toBe(false);
  });
 });
+
+
+describe('durable Memory rule acknowledgement',()=>{
+ it('publishes the acknowledged tree without waiting for a refresh and retains it through a transient backend error',async()=>{
+  let fail=false;
+  const invoke=vi.fn(async(channel:string,payload:any)=>{
+   if(channel==='extensions:get-enabled')return true;
+   if(payload.toolName==='memory.set_path_override'){fail=true;return{revision:'rules-2',rootId:null,rules:{version:1,include:['extra.md'],exclude:[]},treeState:{revision:'tree-2',files:['/main/extra.md'],directories:['/main']}};}
+   if(fail)throw Error('temporary refresh failure');
+   return{revision:'tree-1',files:[],directories:[]};
+  });
+  vi.stubGlobal('window',{electronAPI:{invoke}});stop=initMemoryTreeListeners('/main');await vi.advanceTimersByTimeAsync(0);
+  await changeMemoryTreeRule('/main/extra.md','include');
+  expect(store.get(memoryTreeIncludedAtom('/main/extra.md'))).toBe(true);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(store.get(memoryTreeAvailableAtom)).toBe(true);expect(store.get(memoryTreeIncludedAtom('/main/extra.md'))).toBe(true);
+ });
+});

@@ -201,7 +201,7 @@ describe('Indexer with a second source root', () => {
 
 describe('bounded source embeddings', () => {
   it('indexes long headings, continuous payloads and page vectors without dropping the tail', async () => {
-    const { root, config } = setup();
+    const { root, config } = setup();config.pageVectors=true;
     const heading = 'ДлинныйЗаголовок😀'.repeat(700);
     const raw = '# ' + heading + '\n\n' + 'Qx7Zm9'.repeat(20000) + '\n\nTAILPROBE624';
     writeFileSync(path.join(root, 'docs/large.md'), raw);
@@ -238,6 +238,31 @@ describe('changed heading context',()=>{
    writeFileSync(file,'# UpdatedContext\n\n'+body);await indexer.indexAll();
    expect(sent.length-before).toBe(store.chunksForSource('docs/context.md').length);
    expect(sent.slice(before).every(input=>input.includes('UpdatedContext'))).toBe(true);
+  }finally{store.close();}
+ });
+});
+
+
+describe('source projection migration and reuse',()=>{
+ it('reuses full-input vectors when ordinals shift, and keeps precise source coordinates',async()=>{
+  const {root,config}=setup(),file=path.join(root,'docs/shift.md'),fake=new FakeEmbedder(),sent:string[]=[];
+  const embedder={info:fake.info,embed:async(texts:string[])=>{sent.push(...texts);return fake.embed(texts);}},store=new SqliteStore(config.dbPath),indexer=new Indexer(config,store,embedder);
+  try{
+   writeFileSync(file,'# A\nFirst\n# B\nSecond');await indexer.indexAll();sent.length=0;
+   const raw='# New\nAdded\n# A\nFirst\n# B\nSecond';writeFileSync(file,raw);await indexer.indexAll();
+   expect(sent).toHaveLength(1);expect(sent[0]).toContain('Added');
+   const chunks=store.chunksForSource('docs/shift.md');expect(chunks.every(c=>c.granularity!=='page')).toBe(true);
+   for(const c of chunks){expect(c.embeddingInputHash).toMatch(/^[a-f0-9]{64}$/);expect(raw.slice(c.sourceRange!.start,c.sourceRange!.end)).toBe(c.text);}
+  }finally{store.close();}
+ });
+ it('backfills old metadata without embedding an identical old input or retaining an unused page row',async()=>{
+  const {root,config}=setup();writeFileSync(path.join(root,'docs/old.md'),'# A\nFirst\n# B\nSecond');config.pageVectors=true;
+  const fake=new FakeEmbedder(),sent:string[]=[];const embedder={info:fake.info,embed:async(texts:string[])=>{sent.push(...texts);return fake.embed(texts);}},store=new SqliteStore(config.dbPath);
+  try{
+   await new Indexer(config,store,embedder).indexAll();
+   store.upsertChunks(store.loadAll().map(c=>({...c,sourceRange:undefined,sectionId:undefined,context:undefined,embeddingInputHash:undefined,projectionVersion:undefined})));
+   sent.length=0;await new Indexer({...config,pageVectors:false},store,embedder).indexAll();
+   expect(sent).toEqual([]);expect(store.loadAll()).toHaveLength(2);expect(store.loadAll().every(c=>c.projectionVersion===2&&c.sectionId&&c.sourceRange)).toBe(true);
   }finally{store.close();}
  });
 });

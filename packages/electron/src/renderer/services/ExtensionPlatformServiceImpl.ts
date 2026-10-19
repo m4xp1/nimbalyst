@@ -43,6 +43,8 @@ import * as CollaborativeCommentUI from '@nimbalyst/runtime/editor/commenting/ui
 // Import screenshot service and document path context from runtime
 import {
   screenshotService,
+  memorySourceChanges,
+  sameMemoryWorkspace,
   useDocumentPath,
   useEditorLifecycle,
   useCollaborativeEditor,
@@ -476,6 +478,8 @@ CHECK:
       // Extensions can import { MaterialSymbol, useDocumentPath, useEditorLifecycle, ... } from '@nimbalyst/runtime'
       '@nimbalyst/runtime': {
         screenshotService,
+        memorySourceChanges,
+        sameMemoryWorkspace,
         MaterialSymbol,
         useDocumentPath,
         useEditorLifecycle,

@@ -25,7 +25,7 @@ import fg from 'fast-glob';
 import { isProviderIndexFailure } from '../indexStatus.js';
 import type { EngineConfig, SourceSet } from '../types.js';
 import { locateAbsolute, rootForSet, type ResolvedRoot } from '../roots.js';
-import type { Indexer } from './indexer.js';
+import type { Indexer, IndexProgress } from './indexer.js';
 
 const DEBOUNCE_MS = 400;
 
@@ -112,6 +112,7 @@ export class IndexWatcher {
   private stopped = false;
   private targetPaths:string[]=[];
   private readyPromise:Promise<void>=Promise.resolve();
+  private generation=0;
   ready():Promise<void>{return this.readyPromise;}
 
   constructor(
@@ -119,8 +120,26 @@ export class IndexWatcher {
     private indexer: Indexer,
     private onSettled: () => void,
     private onError: (error:unknown,sourcePath?:string) => void = () => {},
-    private beforeBatch:()=>Promise<void> = async()=>{}
+    private beforeBatch:()=>Promise<void> = async()=>{},
+    private scheduleBatch?:(work:()=>Promise<void>)=>Promise<void>,
+    private onProgress?:(progress:IndexProgress)=>void
   ) {}
+
+  configure(config:EngineConfig,indexer:Indexer):void {this.config=config;this.indexer=indexer;this.generation++;}
+  async refreshConfiguration():Promise<void>{
+    if(!this.watcher){this.start(true);return;}
+    const targets=[...new Set([...this.resolveWatchTargets(),...this.indexer.entityFilePaths()])];
+    const removed=this.targetPaths.filter(target=>!targets.includes(target));
+    if(removed.length)await this.watcher.unwatch(removed);
+    this.watcher.add(targets);this.targetPaths=targets;
+    if(!this.discoveryTimer&&(this.config.sources.some(s=>s.sourceClass==='custom')||this.indexer.entityFilePaths().length))this.discoveryTimer=setInterval(()=>void this.discover(),3000);
+  }
+  async acknowledge(paths:string[]):Promise<void>{
+    const generation=this.generation;
+    for(const absolute of paths){try{const info=await stat(absolute);if(generation!==this.generation)return;if(info.isDirectory())continue;
+      const hit=this.indexer.classify(absolute);if(hit){this.discovered.set(absolute,info.mtimeMs+':'+info.size);this.pending.delete(hit.sourcePath);}
+    }catch{/* Removed paths remain absent. */}}
+  }
 
   isWatching(rootId?:string|null):boolean {
     if(!this.watcher || this.stopped)return false;
@@ -198,11 +217,12 @@ export class IndexWatcher {
   /** Discover new matches without recursively watching every workspace directory. */
   private async discover(seedOnly=false): Promise<void> {
     if (this.stopped || this.discovering) return;
+    const indexer=this.indexer,generation=this.generation;
     this.discovering = (async () => {
       const next = new Map<string, string>();
-      for (const hit of await this.indexer.enumerate()) {
-        if (this.stopped) continue;
-        const { abs } = resolveInRoots(this.indexer.sourceRoots(), hit.sourcePath);
+      for (const hit of await indexer.enumerate()) {
+        if (this.stopped || generation!==this.generation) return;
+        const { abs } = resolveInRoots(indexer.sourceRoots(), hit.sourcePath);
         let info;
         try {
           info = await stat(abs);
@@ -217,7 +237,7 @@ export class IndexWatcher {
           this.queue(abs, "upsert");
         }
       }
-      if (!this.stopped) {
+      if (!this.stopped && generation===this.generation) {
         for (const abs of this.discovered.keys())
           if (!next.has(abs)) this.queue(abs, "remove");
         this.discovered = next;
@@ -242,7 +262,7 @@ export class IndexWatcher {
   }
 
   private flush(): Promise<void> {
-    this.flushing = this.flushing.then(() => this.flushBatch());
+    this.flushing = this.flushing.catch(()=>{}).then(() => this.scheduleBatch?this.scheduleBatch(()=>this.flushBatch()):this.flushBatch()).catch(error=>{this.config.onLog?.('warn','[watcher] file batch failed: '+String(error));});
     return this.flushing;
   }
   private async flushBatch(): Promise<void> {
@@ -251,17 +271,21 @@ export class IndexWatcher {
     const batch = Array.from(this.pending.entries()).sort(([,a],[,b])=>a===b?0:a==='remove'?-1:1);
     this.pending.clear();
     this.timer = null;
+    const indexer=this.indexer,generation=this.generation;let done=0,failed=0;
+    this.onProgress?.({phase:'index',done,total:batch.length,failed,sources:batch.map(([sourcePath])=>({sourcePath,sourceClass:indexer.classify(sourcePath)?.sourceClass??'unknown'}))});
     for (const [sourcePath, op] of batch) {
-      if(this.stopped)break;
+      if(this.stopped||generation!==this.generation)break;
       try {
         if (op === "remove") {
-          this.indexer.removeFile(sourcePath);
+          indexer.removeFile(sourcePath);
         } else {
           const sourceClass =
-            this.indexer.classify(sourcePath)?.sourceClass ?? "unknown";
-          await this.indexer.indexFile(sourcePath, sourceClass);
+            indexer.classify(sourcePath)?.sourceClass ?? "unknown";
+          await indexer.indexFile(sourcePath, sourceClass);
         }
+        if(generation!==this.generation)break;done++;this.onProgress?.({phase:'index',file:sourcePath,done,total:batch.length,failed,success:true});
       } catch (error) {
+        if(generation!==this.generation)break;failed++;this.onProgress?.({phase:'index',file:sourcePath,done,total:batch.length,failed,success:false});
         this.onError(error,sourcePath);
         if(isProviderIndexFailure(error))break;
         // Best-effort; a failed file is retried on its next change event.
