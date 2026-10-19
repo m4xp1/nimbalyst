@@ -4,6 +4,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { SourceSet } from "./types.js";
 import picomatch from "picomatch";
+import {evaluateSourceRuleProgram,type SourceRuleProgram,type RulePattern} from "./ruleProgram.js";
 export interface PathOverride {path:string;kind:"file"|"directory";mode:"include"|"exclude";}
 export interface SourceRules {
   version: 1;
@@ -151,9 +152,13 @@ function visibleRules(include:string[],exclude:string[],legacy:PathOverride[]){
  if(result.include.length>400||result.exclude.length>400)throw Error('Use at most 400 source rules.');
  return result;
 }
+export function compileRulePatterns(patterns:string[]):RulePattern[]{
+ return patterns.map(pattern=>{const re=picomatch.makeRe(pattern,{dot:true,nocase:process.platform==='win32'});return{source:re.source,flags:re.flags};});
+}
 /** Narrower matched path constraints win; equally specific exclusions win. */
-export function compileSourceRules(rules:Pick<SourceRules,'include'|'exclude'>,root:string){
+export function compileSourceRuleProgram(rules:Pick<SourceRules,'include'|'exclude'>,root?:string):SourceRuleProgram{
  const options={dot:true,nocase:process.platform==='win32'};
+ const patternRegex=(text:string)=>{const re=picomatch.makeRe(text,options);return{source:re.source,flags:re.flags};};
  const entries=(['include','exclude'] as const).flatMap(mode=>expandSourcePatterns(rules[mode],root).map(pattern=>{
   const segments=pattern.split('/');
   const prefixes=segments.flatMap((part,index)=>{
@@ -161,16 +166,12 @@ export function compileSourceRules(rules:Pick<SourceRules,'include'|'exclude'>,r
    const prefix=segments.slice(0,index+1).join('/'),literal=sourceRulePath(prefix),partLiteral=sourceRulePath(part)!==undefined;
    const anchored=segments[0]!=='**'&&segments[0]!=='*'&&sourceRulePath(segments[0])!==undefined;
    if(!partLiteral&&!anchored&&mode==='include')return[];
-   return[{match:picomatch(prefix,options),literal:partLiteral,weight:(literal??prefix.replace(/[*?{}\[\]()!+@|]/g,'')).length}];
+   return[{match:patternRegex(prefix),literal:partLiteral,weight:(literal??prefix.replace(/[*?{}\[\]()!+@|]/g,'')).length}];
   });
-  return{mode,match:picomatch(pattern,options),prefixes};
+  return{mode,match:patternRegex(pattern),prefixes};
  }));
- return(relative:string):'include'|'exclude'|undefined=>{
-  const parts=relative.replace(/\\/g,'/').split('/');let best=-1,decision:'include'|'exclude'|undefined;
-  for(const entry of entries){if(!entry.match(relative))continue;let score=0;
-   for(const prefix of entry.prefixes)for(let depth=1;depth<=parts.length;depth++)if(prefix.match(parts.slice(0,depth).join('/')))score=Math.max(score,depth*1000000+(prefix.literal?100000:0)+prefix.weight);
-   if(score>best||score===best&&entry.mode==='exclude'){best=score;decision=entry.mode;}
-  }
-  return decision;
- };
+ return entries;
+}
+export function compileSourceRules(rules:Pick<SourceRules,'include'|'exclude'>,root:string){
+ const program=compileSourceRuleProgram(rules,root);return(relative:string)=>evaluateSourceRuleProgram(program,relative);
 }

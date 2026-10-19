@@ -18,7 +18,7 @@
  * method of the same `name`.
  */
 import { mkdirSync, realpathSync } from 'node:fs';
-import { buildTreeIndexState, resolveTreeTarget } from './treeIndexState';
+import { buildTreeIndexState, buildTreePolicyState, describeTreePolicy, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -554,8 +554,12 @@ export async function activate(ctx: ActivateCtx) {
     log('error', `[memory] engine init failed: ${(err as Error).message}`);
   }
 
+  let engineChanges:Promise<void>=Promise.resolve();
   async function restartEngine(want:typeof selection):Promise<void>{
-    await queueRuleChange(async()=>{const previous=engine;engine=null;await previous?.close();if(!disposed)await startEngine(want);});
+    const task=engineChanges.then(async()=>{
+      const previous=engine;engine=null;await previous?.close();
+      if(!disposed){await sourceChanges;configureSources();await startEngine(want);}
+    });engineChanges=task.catch(()=>{});await task;
   }
 
   function requireEngine(): MemoryEngine {
@@ -569,10 +573,43 @@ export async function activate(ctx: ActivateCtx) {
     const root=sourceRoots.find(root=>root.id && hit.sourcePath.startsWith('@'+root.id+'/'));
     return root ? {...hit,rootLabel:root.label,rootPath:root.path,relativePath:hit.sourcePath.slice(root.id!.length+2)} : hit;
   }
-  function applySources(paths?:string[]):void {
-    config.sources=attachedSources(FACTS_DIR,workspacePath,sourceRoots,sourceRules,rootRules);config.workspaceExclude=sourceRules.exclude;
-    const task=engine?engine.updateSources(config.sources,config.workspaceExclude,{paths,incremental:true}):Promise.reject(Error('Local project index is unavailable. Saved source rules are retained.'));
-    sourceIndexing=task.catch(error=>{log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');});
+  let sourceTimer:ReturnType<typeof setTimeout>|undefined;
+  let sourceGeneration=0;
+  const sourceUpdateRoots=new Set<string|null>();
+  let discoverSources=false;
+  let sourceScheduled=false;
+  const sourcePaths=new Set<string>();
+  let sourceUpdate:{pending:boolean;error:ReturnType<typeof safeIndexError>|null}={pending:false,error:null};
+  function configureSources():void {
+    config.sources=attachedSources(FACTS_DIR,workspacePath,sourceRoots,sourceRules,rootRules);
+    config.workspaceExclude=sourceRules.exclude;
+  }
+  function treePolicy(){return describeTreePolicy(sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,[],engine?.fileEntityPaths()??[]);}
+  function flushSources():void {
+    if(sourceTimer)clearTimeout(sourceTimer);sourceTimer=undefined;
+    if(disposed||!sourceScheduled)return;
+    sourceScheduled=false;
+    const generation=sourceGeneration;
+    // Run only after the small durable-write queue is idle. This work may open
+    // an indexer and touch SQLite; neither caller waits for it to acknowledge a save.
+    sourceIndexing=(async()=>{
+      await sourceChanges;
+      if(disposed||generation!==sourceGeneration)return;
+      const paths=discoverSources?undefined:[...sourcePaths];discoverSources=false;sourcePaths.clear();
+      configureSources();
+      await requireEngine().updateSources(config.sources!,config.workspaceExclude??[],{paths,incremental:true});
+    })().then(()=>{if(generation===sourceGeneration)sourceUpdate={pending:false,error:null};},error=>{
+      if(generation===sourceGeneration)sourceUpdate={pending:false,error:safeIndexError(error)};
+      log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');
+    });
+  }
+  function applySources(paths?:string[],rootId?:string|null):void {
+    if(!sourceUpdate.pending)sourceUpdateRoots.clear();
+    if(rootId===undefined)for(const root of sourceRoots)sourceUpdateRoots.add(root.id);else sourceUpdateRoots.add(rootId);
+    sourceGeneration++;sourceScheduled=true;sourceUpdate={pending:true,error:null};
+    if(paths)for(const file of paths)sourcePaths.add(file);else discoverSources=true;
+    if(sourceTimer)clearTimeout(sourceTimer);
+    sourceTimer=setTimeout(flushSources,25);sourceTimer.unref?.();
   }
   async function syncSourceRoots(): Promise<void> {
     if (disposed || !ctx.services.memorySourceRoots) return;
@@ -581,6 +618,7 @@ export async function activate(ctx: ActivateCtx) {
     const signature = JSON.stringify(next);
     if (signature !== rootSignature) {
       sourceRoots = next; rootSignature = signature;
+      engine?.restrictSourceRoots(['harness-memory',...next.filter(root=>root.available&&root.id).map(root=>root.id!)]);
       engine?.cancelFileIndexing();
       await queueRuleChange(async()=>{applySources();});
     } else {
@@ -609,22 +647,22 @@ export async function activate(ctx: ActivateCtx) {
   const runtime = {
     methods: {
       get_source_roots: async () => { await syncSourceRoots(); return sourceRoots.map(root=>({...root,rulesRevision:revision(root.id?rootRules[root.id]??{version:1,include:[],exclude:[]}:sourceRules)})); },
-      get_tree_index_state: async (params?:{revision?:string;paths?:string[]}) => {
-        const eng=requireEngine(),status=eng.status();
+      get_tree_index_state: async (params?:{revision?:string;paths?:string[];policyOnly?:boolean}) => {
+        const eng=requireEngine();
+        if(params?.policyOnly){const state=buildTreePolicyState(treePolicy(),eng.treeDiagnostics());return state.revision===params.revision?{unchanged:true,revision:state.revision}:state;}
+        const status=eng.status();
         const state=await buildTreeIndexState(eng.ruleFilePaths((Array.isArray(params?.paths)?params.paths:[]).flatMap(file=>{
           if(typeof file!=='string'||!path.isAbsolute(file))return[];
           for(const root of sourceRoots.filter(root=>root.available))for(const alias of [root.path,...root.treePaths??[]]){const relative=path.relative(alias,file);if(relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))return[path.resolve(root.path,relative)];}
           return[];
         })),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
-        return state.revision===params?.revision?{unchanged:true,revision:state.revision}:state;
+        return state.revision===params?.revision?{unchanged:true,revision:state.revision,treePolicy:treePolicy()}:{...state,treePolicy:treePolicy()};
       },
       set_path_override: async (params:{path?:string;mode?:'include'|'exclude'|'inherit';visiblePaths?:string[]}) => {
         if(!['include','exclude','inherit'].includes(params?.mode??''))throw Error('Choose include, exclude or inherit.');
-        const target=await resolveTreeTarget(sourceRoots,params.path);
         const apply=async()=>{
           const currentRoots=ctx.services.memorySourceRoots?await ctx.services.memorySourceRoots():sourceRoots;
-          const checked=await resolveTreeTarget(currentRoots,params.path);
-          if(checked.root.id!==target.root.id || checked.relative!==target.relative || checked.kind!==target.kind)throw Error('The source moved while changing its rules; retry.');
+          const target=await resolveTreeTarget(currentRoots,params.path);
           const id=target.root.id,current=id?rootRules[id]??{version:1 as const,include:[],exclude:[]}:sourceRules;
           const key=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
           const pattern=literalSourceRule(target.relative,target.kind);
@@ -633,9 +671,8 @@ export async function activate(ctx: ActivateCtx) {
             exclude:current.exclude.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative))});
           if(params.mode!=='inherit')next[params.mode!].push(pattern);
           if(id){const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;}else{writeSourceRules(dataDir,next);sourceRules=next;}
-          applySources([target.absolute]);
-          const state=await runtime.methods.get_tree_index_state({paths:params.visiblePaths}).catch(()=>undefined);
-          return{rules:next,rootId:id,revision:revision(next),indexingQueued:engine!==null,treeState:state};
+          applySources([target.absolute],id);
+          return{rules:next,rootId:id,revision:revision(next),indexingQueued:true,treePolicy:treePolicy()};
         };
         return queueRuleChange(apply);
       },
@@ -657,8 +694,8 @@ export async function activate(ctx: ActivateCtx) {
             if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
             const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;
           } else { writeSourceRules(dataDir,next);sourceRules=next; }
-          applySources();
-          return {rules:next,revision:revision(next),rootId:id??null,indexingQueued:true};
+          applySources(undefined,id??null);
+          return {rules:next,revision:revision(next),rootId:id??null,indexingQueued:true,treePolicy:treePolicy()};
         };
         return queueRuleChange(apply);
       },
@@ -838,10 +875,11 @@ export async function activate(ctx: ActivateCtx) {
       status: async (params?:{rootId?:string|null}) => {
         const rootId=params?.rootId;
         const selected=rootId===undefined?undefined:sourceRoots.find(root=>root.id===rootId);
+        const update=rootId===undefined||sourceUpdateRoots.has(rootId)?sourceUpdate:{pending:false,error:null};
         if(rootId!==undefined && !selected)throw Error('Unknown or detached source root');
         if (!engine) {
           return {
-            ready: false,
+            ready: false,sourceUpdate,sourceRoots,
             capability: {
               available: false,
               reason: 'local-project-index-unavailable',
@@ -849,10 +887,12 @@ export async function activate(ctx: ActivateCtx) {
             root: config.root,
           };
         }
+        const engineStatus=engine.status(rootId);
         return {
           ready: true,
-          ...buildPublicEngineStatus(engine.status(rootId)),
-          ...(selected?{root:selected.path,watching:selected.available && engine.status(rootId).watching}:{}),
+          ...buildPublicEngineStatus(engineStatus),
+          sourceUpdate:update,indexing:update.pending||engineStatus.indexing,
+          ...(selected?{root:selected.path,watching:selected.available && engineStatus.watching}:{}),
           sourceRoots,
           sourceRootErrors: sourceRoots.filter(root=>!root.available && (rootId===undefined || root.id===rootId)),
           ...(rootId===undefined?{indexSizeBytes:await engine.indexSizeBytes()}:{}),
@@ -983,6 +1023,7 @@ export async function activate(ctx: ActivateCtx) {
       },
 
       rebuild: async () => {
+        await sourceChanges;flushSources();await sourceIndexing;
         const result = await requireEngine().indexAll();
         await ctx.services.memorySessions?.({op:'rebuild'});
         log('info', `[memory] rebuild: indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
@@ -1028,6 +1069,8 @@ export async function activate(ctx: ActivateCtx) {
     deactivate: async () => {
       disposed=true;
       if(sourcePoll)clearInterval(sourcePoll);
+      if(sourceTimer)clearTimeout(sourceTimer);
+      await engineChanges;
       await sourceChanges.catch(() => {});
       engine?.cancelFileIndexing();
       await sourceIndexing;

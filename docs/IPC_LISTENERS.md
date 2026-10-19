@@ -95,6 +95,7 @@ DO NOT add component-level IPC subscriptions for these events. Use the existing 
 - **Database migration** (`store/listeners/dbMigrationListeners.ts`): `db:migration:phase`/`progress`/`complete`/`failed` -> the `dbMigration*` atoms
 - **Update toast** (`store/listeners/updateListeners.ts`): all `update-toast:*` events
 - **Tracker sync** (`store/listeners/trackerSyncListeners.ts`): `document-service:tracker-items-changed`, `document-service:metadata-changed`
+- **Tracker file editors** (`store/listeners/trackerFileEditorListeners.ts`): `tracker-file:prepare-write` flushes pending editor saves and rejects writes during diff review; installed once with the app listeners, independent of editor/session mounts.
 - **Network availability** (`store/listeners/networkAvailabilityListeners.ts`): `sync:network-available`
 - **Tray** (`store/listeners/trayListeners.ts`): `tray:navigate-to-session`, `tray:new-session`, `sync:config-updated`
 - **Wakeup** (`store/listeners/wakeupListener.ts`): `wakeup:changed`

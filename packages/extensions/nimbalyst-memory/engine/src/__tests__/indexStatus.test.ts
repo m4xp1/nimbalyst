@@ -155,3 +155,46 @@ describe('rule-job watcher handoff',()=>{
   }finally{release();await update;spy.mockRestore();}
  });
 });
+
+
+describe('directory source-rule reconciliation',()=>{
+ it('indexes only files of an included directory and preserves a narrower include during exclusion',async()=>{
+  const {root,engine,embedder}=setup();mkdirSync(path.join(root,'research'));writeFileSync(path.join(root,'docs/a.md'),'# Base\nBASE_DIRECTORY_PROBE');writeFileSync(path.join(root,'research/a.md'),'# Extra\nEXTRA_DIRECTORY_PROBE');writeFileSync(path.join(root,'research/keep.md'),'# Keep\nKEEP_DIRECTORY_PROBE');
+  await engine.indexAll();const base=[{sourceClass:'docs',include:['docs/**/*.md']}];
+  await engine.updateSources([...base,{sourceClass:'custom',include:['research'],sourceRules:{include:['research'],exclude:[]}}],[],{paths:[path.join(root,'research')],incremental:true});
+  expect(engine.status().operation).toMatchObject({state:'completed',totalFiles:2,completedFiles:2,failedFiles:0});expect(engine.status().fileIndex?.failures).toEqual([]);expect(engine.status().available?.indexedFiles).toBe(3);
+  const spy=vi.spyOn(embedder,'embed');
+  await engine.updateSources([...base,{sourceClass:'custom',include:['research/keep.md'],sourceRules:{include:['research/keep.md'],exclude:['research']}}],['research'],{paths:[path.join(root,'research')],incremental:true});
+  expect(engine.status().operation).toMatchObject({state:'completed',totalFiles:2,failedFiles:0});expect(engine.expand('research/a.md',[])).toBeNull();expect(engine.expand('research/keep.md',[])?.text).toContain('KEEP_DIRECTORY_PROBE');expect(engine.status().available?.indexedFiles).toBe(2);expect(spy).not.toHaveBeenCalled();
+ });
+ it('clears persisted directory failures after restart without dropping real file failures or reembedding unchanged text',async()=>{
+  const {root,engine,embedder}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nA_DIRECTORY_PROBE');writeFileSync(path.join(root,'docs/b.md'),'# B\nB_DIRECTORY_PROBE');await engine.indexAll();
+  const storage=(engine as any).store;storage.setIndexDiagnostics({...storage.getIndexDiagnostics(),failures:[{sourcePath:'docs',relativePath:'docs',rootId:null,error:{category:'other',action:'old directory'},updatedAt:1},{sourcePath:'docs/a.md',relativePath:'docs/a.md',rootId:null,error:{category:'access',action:'real file'},updatedAt:1}]});
+  engines.splice(engines.indexOf(engine),1);await engine.close();
+  const sources=[{sourceClass:'docs',include:['docs/**/*.md']}],reopened=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources},embedder);engines.push(reopened);const spy=vi.spyOn(embedder,'embed');
+  await reopened.updateSources(sources,[],{paths:[path.join(root,'docs/b.md')],incremental:true});
+  expect(reopened.status().fileIndex?.failures?.map(f=>f.sourcePath)).toEqual(['docs/a.md']);expect(reopened.expand('docs/b.md',[])?.text).toContain('B_DIRECTORY_PROBE');expect(reopened.status().chunks).toBe(2);expect(spy).not.toHaveBeenCalled();
+ });
+});
+
+
+describe('eventual rule search publication',()=>{
+ it('keeps prior search results while the source job is queued, then removes them without embedding',async()=>{
+  const {root,engine,embedder}=setup();const file=path.join(root,'docs/a.md');writeFileSync(file,'# A\nEVENTUAL_EXCLUDE_PROBE');await engine.indexAll();
+  let release!:()=>void;const gate=new Promise<void>(r=>release=r);const held=(engine as any).fileWork.run(()=>gate);
+  const spy=vi.spyOn(embedder,'embed');
+  const update=engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md'],sourceRules:{include:[],exclude:['docs/a.md']}}],[],{paths:[file],incremental:true});
+  try{expect(engine.expand('docs/a.md',[])?.text).toContain('EVENTUAL_EXCLUDE_PROBE');expect(engine.status().available?.indexedFiles).toBe(1);
+   release();await held;await update;expect(engine.expand('docs/a.md',[])).toBeNull();expect(engine.status().available?.indexedFiles).toBe(0);expect(spy).not.toHaveBeenCalled();
+  }finally{release();await update;spy.mockRestore();}
+ });
+});
+
+
+describe('available entity counts',()=>{
+ it('counts unique files, sessions and cards separately from chunks',async()=>{
+  const {root,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nCOUNT_FILE_ONE\n## B\nCOUNT_FILE_TWO');await engine.indexAll();
+  await engine.ingestRecords([{id:'session:one',refType:'session',refId:'one',sourceClass:'sessions',title:'Artificial session',text:'# A\nCOUNT_SESSION_ONE\n## B\nCOUNT_SESSION_TWO'},{id:'tracker:one',refType:'tracker',refId:'one',sourceClass:'trackers',title:'Artificial card',text:'COUNT_CARD_ONE'}]);
+  expect(engine.status().available).toMatchObject({indexedFiles:1,sessions:1,trackers:1,sourceFiles:3});expect(engine.status().available!.chunks).toBeGreaterThan(3);
+ });
+});

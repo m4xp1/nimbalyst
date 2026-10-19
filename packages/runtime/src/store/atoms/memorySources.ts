@@ -4,6 +4,8 @@ import {store} from '../store';
 export interface MemorySourceChange {
  workspacePath:string;rootId:string|null;revision:string;
  rules:{version:1;include:string[];exclude:string[]};
+ /** Serialized, browser-safe rule program supplied with the durable receipt. */
+ treePolicy?:unknown;
 }
 export const memorySourceChangeAtom=atom<MemorySourceChange|null>(null);
 export function sameMemoryWorkspace(a:string|undefined,b:string|undefined):boolean {

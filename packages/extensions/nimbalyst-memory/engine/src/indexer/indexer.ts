@@ -184,11 +184,19 @@ export class Indexer {
     const unchanged=new Set([...this.fileRecords].filter(([key,record])=>JSON.stringify(previous.fileRecords.get(key))===JSON.stringify(record)).map(([,record])=>record.id));
     this.validatedFiles=new Set([...previous.validatedFiles].filter(id=>unchanged.has(id)));
   }
-  noteRulePaths(paths:string[]):void {
-    for(const file of paths){const hit=this.classify(file);if(hit)this.knownFiles.add(hit.sourcePath);}
+  /** Old rule targets could have been recorded as files. Only confirmed directories are repaired. */
+  private async pruneDirectoryFailures():Promise<void> {
+    for(const sourcePath of this.failures.keys()) {
+      if(this.cancelled)return;
+      try {
+        const {abs,root}=resolveInRoots(this.roots,sourcePath);
+        if((await stat(abs)).isDirectory() && await isInsideRealRoot(root.dir,abs) && !this.cancelled)this.removeFile(sourcePath);
+      } catch { /* Preserve real, missing and inaccessible file errors for normal reconciliation. */ }
+    }
   }
   /** Enumerate only a literal target/subtree; excluded saved files are still visited for eviction. */
   async reconcile(paths:string[]|undefined,previous:Indexer,onProgress?:(p:IndexProgress)=>void,prepare?:(files:Array<{sourcePath:string;sourceClass:string}>)=>Promise<void>):Promise<{indexed:number;files:number}> {
+    await this.pruneDirectoryFailures();
     const candidates=new Map<string,string>();
     const add=(file:string)=>{const located=path.isAbsolute(file)?locateAbsolute(this.roots,file):parseSourcePath(this.roots,file);if(!located)return;
       const sp=toSourcePath(located.root,located.rel);candidates.set(sp,this.classify(sp)?.sourceClass??'unknown');};
@@ -215,6 +223,12 @@ export class Indexer {
     }
     // A detached root is removed by identity, never resolved as an alternate primary path.
     for(const sp of this.store.fileSourcePaths())if(sp.startsWith('@')&&!this.roots.some(r=>r.id&&sp.startsWith('@'+r.id+'/')))this.store.deleteSource(sp);
+    // A saved file can become a directory; never count/read it as a text source.
+    for(const sourcePath of candidates.keys()) {
+      if(this.cancelled)return{indexed:0,files:0};
+      try {if((await stat(resolveInRoots(this.roots,sourcePath).abs)).isDirectory()){this.removeFile(sourcePath);candidates.delete(sourcePath);}}
+      catch { /* Missing/unreadable files retain their ordinary deletion/error handling. */ }
+    }
     const files=[...candidates].map(([sourcePath,sourceClass])=>({sourcePath,sourceClass}));
     await prepare?.(files);
     if(this.cancelled)return{indexed:0,files:files.length};
@@ -237,16 +251,16 @@ export class Indexer {
     return process.platform === 'win32' ? abs.toLowerCase() : abs;
   }
 
-  entityFilePaths(): string[] { return [...this.fileRecords.values()].map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
+  entityFilePaths(): string[] { return [...this.fileRecords.values()].filter(r=>!r.file.disabled).map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
-  readable(chunk: StoredChunk): boolean {
+  readable(chunk: StoredChunk, beforeRuleReconciliation=false): boolean {
     if(this.failures.has(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
-      return this.classifyDocument(chunk.sourcePath) !== null;
+      return beforeRuleReconciliation || this.classifyDocument(chunk.sourcePath) !== null;
     }
     const record=[...this.fileRecords.values()].find(record=>record.id===chunk.sourcePath);
-    return !record || !record.file.disabled && !this.excludedByRules(this.roots[0],record.file.path) && this.validatedFiles.has(chunk.sourcePath);
+    return !record || !record.file.disabled && (beforeRuleReconciliation || !this.excludedByRules(this.roots[0],record.file.path)) && this.validatedFiles.has(chunk.sourcePath);
   }
 
   /** Replace the complete ownership manifest; never persist a copy of the file body here. */
@@ -360,6 +374,7 @@ export class Indexer {
 
   /** Full (incremental) index pass. */
   async indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
+    await this.pruneDirectoryFailures();
     onProgress?.({ phase: 'enumerate', done: 0, total: 0 });
     const files = await this.enumerate();
     const live = new Set(files.map((f) => f.sourcePath));
@@ -431,6 +446,7 @@ export class Indexer {
     let raw: string;
     try {
       if (!await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
+      if((await stat(abs)).isDirectory()){this.removeFile(sourcePath);return 0;}
       const bytes = await readFile(abs);
       if (bytes.includes(0)) { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }

@@ -356,6 +356,9 @@ planStatus:
         row = { ...row, data: params?.[0] as string };
         return { rows: [] };
       }
+      if (normalized.startsWith('SELECT body_version, content FROM tracker_body_cache WHERE item_id = $1')) {
+        return { rows: [] }; // File-backed projections have no legacy body cache.
+      }
       throw new Error(`Unexpected query in test: ${normalized}`);
     });
 
@@ -768,8 +771,15 @@ describe('getTrackerItemContent', () => {
     // this is the bug: markdown rendered fine on create, then as a raw string
     // after closing and reopening the item (fresh DB read).
     const markdown = '**Objetivo**: validar\n\n### Links';
-    mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-001' })] }); // resolve row
-    mockQuery.mockResolvedValueOnce({ rows: [{ content: JSON.stringify(markdown) }] }); // SELECT content
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM tracker_items WHERE id = $1')) {
+        return { rows: [makeTrackerRow({ id: 'bug-001' })] };
+      }
+      if (sql.startsWith('SELECT content FROM tracker_items WHERE id = $1')) {
+        return { rows: [{ content: JSON.stringify(markdown) }] };
+      }
+      throw new Error(`Unexpected native body query: ${sql}`);
+    });
 
     const content = await service.getTrackerItemContent('bug-001');
 

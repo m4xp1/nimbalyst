@@ -32,7 +32,7 @@ import { Retriever } from './retrieval/retriever.js';
 import { FactsStore, type RecallQuery, type RememberInput } from './facts/facts.js';
 
 export interface EngineStatus {
-  available?: {chunks:number;sourceFiles:number;indexedFiles:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
+  available?: {chunks:number;sourceFiles:number;indexedFiles:number;sessions:number;trackers:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
   operation?:FileOperation|null;
   lastFullScan?:FileIndexStatus;
   chunks: number;
@@ -130,7 +130,7 @@ export class MemoryEngine {
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.indexer.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -187,11 +187,24 @@ export class MemoryEngine {
   }
 
   ruleFilePaths(visiblePaths:string[]=[]):string[]{return this.indexer.ruleFilePaths(visiblePaths);}
+  fileEntityPaths():string[]{return this.indexer.entityFilePaths();}
+  treeDiagnostics(){return{indexing:this.operation?.state==='queued'||this.operation?.state==='running',failures:this.indexer.failuresForStatus()};}
 
   /** Rebuild the in-memory retrieval snapshot from the store. */
+  // Rules describe desired membership; search changes when the background job
+  // actually reconciles the store. Access/root removal and failures still apply.
+  private availableSourceRoots:Set<string>|null=null;
+  restrictSourceRoots(ids:string[]):void{this.availableSourceRoots=new Set(ids);}
+  private sourceRootAllowed(sourcePath:string):boolean {
+    return !sourcePath.startsWith('@')||!this.availableSourceRoots||this.availableSourceRoots.has(sourcePath.slice(1).split('/')[0]);
+  }
+  private pendingReadableSources:Set<string>|null=null;
+  private readable(chunk:StoredChunk):boolean {
+    return this.sourceRootAllowed(chunk.sourcePath)&&this.indexer.readable(chunk,this.pendingReadableSources?.has(chunk.sourcePath)===true);
+  }
   private refreshSnapshot(): void {
     this.snapshot=this.store.loadAll();
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.indexer.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
 
   indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
@@ -290,6 +303,7 @@ export class MemoryEngine {
     sources:SourceSet[],workspaceExclude:string[],options?:{paths?:string[];incremental?:boolean}
   ):Promise<{indexed:number;files:number}> {
     if(this.closed)return Promise.reject(Error('Memory is closed.'));
+    if(!this.pendingReadableSources)this.pendingReadableSources=new Set(this.snapshot.filter(chunk=>this.readable(chunk)).map(chunk=>chunk.sourcePath));
     const previous=this.indexer;
     previous.cancel();
     if(this.indexing)this.interruptedScan=true;
@@ -300,7 +314,7 @@ export class MemoryEngine {
     this.config={...this.config,sources,workspaceExclude};
     this.roots=resolveRoots(this.config.root,sources);
     this.indexer=new Indexer(this.config,this.store,this.embedder);
-    this.indexer.inheritState(previous);this.indexer.noteRulePaths([...this.pendingPaths]);
+    this.indexer.inheritState(previous);
     const generation=++this.policyGeneration;
     this.watcher?.configure(this.config,this.indexer);
     const queued=this.beginOperation('rules','queued');
@@ -314,8 +328,8 @@ export class MemoryEngine {
         const op=queued;op.state='running';let error:unknown;
         try{return await indexer.reconcile(paths,previous,p=>this.progressOperation(op,p),files=>this.watcher?.acknowledge(files.flatMap(file=>{try{return[resolveInRoots(this.roots,file.sourcePath).abs];}catch{return[];}}))??Promise.resolve());}
         catch(e){error=e;throw e;}
-        finally{this.refreshSnapshot();this.finishOperation(op,error,generation!==this.policyGeneration);this.persistDiagnostics();}
-      }finally{this.activeSourcePaths=undefined;}
+        finally{this.finishOperation(op,error,generation!==this.policyGeneration);this.persistDiagnostics();}
+      }finally{this.activeSourcePaths=undefined;if(generation===this.policyGeneration){this.pendingReadableSources=null;this.refreshSnapshot();}}
     });
   }
 
@@ -421,12 +435,12 @@ export class MemoryEngine {
       this.lastEmbedError = msg;
     }
     const parents=this.store.getSessionProjection().parents;
-    return this.retriever.search(query, vec, k, {...opts,accepts:chunk=>this.indexer.readable(chunk)}).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
+    return this.retriever.search(query, vec, k, {...opts,accepts:chunk=>this.readable(chunk)}).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
       ? {...hit,parentSessionId:parents[hit.sourcePath]??null}:hit);
   }
 
   expand(sourcePath: string, headingPath: string[],sectionId?:string): { sourcePath: string; headingPath: string[]; text: string } | null {
-    if(!this.snapshot.some(chunk=>chunk.sourcePath===sourcePath&&this.indexer.readable(chunk)))return null;
+    if(!this.snapshot.some(chunk=>chunk.sourcePath===sourcePath&&this.readable(chunk)))return null;
     return this.retriever.expandSection(sourcePath, headingPath,sectionId);
   }
 
@@ -483,6 +497,7 @@ export class MemoryEngine {
    * thing standing between this tool and arbitrary file reads.
    */
   async readDoc(sourcePath: string): Promise<{ path: string; content: string }> {
+    if(!this.sourceRootAllowed(sourcePath))throw Error("The source folder is unavailable or detached.");
     let resolved: ReturnType<typeof resolveInRoots>;
     try {
       resolved = resolveInRoots(this.roots, sourcePath);
@@ -541,9 +556,9 @@ export class MemoryEngine {
     const bySourceClass:Record<string,number>={};
     for(const row of summaries)bySourceClass[row.sourceClass]=(bySourceClass[row.sourceClass]??0)+row.chunks;
     const chunks=summaries.reduce((n,row)=>n+row.chunks,0),dense=summaries.reduce((n,row)=>n+row.dense,0);
-    const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.indexer.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
+    const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
-    const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
+    const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,sessions:new Set(availableRows.filter(r=>r.refType==='session').map(r=>r.sourcePath)).size,trackers:new Set(availableRows.filter(r=>r.refType==='tracker').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
     const semanticAvailable = this.embedder.info.dims > 0 && !this.lastEmbedError;
     const retrieval: RetrievalCapabilities = {
       mode: semanticAvailable ? 'hybrid' : 'keyword-only',

@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.5] - 2026-10-20
+
+### Fixed
+- Apply Memory Include/Exclude without waiting for indexing, simplify Coverage, and repair folder-only indexing errors.
+- Update inherited tracker fields while preserving project type overrides when opening editors.
+
 ## [0.81.7+m4xp1.4] - 2026-10-19
 
 ### Fixed

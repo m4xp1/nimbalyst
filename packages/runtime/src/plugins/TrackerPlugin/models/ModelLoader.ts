@@ -186,6 +186,9 @@ export function loadBuiltinTrackers(): void {
   // console.log('[TrackerPlugin] Loading built-in trackers...');
 
   for (const { type, yaml } of BUILTIN_TRACKER_YAML) {
+    // Reopening an editor seeds missing fallbacks only; explicit registry updates
+    // are a different operation and may legitimately change a base type.
+    if (globalRegistry.getBuiltinModel(type)) continue;
     try {
       const model = parseTrackerYAML(yaml);
       if (model.type !== type) {

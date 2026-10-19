@@ -11,6 +11,12 @@ vi.mock('node:util', async (importOriginal) => {
   };
 });
 vi.mock('fs/promises');
+// Search now checks root availability before invoking rg; these are virtual roots.
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  statSync: vi.fn(() => ({ isDirectory: () => true })),
+}));
+vi.mock('../../utils/store', () => ({ getWorkspaceRoots: (workspace: string) => [workspace] }));
 vi.mock('../ripgrepPath', () => ({ getRipgrepPath: () => '/bundled/rg' }));
 vi.mock('glob');
 vi.mock('../utils/logger', () => ({
@@ -26,6 +32,7 @@ vi.mock('../utils/logger', () => ({
 import { ElectronFileSystemService } from '../ElectronFileSystemService';
 import * as fs from 'fs/promises';
 import { glob } from 'glob';
+import { join } from 'node:path';
 
 describe('ElectronFileSystemService', () => {
   let service: ElectronFileSystemService;
@@ -76,12 +83,12 @@ describe('ElectronFileSystemService', () => {
       expect(result.success).toBe(true);
       expect(result.results).toHaveLength(2);
       expect(result.results?.[0]).toEqual({
-        file: 'src/index.ts',
+        file: join('src', 'index.ts'),
         line: 10,
         content: 'const result = "test";',
       });
       expect(result.results?.[1]).toEqual({
-        file: 'src/utils.ts',
+        file: join('src', 'utils.ts'),
         line: 20,
         content: 'return test();',
       });
@@ -159,8 +166,8 @@ describe('ElectronFileSystemService', () => {
 
       expect(result.success).toBe(true);
       expect(result.files).toHaveLength(2);
-      expect(result.files?.[0].path).toBe('src/index.ts');
-      expect(result.files?.[1].path).toBe('src/components/Button.tsx');
+      expect(result.files?.[0].path).toBe(join('src', 'index.ts'));
+      expect(result.files?.[1].path).toBe(join('src', 'components', 'Button.tsx'));
     });
 
     it('should handle list errors', async () => {

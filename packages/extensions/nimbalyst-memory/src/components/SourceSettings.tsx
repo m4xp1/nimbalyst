@@ -51,7 +51,7 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
         if(cached&&JSON.stringify({rootId:id,version:1,include:parse(cached.include),exclude:parse(cached.exclude)})===key)drafts.current.delete(id);
         if(draft.current.rootId===id&&draft.current.loaded)generation.current++;
         if(draft.current.rootId===id&&JSON.stringify({rootId:id,version:1,include:parse(draft.current.include),exclude:parse(draft.current.exclude)})===key)draft.current.dirty=false;
-        if(workspacePath&&receipt?.revision)memorySourceChanges.publish({workspacePath,rootId:id,rules,revision:receipt.revision});
+        if(workspacePath&&receipt?.revision)memorySourceChanges.publish({workspacePath,rootId:id,rules:receipt.rules??rules,revision:receipt.revision,treePolicy:receipt.treePolicy});
         if(draft.current.rootId===id)saved.current = key;
         if (live.current && draft.current.rootId===id) { setError(null); bridge.current.onApplied(); }
       } catch {

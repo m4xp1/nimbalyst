@@ -118,3 +118,15 @@ describe('source draft across folder switches',()=>{
   expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByRole('button',{name:'Reload saved rules'})).toBeNull();
  });
 });
+
+
+describe('textarea fast durable receipts',()=>{
+ it('publishes acknowledged rules and icon policy before the background status request finishes',async()=>{
+  const policy={caseInsensitive:false,roots:[]};const publish=vi.spyOn(memorySourceChanges,'publish');let applied=0;
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?initial:name==='memory.set_sources'?{rules:{version:1,include:['normalized.md'],exclude:[]},revision:'saved',treePolicy:policy}:[]);
+  try{render(<SourceSettings workspacePath='/form-fast-test' callBackendTool={call} onApplied={()=>{applied++;void new Promise(()=>{});}}/>);
+   const f=await field();fireEvent.change(f,{target:{value:'normalized.md'}});fireEvent.blur(f);
+   await waitFor(()=>expect(publish).toHaveBeenCalledWith({workspacePath:'/form-fast-test',rootId:null,rules:{version:1,include:['normalized.md'],exclude:[]},revision:'saved',treePolicy:policy}));expect(applied).toBe(1);
+  }finally{publish.mockRestore();}
+ });
+});
