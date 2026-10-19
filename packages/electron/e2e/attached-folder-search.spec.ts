@@ -127,7 +127,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   const coverage=page.locator('.nimbalyst-memory-coverage');await expect(coverage).toBeVisible();
   const select=coverage.getByRole('combobox',{name:'Coverage source folder'});await expect(select).toHaveValue('__all__');
   await select.selectOption(link.id);const linked=await panel('status',{rootId:link.id});
-  await expect(coverage.getByText('saved chunks',{exact:true}).locator('..')).toContainText(String(linked.chunks));
+  await expect(coverage.getByText('searchable chunks',{exact:true}).locator('..')).toContainText(String(linked.available.chunks));
   await expect(coverage.getByText('Index size',{exact:true})).toHaveCount(0);
   await expect(page.getByText('File and folder overrides',{exact:true})).toHaveCount(0);
   const sourceIncludes=page.getByRole('textbox',{name:'Additional source includes'});

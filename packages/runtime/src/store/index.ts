@@ -77,3 +77,5 @@ export {
   getInteractiveWidgetHost,
   cleanupInteractiveWidgetHost,
 } from './atoms/interactiveWidgetHost';
+
+export {memorySourceChangeAtom,sameMemoryWorkspace,type MemorySourceChange} from './atoms/memorySources';

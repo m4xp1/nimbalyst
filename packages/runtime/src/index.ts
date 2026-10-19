@@ -217,3 +217,5 @@ export {
 export { TrackerUnreadDot } from './readReceipts/TrackerUnreadDot';
 // Themes
 export * from './themes';
+
+export {memorySourceChanges,sameMemoryWorkspace,type MemorySourceChange} from './store/atoms/memorySources';

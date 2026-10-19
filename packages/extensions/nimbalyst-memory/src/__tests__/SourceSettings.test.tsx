@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import {memorySourceChanges} from '@nimbalyst/runtime';
 import { SourceSettings } from '../components/SourceSettings';
 afterEach(cleanup);
 const initial = { version: 1, include: ['ропо'], exclude: [] };
@@ -80,5 +81,22 @@ describe('editable tree source rules',()=>{
   expect((f as HTMLTextAreaElement).value).toBe('docs/a.md');
   fireEvent.change(f,{target:{value:''}});fireEvent.blur(f);
   await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{...rules,include:[]}));
+ });
+});
+
+
+describe('shared durable source rules',()=>{
+ it('updates a clean field after a tree action, retains a dirty draft and sends its original revision',async()=>{
+  const call=vi.fn(async(name:string)=>name==='memory.get_sources'?{...initial,revision:'one'}:name==='memory.set_sources'?Promise.reject(Error('Conflict')):[]);
+  render(<SourceSettings workspacePath='/test' callBackendTool={call} onApplied={()=>{}}/>);const f=await field();
+  act(()=>memorySourceChanges.publish({workspacePath:'/other',rootId:null,revision:'foreign',rules:{version:1,include:['foreign'],exclude:[]}}));
+  expect((f as HTMLTextAreaElement).value).toBe('ропо');
+  act(()=>memorySourceChanges.publish({workspacePath:'/test',rootId:null,revision:'two',rules:{version:1,include:['tree.md'],exclude:[]}}));
+  expect((f as HTMLTextAreaElement).value).toBe('tree.md');
+  fireEvent.change(f,{target:{value:'my-draft.md'}});
+  act(()=>memorySourceChanges.publish({workspacePath:'/test',rootId:null,revision:'three',rules:{version:1,include:['new-tree.md'],exclude:[]}}));
+  expect((f as HTMLTextAreaElement).value).toBe('my-draft.md');expect(screen.getByRole('alert').textContent).toContain('draft');
+  fireEvent.blur(f);
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{version:1,include:['my-draft.md'],exclude:[],expectedRevision:'two'}));
  });
 });
