@@ -1,7 +1,8 @@
+import {treePolicyIncludes} from '../../engine/src/ruleProgram';
 // @vitest-environment node
 import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,realpathSync } from 'node:fs';import { tmpdir } from 'node:os';import path from 'node:path';
 import { activate } from '../backend';
-import { Indexer } from '../../engine/dist/index.js';
+import { Indexer,MemoryEngine } from '../../engine/dist/index.js';
 describe('source settings backend bridge',()=>{
  it('adds current-reading guidance only to desktop MCP session hits while preserving mixed search and reader identity',async()=>{
   const root=mkdtempSync(path.join(tmpdir(),'memory-reading-hint-'));
@@ -121,14 +122,14 @@ describe('source settings backend bridge',()=>{
 
 
 describe('file-tree Memory rule bridge',()=>{
- it('writes tree actions into editable includes/excludes and manual edits immediately control search',async()=>{
+ it('writes tree actions into editable includes/excludes and manual edits reconcile search in the background',async()=>{
   const root=mkdtempSync(path.join(tmpdir(),'memory-tree-rules-'));
   mkdirSync(path.join(root,'docs'));writeFileSync(path.join(root,'docs/a.md'),'# A\nТочечныйФайлМаркер');writeFileSync(path.join(root,'docs/b.md'),'# B\nСоседнийФайлМаркер');
   const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
   try{
    await vi.waitFor(async()=>expect(await runtime.methods.status()).toMatchObject({ready:true,indexing:false}));
    await runtime.methods.set_path_override({path:path.join(root,'docs'),mode:'exclude'});
-   expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
+   await vi.waitFor(async()=>expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]));
    await runtime.methods.set_path_override({path:path.join(root,'docs/a.md'),mode:'include'});
    await vi.waitFor(async()=>expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toHaveLength(1));
    expect((await runtime.methods.search_project_knowledge({query:'СоседнийФайлМаркер'})).chunks).toEqual([]);
@@ -136,10 +137,10 @@ describe('file-tree Memory rule bridge',()=>{
    if(!('files' in tree))throw Error('Expected the complete initial tree snapshot');
    expect(tree.files).toContain(path.join(root,'docs/a.md'));expect(tree.files).not.toContain(path.join(root,'docs/b.md'));
    expect(tree.directories).toContain(path.join(root,'docs'));
-   expect(await runtime.methods.get_tree_index_state({revision:tree.revision})).toEqual({unchanged:true,revision:tree.revision});
+   expect(await runtime.methods.get_tree_index_state({revision:tree.revision})).toMatchObject({unchanged:true,revision:tree.revision});
    expect(await runtime.methods.get_sources()).toMatchObject({version:1,include:['docs/a.md'],exclude:['docs'],revision:expect.any(String)});
    await runtime.methods.set_sources({version:1,include:[],exclude:['docs']});
-   expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]);
+   await vi.waitFor(async()=>expect((await runtime.methods.search_project_knowledge({query:'ТочечныйФайлМаркер'})).chunks).toEqual([]));
    await expect(runtime.methods.set_path_override({path:tmpdir(),mode:'include'})).rejects.toThrow(/outside/);
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
@@ -153,7 +154,7 @@ describe('tree rules through a canonical workspace alias',()=>{
   try{
    await vi.waitFor(async()=>expect(await runtime.methods.status()).toMatchObject({ready:true,indexing:false}));
    await runtime.methods.set_path_override({path:path.join(alias,'docs'),mode:'exclude'});
-   expect((await runtime.methods.search_project_knowledge({query:'AliasTreeMarker'})).chunks).toEqual([]);
+   await vi.waitFor(async()=>expect((await runtime.methods.search_project_knowledge({query:'AliasTreeMarker'})).chunks).toEqual([]));
    await runtime.methods.set_path_override({path:path.join(alias,'docs/a.md'),mode:'include'});
    await vi.waitFor(async()=>expect((await runtime.methods.search_project_knowledge({query:'AliasTreeMarker'})).chunks).toHaveLength(1));
    const state=await runtime.methods.get_tree_index_state();if(!('files' in state))throw Error('Expected initial state');
@@ -193,7 +194,7 @@ describe('asynchronous rule reconciliation',()=>{
    try{
     const ack=await Promise.race([runtime.methods.set_path_override({path:extra,mode:'include'}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Save waited for embeddings')),1000))]);
     expect(ack).toMatchObject({rules:{include:['extra.md']},revision:expect.any(String),indexingQueued:true});
-    expect(ack.treeState).toHaveProperty('files',expect.arrayContaining([extra]));
+    expect(treePolicyIncludes(ack.treePolicy,extra)).toBe(true);
     expect((await runtime.methods.get_sources()).include).toEqual(['extra.md']);
     expect(await runtime.methods.get_source_roots()).toHaveLength(1);
     await vi.waitFor(()=>expect(entered).toBe(true));
@@ -237,7 +238,7 @@ describe('policy membership before background directory work',()=>{
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    const original=Indexer.prototype.indexFile,spy=vi.spyOn(Indexer.prototype,'indexFile').mockImplementation(async function(this:Indexer,...args:Parameters<Indexer['indexFile']>){await gate;return original.apply(this,args);});
    try{
-    const receipt=await runtime.methods.set_path_override({path:dir,mode:'include',visiblePaths:files});expect(receipt.treeState).toHaveProperty('files',expect.arrayContaining(files));
+    const receipt=await runtime.methods.set_path_override({path:dir,mode:'include',visiblePaths:files});for(const file of files)expect(treePolicyIncludes(receipt.treePolicy,file)).toBe(true);
     expect((await runtime.methods.get_sources()).include).toEqual(['extra']);
     expect(await runtime.methods.status()).toMatchObject({available:{chunks:0}});
     release();await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
@@ -251,6 +252,50 @@ describe('policy membership before background directory work',()=>{
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    const spy=vi.spyOn(Indexer.prototype,'indexFile').mockRejectedValue(Object.assign(Error('artificial quota'),{status:429}));
    try{await runtime.methods.set_sources({include:['extra.md'],exclude:[]});await vi.waitFor(()=>expect(spy).toHaveBeenCalledTimes(1));await new Promise(resolve=>setTimeout(resolve,3600));expect(spy).toHaveBeenCalledTimes(1);}finally{spy.mockRestore();}
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+});
+
+
+describe('fast durable rule writer without index preparation',()=>{
+ it('acknowledges both textarea and path writes before touching the indexer or asking for a tree snapshot',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-lightweight-save-')));writeFileSync(path.join(root,'extra.md'),'# Artificial\nFAST_SAVE_PROBE');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const update=vi.spyOn(MemoryEngine.prototype,'updateSources').mockImplementation(()=>{throw Error('ARTIFICIAL_INDEXER_UNAVAILABLE');});
+   const tree=vi.spyOn(runtime.methods,'get_tree_index_state').mockImplementation(()=>new Promise(()=>{}));
+   try{
+    const form=await runtime.methods.set_sources({include:['extra.md'],exclude:[]});expect(form.rules.include).toEqual(['extra.md']);expect(update).not.toHaveBeenCalled();
+    const pathSave=await Promise.race([runtime.methods.set_path_override({path:path.join(root,'extra.md'),mode:'exclude'}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Save waited for tree/indexer')),800))]);
+    expect(pathSave.rules.exclude).toEqual(['extra.md']);expect(tree).not.toHaveBeenCalled();expect(update).not.toHaveBeenCalled();
+    expect((await runtime.methods.get_sources()).exclude).toEqual(['extra.md']);
+    await vi.waitFor(()=>expect(update).toHaveBeenCalledTimes(1));
+    expect(await runtime.methods.status()).toMatchObject({sourceUpdate:{pending:false,error:{category:'other'}}});
+   }finally{tree.mockRestore();update.mockRestore();}
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+ it('applies rapid menu operations in order and lets a following field save use the acknowledged revision',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-ordered-save-')));writeFileSync(path.join(root,'extra.md'),'# Artificial\nORDER_SAVE_PROBE');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const updates=await Promise.all(['include','exclude','include'].map(mode=>runtime.methods.set_path_override({path:path.join(root,'extra.md'),mode:mode as 'include'|'exclude'})));
+   expect(updates.map(r=>r.rules.include.includes('extra.md'))).toEqual([true,false,true]);
+   expect(await runtime.methods.get_sources()).toMatchObject({include:['extra.md'],exclude:[],revision:updates[2].revision});
+   const saved=await runtime.methods.set_sources({include:[],exclude:['extra.md'],expectedRevision:updates[2].revision});expect(saved.rules).toMatchObject({include:[],exclude:['extra.md']});
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+});
+
+
+describe('lightweight icon polling',()=>{
+ it('reads the source policy and cached diagnostics without preparing an index or a full tree',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-policy-poll-')));
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const status=vi.spyOn(MemoryEngine.prototype,'status').mockImplementation(()=>{throw Error('Full status must not run');});
+   const tree=vi.spyOn(MemoryEngine.prototype,'ruleFilePaths').mockImplementation(()=>{throw Error('Full tree must not run');});
+   try{const state=await runtime.methods.get_tree_index_state({policyOnly:true});expect(state).toHaveProperty('treePolicy');if(!('treePolicy' in state)||!state.treePolicy)throw Error('Policy missing');expect(treePolicyIncludes(state.treePolicy,path.join(root,'docs/a.md'))).toBe(true);expect(status).not.toHaveBeenCalled();expect(tree).not.toHaveBeenCalled();}finally{status.mockRestore();tree.mockRestore();}
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
 });

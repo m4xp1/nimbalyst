@@ -8,5 +8,6 @@ declare module 'picomatch' {
     contains?: boolean;
   }
   function picomatch(glob: string | string[], options?: PicomatchOptions): Matcher;
+  namespace picomatch { function makeRe(glob:string,options?:PicomatchOptions):RegExp; }
   export = picomatch;
 }

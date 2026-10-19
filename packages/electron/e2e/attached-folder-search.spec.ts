@@ -114,9 +114,11 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
   const file=page.locator('.file-tree-file').filter({hasText:'TreeProbe.md'}).first();
   if(!await file.isVisible())await docs.click();await expect(file).toBeVisible();
-  await file.click({button:'right'});await expect(page.getByRole('button',{name:'Exclude from Memory index',exact:true})).toHaveCount(0);await page.getByRole('button',{name:'Include in Memory index',exact:true}).click();
+  await file.click({button:'right'});await expect(page.getByRole('button',{name:'Exclude from Memory index',exact:true})).toHaveCount(0);const includeStarted=Date.now();await page.getByRole('button',{name:'Include in Memory index',exact:true}).click();
   await expect(page.getByRole('button',{name:'Include in Memory index',exact:true})).toHaveCount(0);
   await expect(file.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
+  const includeMs=Date.now()-includeStarted;expect(includeMs).toBeLessThan(1000);console.info('[memory-rule-ui]',JSON.stringify({database,includeMs}));
+  await test.info().attach('memory-rule-ui-latency',{body:JSON.stringify({database,includeMs,fixture:'artificial',boundMs:1000}),contentType:'application/json'});
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(1);
   expect((await call('search_project_knowledge',{query:'ИсключенныйСоседМаркер'})).chunks).toEqual([]);
   await expect(file.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
@@ -129,7 +131,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   const coverage=page.locator('.nimbalyst-memory-coverage');await expect(coverage).toBeVisible();
   const select=coverage.getByRole('combobox',{name:'Coverage source folder'});await expect(select).toHaveValue('__all__');
   await select.selectOption(link.id);const linked=await panel('status',{rootId:link.id});
-  await expect(coverage.getByText('searchable chunks',{exact:true}).locator('..')).toContainText(String(linked.available.chunks));
+  await expect(coverage.getByText('Files available',{exact:true}).locator('..')).toContainText(String(linked.available.indexedFiles));
   await expect(coverage.getByText('Index size',{exact:true})).toHaveCount(0);
   await expect(page.getByText('File and folder overrides',{exact:true})).toHaveCount(0);
   const sourceIncludes=page.getByRole('textbox',{name:'Additional source includes'});
@@ -139,6 +141,8 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
   for(const folder of (await invoke('workspace:get-folders',{workspacePath:workspace})).folders.slice(1))expect((await invoke('workspace:detach-folder',{workspacePath:workspace,folderPath:folder})).success).toBe(true);
   await expect(select).toHaveCount(0);await expect(page.getByRole('combobox',{name:'Source folder',exact:true})).toHaveCount(0);
+  await coverage.screenshot({path:test.info().outputPath('memory-coverage-summary.png')});
+  await coverage.locator('summary').filter({hasText:'Index diagnostics'}).click();
   await expect(coverage.getByText('Index size',{exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath('memory-coverage-and-overrides.png')});
   await invoke('extensions:set-enabled','com.nimbalyst.memory',false);await page.getByTestId('files-mode-button').click();

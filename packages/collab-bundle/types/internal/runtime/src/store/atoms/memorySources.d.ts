@@ -8,6 +8,8 @@ export interface MemorySourceChange {
         include: string[];
         exclude: string[];
     };
+    /** Serialized, browser-safe rule program supplied with the durable receipt. */
+    treePolicy?: unknown;
 }
 export declare const memorySourceChangeAtom: import("jotai").PrimitiveAtom<MemorySourceChange | null> & {
     init: MemorySourceChange | null;

@@ -22,7 +22,8 @@ import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 import { coveragePalette } from './coveragePalette';
 
 interface IndexStatus {
-  available?:{chunks:number;sourceFiles:number;indexedFiles:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
+  available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
+  sourceUpdate?:{pending:boolean;error:SafeIndexError|null};
   operation?:FileOperation|null;
   lastFullScan?:FileIndexStatus;
   ready?: boolean;
@@ -469,7 +470,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const totalChunks = available?.chunks ?? status?.chunks ?? 0;
   const operation=status?.operation;
   const lastScan=status?.lastFullScan??status?.fileIndex;
-  const indexLabel = status?.indexing ? 'Indexing…' : status?.sourceRootErrors?.length||operation?.state==='partial' ? 'Partial index' : operation?.state==='failed'?'Index failed' : status?.fileIndex?.state === 'ready' ? 'Scan complete' : status?.fileIndex?.state === 'partial' ? 'Partial index' : status?.fileIndex?.state === 'failed' ? 'Index failed' : 'Awaiting scan';
+  const activeOperation=operation?.state==='queued'||operation?.state==='running';
+  const problems=status?.fileIndex?.failures??[];
+  const needsAttention=Boolean(status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||operation?.error||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
+  const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
+
   const countLabel = (n:number|null|undefined) => n == null ? 'Unknown' : n.toLocaleString();
   const keywordOnly = isKeywordOnly(status);
   // The provider's error text stays out of the UI; only the fact of it surfaces.
@@ -698,13 +704,13 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
           <h4 style={H4}>
             Coverage
             {status && status.ready !== false && (
-              <span style={chipTone(!status.sourceRootErrors?.length && status.fileIndex?.state === 'ready' ? 'ok' : 'idle')}>
+              <span style={chipTone(indexLabel === 'Ready' ? 'ok' : 'idle')}>
                 <span
                   style={{
                     width: 7,
                     height: 7,
                     borderRadius: '50%',
-                    background: !status.sourceRootErrors?.length && status.fileIndex?.state === 'ready' ? '#4ade80' : 'var(--nim-text-muted)',
+                    background: indexLabel === 'Ready' ? '#4ade80' : 'var(--nim-text-muted)',
                   }}
                 />
                 {indexLabel}
@@ -752,37 +758,37 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
 
         {status && status.ready !== false && (
           <div style={CARD}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              <Stat value={countLabel(available?.chunks??status.chunks)} label="searchable chunks" />
-              <Stat value={countLabel(available?.sourceFiles??status.sourceFiles)} label="searchable sources (files + records)" />
+            <div style={{ display: 'flex', flexWrap:'wrap', gap: 32 }}>
+              <Stat value={countLabel(available?.indexedFiles??status.indexedFiles)} label="Files available" />
+              <Stat value={countLabel(available?.sessions)} label="Sessions available" />
+              <Stat value={countLabel(available?.trackers)} label="Cards available" />
             </div>
-            <p style={{margin:0,color:muted}}>Available to search now. Excluded or failed sources and auxiliary page rows are not counted.</p>
-            <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
-              <dt>Current operation</dt><dd>{operation ? operation.kind+' · '+operation.state : 'None'}</dd>
-              <dt>Files in current operation</dt><dd>{operation?countLabel(operation.totalFiles):'—'}</dd>
-              <dt>Files processed in current operation</dt><dd>{operation?countLabel(operation.completedFiles):'—'}</dd>
-              <dt>Files remaining in current operation</dt><dd>{operation?countLabel(operation.remainingFiles):'—'}</dd>
-              <dt>Files failed in current operation</dt><dd>{operation?countLabel(operation.failedFiles):'—'}</dd>
-              <dt>File observation</dt><dd>{status.watching === undefined ? 'Unknown' : status.watching ? 'Active' : 'Inactive'}</dd>
-            </dl>
-            {operation?.error&&<p role="alert" style={ERR}>{operation.error.category}: {operation.error.action}</p>}
+            <p style={{margin:0,color:muted}}>Available to search now. Changes to source rules are processed in the background.</p>
+            {(activeOperation||status.sourceUpdate?.pending) && <div role="status">
+              <strong>Updating index</strong>
+              {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Finding affected files…</p>}
+            </div>}
+            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {errorAction(f.error)}</li>)}
+              {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
+            </ul></div>}
+            {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
+            {!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
+            {!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&operation?.error&&<p role="alert" style={ERR}>{errorAction(operation.error)}</p>}
+            {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
+            {!status.indexing&&needsAttention&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}
             <details><summary>Index diagnostics</summary>
               <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
+                <dt>Searchable chunks</dt><dd>{countLabel(available?.chunks??status.chunks)}</dd>
+                <dt>Searchable sources</dt><dd>{countLabel(available?.sourceFiles??status.sourceFiles)}</dd>
+                <dt>Last operation</dt><dd>{operation?operation.kind+' · '+operation.state:'None'}</dd>
+                <dt>File observation</dt><dd>{status.watching===undefined?'Unknown':status.watching?'Active':'Inactive'}</dd>
                 <dt>Files discovered in last full scan</dt><dd>{countLabel(lastScan?.discoveredFiles)}</dd>
                 <dt>Files processed in last full scan</dt><dd>{countLabel(lastScan?.completedFiles)}</dd>
                 <dt>Files failed in last full scan</dt><dd>{countLabel(lastScan?.failedFiles)}</dd>
                 <dt>Files remaining in last full scan</dt><dd>{countLabel(lastScan?.remainingFiles)}</dd>
                 <dt>Stored chunks (including auxiliary rows)</dt><dd>{countLabel(status.chunks)}</dd>
                 <dt>Stored chunks without vectors</dt><dd>{countLabel(status.chunksWithoutVectors)}</dd>
-                <dt>Files currently available</dt><dd>{countLabel(available?.indexedFiles??status.indexedFiles)}</dd>
               </dl>
-            </details>
-            {!!status.fileIndex?.failures?.length && <ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{status.fileIndex.failures.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code>: {f.error.category} — {f.error.action}</li>)}
-              {(status.fileIndex.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex.failureCount} errors.</li>}
-            </ul>}
-            {status.fileIndex?.error && <p role="alert" style={ERR}>{status.fileIndex.error.category}: {status.fileIndex.error.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.fileIndex.error.action}</p>}
-            {status.embeddingError && <p role="alert" style={ERR}>{status.embeddingError.category}: {status.embeddingError.category === 'authentication' ? 'Check the API key in AI Settings → OpenAI, then use Rebuild.' : status.embeddingError.action}</p>}
-
             {breakdown.length > 0 && (
               <div>
                 <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', background: 'var(--nim-bg-tertiary)' }}>
@@ -832,6 +838,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               </dd></>}
             </dl>
 
+            </details>
             {keywordOnly && (
               <p style={{ margin: 0, color: 'var(--nim-warning, #d19a66)', lineHeight: 1.5 }}>
                 {semanticProviderFailing

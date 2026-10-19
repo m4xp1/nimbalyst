@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render,screen,fireEvent,waitFor,cleanup } from '@testing-library/react';import { describe,it,expect,vi,afterEach } from 'vitest';
+import { render,screen,fireEvent,waitFor,cleanup,act } from '@testing-library/react';import { describe,it,expect,vi,afterEach } from 'vitest';
 import { NimbalystMemorySettings } from '../components/SettingsPanel';
 afterEach(cleanup);
 describe('Memory status UI',()=>{
@@ -9,7 +9,7 @@ describe('Memory status UI',()=>{
    if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return {};
   });
   render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
-  await screen.findByText('Partial index');screen.getByText('Inactive');screen.getByText(/Available to search now/);
+  await screen.findByText('Needs attention');screen.getByText('Inactive');screen.getByText(/Available to search now/);
   call.mockClear();fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.status'));
   expect(call.mock.calls.every(([name])=>name==='memory.status')).toBe(true);
   expect(screen.queryByText('Ready')).toBeNull();
@@ -53,10 +53,10 @@ describe('truthful live Coverage',()=>{
   const current={ready:true,indexing:true,chunks:9,denseChunks:9,sourceFiles:3,available:{chunks:4,sourceFiles:2,indexedFiles:2,bySourceClass:{docs:4}},operation:{kind:'rules',state:'running',totalFiles:7,completedFiles:2,remainingFiles:4,failedFiles:1},fileIndex:{state:'ready',discoveredFiles:20,completedFiles:20,failedFiles:0}};
   const call=vi.fn(async(name:string)=>name==='memory.status'?(hold?new Promise(r=>release=r):current):name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
   render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
-  await screen.findByText('searchable chunks');
+  await screen.findByText('Files available');
   expect(screen.queryByText('saved chunks with vectors')).toBeNull();
-  expect(screen.getByText('Files remaining in current operation').nextSibling?.textContent).toBe('4');
+  expect(screen.getByText('2 processed · 4 remaining · 1 failed')).toBeDefined();
   hold=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
-  expect(screen.getByText('searchable chunks')).toBeDefined();release(current);
+  expect(screen.getByText('Files available')).toBeDefined();await act(async()=>release(current));
  });
 });
