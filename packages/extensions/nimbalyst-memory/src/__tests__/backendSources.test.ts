@@ -209,8 +209,9 @@ describe('asynchronous rule reconciliation',()=>{
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
  it('does not retry a failed rule job when source roots are polled',async()=>{
+  // The real host broker canonicalizes Windows short paths and retains tree aliases.
   const root=mkdtempSync(path.join(tmpdir(),'memory-no-poll-retry-'));writeFileSync(path.join(root,'extra.md'),'# Extra\nARTIFICIAL_ONLY');
-  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySourceRoots:async()=>[{id:null,path:root,label:'main',available:true}]}});
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySourceRoots:async()=>[{id:null,path:realpathSync.native(root),label:'main',available:true,treePaths:[root]}]}});
   try{
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
    const spy=vi.spyOn(Indexer.prototype,'indexFile').mockRejectedValue(Object.assign(Error('artificial quota'),{status:429}));
