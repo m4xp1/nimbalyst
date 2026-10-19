@@ -156,6 +156,7 @@ import { initWorkspaceActivationListeners } from './store/listeners/workspaceAct
 import { initWindowFullScreenListener } from './store/listeners/windowFullScreenListeners';
 import { initThemeFallbackListener } from './store/listeners/themeFallbackListeners';
 import { initTrackerSyncListeners } from './store/listeners/trackerSyncListeners';
+import { initTrackerFileEditorListeners } from './store/listeners/trackerFileEditorListeners';
 import { installLocalWikiTrackerWriter } from './services/localWikiTrackerWrites';
 import { createTrackerItem } from './services/localWikiTrackerRecords';
 import { initPullRequestListeners } from './store/listeners/pullRequestListeners';
@@ -446,6 +447,7 @@ export default function App() {
     const cleanupTheme = initThemeListener();
     const cleanupThemeFallback = initThemeFallbackListener();
     const cleanupTrackerSync = initTrackerSyncListeners();
+    const cleanupTrackerFileEditor = initTrackerFileEditorListeners();
     const cleanupLocalWikiTrackerWriter = installLocalWikiTrackerWriter();
     const cleanupWorktree = initWorktreeListeners();
     const cleanupPullRequest = initPullRequestListeners();
@@ -499,6 +501,7 @@ export default function App() {
       cleanupTheme?.();
       cleanupThemeFallback?.();
       cleanupTrackerSync?.();
+      cleanupTrackerFileEditor();
       cleanupLocalWikiTrackerWriter();
       cleanupWorktree?.();
       cleanupPullRequest?.();

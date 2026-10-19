@@ -147,9 +147,10 @@ describe('captureFrontmatterTrackerTransition', () => {
   });
 
   it('lazily materializes a row (single insert) the first time an edited plan has no projection', async () => {
-    // 1) SELECT existing -> none
+    // Both public id and normalized source-path lookups must find no projection.
     mockQuery.mockResolvedValueOnce({ rows: [] });
-    // 2) INSERT
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    // INSERT
     mockQuery.mockResolvedValueOnce({ rows: [] });
     // 3) SELECT persisted
     mockQuery.mockResolvedValueOnce({
@@ -165,7 +166,9 @@ describe('captureFrontmatterTrackerTransition', () => {
 
     await capture({ planStatus: { title: 'Example', status: 'draft' } });
 
-    const insertCall = mockQuery.mock.calls[1];
+    const insertCalls = mockQuery.mock.calls.filter(([sql]) => sql.includes('INSERT INTO tracker_items'));
+    expect(insertCalls).toHaveLength(1);
+    const insertCall = insertCalls[0];
     expect(insertCall[0]).toContain('INSERT INTO tracker_items');
     const writtenData = JSON.parse(insertCall[1][2]);
     expect(writtenData.activity[0]).toMatchObject({ action: 'created' });

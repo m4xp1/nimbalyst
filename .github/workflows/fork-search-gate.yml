@@ -36,6 +36,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Git extension build failed' }
       - name: Mandatory lexical and hybrid regression tests
         run: pnpm run test:fork-search
+      - name: Mandatory schema and editor coordination regressions
+        run: >-
+          pnpm exec vitest run
+          packages/tracker-schema/src/__tests__/trackerTypeInheritance.test.ts
+          packages/runtime/src/plugins/TrackerPlugin/models/__tests__/builtinsYaml.test.ts
+          packages/runtime/src/plugins/TrackerPlugin/models/__tests__/schemaPatch.test.ts
+          packages/runtime/src/ai/__tests__/prompt.test.ts
+          packages/electron/src/renderer/store/listeners/__tests__/noComponentIpcSubscriptions.test.ts
+          packages/electron/src/main/services/__tests__/ElectronDocumentService.planTransition.test.ts
+          packages/electron/src/main/services/__tests__/ElectronDocumentService.trackerSync.test.ts
+          packages/electron/src/main/services/__tests__/ElectronFileSystemService.test.ts
       - name: Mandatory Stable Git policy and operation regressions
         run: >-
           pnpm exec vitest run
