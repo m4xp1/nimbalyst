@@ -1,9 +1,10 @@
 import {memorySourceChangeAtom,sameMemoryWorkspace,store} from '@nimbalyst/runtime/store';
 import {memoryTreeAvailableAtom,memoryTreeIncludedPathsAtom,memoryTreePathKey,memoryTreeErrorsAtom,memoryTreeIndexingAtom} from '../atoms/memoryTree';
-import {rawFileTreeAtom} from '../atoms/fileTree';
+import {rawFileTreeAtom,type RendererFileTreeItem} from '../atoms/fileTree';
 interface Context {workspacePath:string;disposed:boolean;epoch:number;busy:boolean;pending:boolean;revision?:string;}
 let active:Context|undefined;
 function clear(){store.set(memoryTreeErrorsAtom,new Map<string,string>());store.set(memoryTreeIndexingAtom,false);store.set(memoryTreeAvailableAtom,false);store.set(memoryTreeIncludedPathsAtom,new Set<string>());}
+function visibleFiles():string[]{const paths:string[]=[],pending:RendererFileTreeItem[]=[...store.get(rawFileTreeAtom)];while(pending.length){const node=pending.pop()!;if(node.type==='file')paths.push(node.path);if(node.children)pending.push(...node.children);}return paths;}
 async function backend(ctx:Context,toolName:string,args:Record<string,unknown>={}){
  return window.electronAPI.invoke('extensions:ai-call-backend-tool',{toolName,args,workspacePath:ctx.workspacePath,callerExtensionId:'com.nimbalyst.memory'});
 }
@@ -25,7 +26,7 @@ async function refresh(ctx:Context):Promise<void>{
   const enabled=await window.electronAPI.invoke('extensions:get-enabled','com.nimbalyst.memory',false);
   if(ctx.disposed||active!==ctx||epoch!==ctx.epoch)return;
   if(enabled!==true){ctx.revision=undefined;clear();return;}
-  const state=await backend(ctx,'memory.get_tree_index_state',ctx.revision?{revision:ctx.revision}:{});
+  const state=await backend(ctx,'memory.get_tree_index_state',{...(ctx.revision?{revision:ctx.revision}:{}),paths:visibleFiles()});
   if(ctx.disposed||active!==ctx||epoch!==ctx.epoch)return;
   applyState(ctx,state);
  }catch{if(!ctx.disposed&&active===ctx&&epoch===ctx.epoch){ctx.revision=undefined;}}
@@ -43,7 +44,8 @@ export function initMemoryTreeListeners(workspacePath:string):()=>void{
 export async function changeMemoryTreeRule(path:string,mode:'include'|'exclude'):Promise<void>{
  const ctx=active;if(!ctx||ctx.disposed||!store.get(memoryTreeAvailableAtom))throw Error('Memory is not available for this workspace.');
  ctx.epoch++;ctx.revision=undefined;
- const receipt=await backend(ctx,'memory.set_path_override',{path,mode});
+ const visiblePaths=visibleFiles();
+ const receipt=await backend(ctx,'memory.set_path_override',{path,mode,...(visiblePaths.length?{visiblePaths}:{})});
  if(ctx.disposed||active!==ctx)return;
  if(receipt?.rules&&typeof receipt.revision==='string')store.set(memorySourceChangeAtom,{workspacePath:ctx.workspacePath,rootId:receipt.rootId??null,rules:receipt.rules,revision:receipt.revision});
  ctx.epoch++;ctx.revision=undefined;

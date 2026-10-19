@@ -47,6 +47,8 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
         const expectedRevision=revisions.current.get(id);
         const receipt=await call('memory.set_sources',{...rules,...(id?{rootId:id}:{}),...(expectedRevision?{expectedRevision}:{})});
         if(receipt?.revision)revisions.current.set(id,receipt.revision);
+        const cached=drafts.current.get(id);
+        if(cached&&JSON.stringify({rootId:id,version:1,include:parse(cached.include),exclude:parse(cached.exclude)})===key)drafts.current.delete(id);
         if(draft.current.rootId===id&&draft.current.loaded)generation.current++;
         if(draft.current.rootId===id&&JSON.stringify({rootId:id,version:1,include:parse(draft.current.include),exclude:parse(draft.current.exclude)})===key)draft.current.dirty=false;
         if(workspacePath&&receipt?.revision)memorySourceChanges.publish({workspacePath,rootId:id,rules,revision:receipt.revision});

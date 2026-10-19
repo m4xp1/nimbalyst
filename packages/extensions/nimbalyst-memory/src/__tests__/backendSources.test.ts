@@ -225,3 +225,31 @@ describe('asynchronous rule reconciliation',()=>{
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
 });
+
+
+describe('policy membership before background directory work',()=>{
+ it('colors all visible children from the saved directory rule before indexing any of them',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-visible-rules-')),dir=path.join(root,'extra');mkdirSync(dir);const files=['a.md','b.txt'].map(name=>path.join(dir,name));for(const file of files)writeFileSync(file,'ARTIFICIAL_VISIBLE');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  let release!:()=>void;const gate=new Promise<void>(r=>release=r);
+  try{
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const original=Indexer.prototype.indexFile,spy=vi.spyOn(Indexer.prototype,'indexFile').mockImplementation(async function(this:Indexer,...args:Parameters<Indexer['indexFile']>){await gate;return original.apply(this,args);});
+   try{
+    const receipt=await runtime.methods.set_path_override({path:dir,mode:'include',visiblePaths:files});expect(receipt.treeState).toHaveProperty('files',expect.arrayContaining(files));
+    expect((await runtime.methods.get_sources()).include).toEqual(['extra']);
+    expect(await runtime.methods.status()).toMatchObject({available:{chunks:0}});
+    release();await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   }finally{release();spy.mockRestore();}
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+ it('never retries a failed manually entered include from discovery polling',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-manual-no-retry-'));writeFileSync(path.join(root,'extra.md'),'ARTIFICIAL_ONLY');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const spy=vi.spyOn(Indexer.prototype,'indexFile').mockRejectedValue(Object.assign(Error('artificial quota'),{status:429}));
+   try{await runtime.methods.set_sources({include:['extra.md'],exclude:[]});await vi.waitFor(()=>expect(spy).toHaveBeenCalledTimes(1));await new Promise(resolve=>setTimeout(resolve,3600));expect(spy).toHaveBeenCalledTimes(1);}finally{spy.mockRestore();}
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+});

@@ -48,6 +48,14 @@ Changes, renames and deletions update the index. Detaching or losing access to a
 
 **Agent Permissions → Additional Directories** is a separate access setting. It grants agent access under the active sandbox mode and does not add a search root. Codex merges effective user/project/local permissions (including worktree inheritance) with its automatic roots, applies changes on the next turn, and reports unreadable settings or invalid paths. This release does not restrict reading outside the workspace or change permission modes.
 
+## Structured indexed text
+
+Markdown fragments preserve verbatim source spans, code indentation and complete table rows whenever a row fits the byte budget. Continued code/table chunks carry a separate synthetic `context`; it is not quoted source text. Oversized lines remain bounded without dropping characters, and prose prefers word boundaries. Fence closing must match the opening character and minimum length.
+
+Search hits optionally include `chunkId`, `sectionId`, `sourceRange` and `coordinateSpace`. Ranges are UTF-16, with an exclusive end: `source-text` refers to the text supplied to the file chunker; `record-projection` refers to the normalized virtual/file-card projection, including its added attributes. Pass `sectionId` to `expand` to distinguish repeated heading paths; a stale anchor returns no section. Session history still uses `read_session` for current discussion.
+
+Vector reuse is keyed by the complete actual embedding input plus provider/model/dimensions, independently of shifted ordinals. Existing bounded-projection inputs are reconstructed before reuse; per-source metadata is backfilled during normal background traversal without clearing the index. Changed input is embedded again. Provider responses must have every input index exactly once, matching dimensions and finite values representable in storage. Auxiliary page vectors are disabled by default because the default retrieval arm does not consume them; evaluation opts in explicitly. Model, RRF and recall are unchanged.
+
 ## Coverage and file-tree controls
 
 Coverage defaults to **All**. When multiple source folders are available, its independent selector also shows the main workspace and each attached root. Counts, categories, remaining files and source errors describe the selected root; physical index size belongs to All. **Rebuild all** rebuilds the workspace index regardless of the selected view. The Source folder selector for additional rules remains independent.

@@ -8,6 +8,15 @@ import type { SourceRoot } from './roots.js';
 
 /** A heading-aware slice of a markdown document, ready to embed and store. */
 export interface Chunk {
+  /** UTF-16 offsets into the indexed source projection; end is exclusive. */
+  sourceRange?:{start:number;end:number};
+  coordinateSpace?:'source-text'|'record-projection';
+  /** Distinguishes repeated identical heading paths. */
+  sectionId?:string;
+  /** Synthetic continuation context, separate from verbatim source text. */
+  context?:string;
+  embeddingInputHash?:string;
+  projectionVersion?:number;
   /** Stable within a (sourcePath): `${sourcePath}#${ordinal}`. */
   id: string;
   /**
@@ -179,6 +188,8 @@ export interface EngineConfig {
   factsDir: string;
   /** Optional explicit better-sqlite3 native binding path (ABI portability). */
   nativeBinding?: string;
+  /** Explicit opt-in for evaluation of the unused-by-default page fusion arm. */
+  pageVectors?:boolean;
   /** Chunking budget. */
   chunk?: { minTokens?: number; maxTokens?: number };
   /**
@@ -192,6 +203,11 @@ export interface EngineConfig {
 
 /** A retrieval hit returned to callers. */
 export interface SearchHit {
+  coordinateSpace?:Chunk['coordinateSpace'];
+  chunkId?:string;
+  sectionId?:string;
+  sourceRange?:{start:number;end:number};
+  context?:string;
   parentSessionId?: string | null;
   sourcePath: string;
   sourceClass: string;

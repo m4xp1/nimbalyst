@@ -76,7 +76,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   expect((await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер'})).chunks).toEqual([]);
   await panel('set_sources',{rootId:link.id,include:['archive/**'],exclude:[]});
   expect((await panel('get_sources')).include).toEqual([]);
-  expect((await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер'})).chunks).toHaveLength(1);
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер'})).chunks.length).toBe(1);
   await search('Files','ПРИЕМКА');await expect(page.locator('.files-pane .unified-quick-open-item').filter({hasText:'Приёмка.md'})).toHaveCount(2);
   await search('In Files','русскими интерфейсами');const fileRow=page.locator('.in-files-pane .unified-quick-open-item').filter({hasText:'ПодключеннаяПапкаМаркер'});
   await expect(fileRow).toHaveCount(1);await expect(fileRow.locator('mark')).toContainText('Русский интерфейс');
@@ -115,6 +115,8 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   const file=page.locator('.file-tree-file').filter({hasText:'TreeProbe.md'}).first();
   if(!await file.isVisible())await docs.click();await expect(file).toBeVisible();
   await file.click({button:'right'});await expect(page.getByRole('button',{name:'Exclude from Memory index',exact:true})).toHaveCount(0);await page.getByRole('button',{name:'Include in Memory index',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Include in Memory index',exact:true})).toHaveCount(0);
+  await expect(file.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(1);
   expect((await call('search_project_knowledge',{query:'ИсключенныйСоседМаркер'})).chunks).toEqual([]);
   await expect(file.locator('.file-tree-icon')).toHaveAttribute('data-memory-index','included');

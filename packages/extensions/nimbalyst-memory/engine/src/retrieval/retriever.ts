@@ -248,6 +248,7 @@ export class Retriever {
       const c = this.byId.get(id);
       if (!c) continue;
       hits.push({
+        chunkId:c.id,sectionId:c.sectionId,sourceRange:c.sourceRange,coordinateSpace:c.coordinateSpace,context:c.context,
         sourcePath: c.sourcePath,
         sourceClass: c.sourceClass,
         refType: c.refType,
@@ -272,7 +273,7 @@ export class Retriever {
    * whose heading breadcrumb is the matched path (or a descendant of it),
    * concatenated in document order.
    */
-  expandSection(sourcePath: string, headingPath: string[]): {
+  expandSection(sourcePath: string, headingPath: string[],sectionId?:string): {
     sourcePath: string;
     headingPath: string[];
     text: string;
@@ -287,11 +288,17 @@ export class Retriever {
       const ck = c.headingPath.join('\u0000');
       return ck === key || ck.startsWith(key + '\u0000');
     });
-    const section = matching.length ? matching : inSource;
+    let section = matching.length ? matching : inSource;
+    if(sectionId){
+      const start=inSource.findIndex(c=>c.sectionId===sectionId);if(start<0)return null;
+      const anchor=inSource[start];let end=start+1;
+      while(end<inSource.length&&(inSource[end].sectionId===sectionId||inSource[end].headingPath.length>anchor.headingPath.length))end++;
+      section=inSource.slice(start,end);
+    }
     return {
       sourcePath,
       headingPath,
-      text: section.map((c) => c.text).join('\n\n'),
+      text: section.map((c,i)=>i>0&&c.sourceRange!==undefined&&c.sourceRange.start===section[i-1].sourceRange?.end?c.text:(i?'\n\n':'')+c.text).join(''),
     };
   }
 }

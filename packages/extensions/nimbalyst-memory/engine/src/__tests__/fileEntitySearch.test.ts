@@ -116,3 +116,18 @@ describe('canonical file entity search', () => {
     expect(await sparse(engine,'archivedfilemarker')).toEqual([]);
   });
 });
+
+
+describe('file entity import during source-rule changes',()=>{
+ it('keeps a pending file-card projection when a different file is included',async()=>{
+  const root=fixture();writeFileSync(path.join(root,'docs/card.md'),markdown('ENTITY_INTERRUPTED_MARKER'));writeFileSync(path.join(root,'extra.md'),'EXTRA_INCLUDE_MARKER');const engine=open(root);
+  let enter!:()=>void,release!:()=>void;const gate=new Promise<void>(r=>release=r),entered=new Promise<void>(r=>enter=r),original=FakeEmbedder.prototype.embed;let held=false;
+  const spy=vi.spyOn(FakeEmbedder.prototype,'embed').mockImplementation(async function(this:FakeEmbedder,texts:string[]){if(!held&&texts.some(text=>text.includes('ENTITY_INTERRUPTED_MARKER'))){held=true;enter();await gate;}return original.call(this,texts);});
+  const sync=engine.syncFileRecords([record()]);
+  try{
+   await entered;const update=engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['extra.md']}],[],{paths:[path.join(root,'extra.md')],incremental:true});
+   release();await sync;await update;
+   const hits=await sparse(engine,'ENTITY_INTERRUPTED_MARKER');expect(hits).toHaveLength(1);expect(hits[0]).toMatchObject({refType:'tracker',refId:'file-card'});
+  }finally{release();await sync;spy.mockRestore();}
+ });
+});

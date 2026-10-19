@@ -100,3 +100,21 @@ describe('shared durable source rules',()=>{
   await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_sources',{version:1,include:['my-draft.md'],exclude:[],expectedRevision:'two'}));
  });
 });
+
+
+describe('source draft across folder switches',()=>{
+ it('does not call a successfully saved draft unsaved after switching away before acknowledgement',async()=>{
+  let release!:()=>void;const gate=new Promise<void>(r=>release=r);let saved=initial;
+  const call=vi.fn(async(name:string,params?:any)=>{
+   if(name==='memory.get_source_roots')return[{id:null,path:'/main',label:'main',available:true},{id:'link',path:'/link',label:'link',available:true}];
+   if(name==='memory.get_sources')return params?.rootId?{version:1,include:[],exclude:[]}:saved;
+   if(name==='memory.set_sources'){await gate;saved={version:1,include:params.include,exclude:params.exclude};return{rules:saved,revision:'two'};}
+   return{};
+  });
+  render(<SourceSettings workspacePath='/draft-root-test' callBackendTool={call} onApplied={()=>{}}/>);const f=await field(),select=await screen.findByRole('combobox',{name:'Source folder'});
+  fireEvent.change(f,{target:{value:'saved.md'}});fireEvent.blur(f);await waitFor(()=>expect(call.mock.calls.filter(([name])=>name==='memory.set_sources')).toHaveLength(1));
+  fireEvent.change(select,{target:{value:'link'}});await act(async()=>release());await field();
+  fireEvent.change(select,{target:{value:''}});await waitFor(()=>expect((screen.getByLabelText('Additional source includes') as HTMLTextAreaElement).value).toBe('saved.md'));
+  expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByRole('button',{name:'Reload saved rules'})).toBeNull();
+ });
+});

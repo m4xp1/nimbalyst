@@ -79,6 +79,7 @@ export async function buildSlots(
       }
 
       const config: EngineConfig = {
+        pageVectors:true, // explicit evaluation of the third retrieval arm
         root: opts.root,
         dbPath,
         factsDir: EVAL_FACTS_DIR,

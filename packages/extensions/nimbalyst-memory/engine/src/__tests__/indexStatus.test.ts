@@ -124,3 +124,34 @@ describe('responsive source policy updates',()=>{
   try{await engine.indexAll();expect((engine.status() as any).available).toMatchObject({chunks:0,sourceFiles:0});expect(engine.status().chunks).toBeGreaterThan(0);}finally{spy.mockRestore();}
  });
 });
+
+
+describe('watcher cancellation and policy changes',()=>{
+ it('reconciles the interrupted changed file together with a new rule target',async()=>{
+  const {root,embedder,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nORIGINAL_WATCH_VALUE');writeFileSync(path.join(root,'extra.md'),'# Extra\nEXTRA_RULE_VALUE');await engine.indexAll();
+  let release!:()=>void,enter!:()=>void;const gate=new Promise<void>(r=>release=r),entered=new Promise<void>(r=>enter=r);const original=embedder.embed.bind(embedder);let held=false;
+  const spy=vi.spyOn(embedder,'embed').mockImplementation(async texts=>{if(!held&&texts.some(text=>text.includes('CHANGED_WATCH_VALUE'))){held=true;enter();await gate;}return original(texts);});
+  writeFileSync(path.join(root,'docs/a.md'),'# A\nCHANGED_WATCH_VALUE');
+  try{
+   await Promise.race([entered,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Watcher did not start')),4000))]);
+   const update=engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['extra.md']}],[],{paths:[path.join(root,'extra.md')],incremental:true});
+   release();await update;
+   expect((await engine.search('CHANGED_WATCH_VALUE',20)).some(hit=>hit.text.includes('CHANGED_WATCH_VALUE'))).toBe(true);
+   expect((await engine.search('EXTRA_RULE_VALUE',20)).some(hit=>hit.text.includes('EXTRA_RULE_VALUE'))).toBe(true);
+  }finally{release();spy.mockRestore();}
+ });
+});
+
+
+describe('rule-job watcher handoff',()=>{
+ it('does not acknowledge away an edit made while embeddings were in flight',async()=>{
+  const {root,embedder,engine}=setup(),file=path.join(root,'extra.md');writeFileSync(file,'# Extra\nBEFORE_IN_FLIGHT');await engine.indexAll();
+  let enter!:()=>void,release!:()=>void;const entered=new Promise<void>(r=>enter=r),gate=new Promise<void>(r=>release=r),original=embedder.embed.bind(embedder);let held=false;
+  const spy=vi.spyOn(embedder,'embed').mockImplementation(async texts=>{if(!held&&texts.some(text=>text.includes('BEFORE_IN_FLIGHT'))){held=true;enter();await gate;}return original(texts);});
+  const update=engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['extra.md']}],[],{paths:[file],incremental:true});
+  try{
+   await entered;writeFileSync(file,'# Extra\nAFTER_IN_FLIGHT_CHANGED');await new Promise(resolve=>setTimeout(resolve,700));release();await update;
+   await vi.waitFor(async()=>expect((await engine.search('AFTER_IN_FLIGHT_CHANGED',20)).some(hit=>hit.text.includes('AFTER_IN_FLIGHT_CHANGED'))).toBe(true),{timeout:4500});
+  }finally{release();await update;spy.mockRestore();}
+ });
+});

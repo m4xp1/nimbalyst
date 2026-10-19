@@ -285,7 +285,7 @@ const TOOL_DESCRIPTORS = [
     name: 'expand',
     description:
       'Expand a search hit to its full heading section. Pass the sourcePath and ' +
-      'headingPath from a search_project_knowledge result. Use this for a quotation or ' +
+      'headingPath from a search_project_knowledge result; pass sectionId when provided to distinguish repeated headings. Use this for a quotation or ' +
       'specific fact and identify it as indexed evidence. It does not prove full or ' +
       'current session history; for current discussions or decisions use read_session ' +
       'with sessionId = the hit refId when that tool is available.',
@@ -294,6 +294,7 @@ const TOOL_DESCRIPTORS = [
       properties: {
         sourcePath: { type: 'string' },
         headingPath: { type: 'array', items: { type: 'string' } },
+        sectionId: {type:'string'},
       },
       required: ['sourcePath'],
     },
@@ -570,7 +571,7 @@ export async function activate(ctx: ActivateCtx) {
   }
   function applySources(paths?:string[]):void {
     config.sources=attachedSources(FACTS_DIR,workspacePath,sourceRoots,sourceRules,rootRules);config.workspaceExclude=sourceRules.exclude;
-    const task=requireEngine().updateSources(config.sources,config.workspaceExclude,{paths,incremental:true});
+    const task=engine?engine.updateSources(config.sources,config.workspaceExclude,{paths,incremental:true}):Promise.reject(Error('Local project index is unavailable. Saved source rules are retained.'));
     sourceIndexing=task.catch(error=>{log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');});
   }
   async function syncSourceRoots(): Promise<void> {
@@ -608,12 +609,16 @@ export async function activate(ctx: ActivateCtx) {
   const runtime = {
     methods: {
       get_source_roots: async () => { await syncSourceRoots(); return sourceRoots.map(root=>({...root,rulesRevision:revision(root.id?rootRules[root.id]??{version:1,include:[],exclude:[]}:sourceRules)})); },
-      get_tree_index_state: async (params?:{revision?:string}) => {
+      get_tree_index_state: async (params?:{revision?:string;paths?:string[]}) => {
         const eng=requireEngine(),status=eng.status();
-        const state=await buildTreeIndexState(eng.ruleFilePaths(),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
+        const state=await buildTreeIndexState(eng.ruleFilePaths((Array.isArray(params?.paths)?params.paths:[]).flatMap(file=>{
+          if(typeof file!=='string'||!path.isAbsolute(file))return[];
+          for(const root of sourceRoots.filter(root=>root.available))for(const alias of [root.path,...root.treePaths??[]]){const relative=path.relative(alias,file);if(relative!== '..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))return[path.resolve(root.path,relative)];}
+          return[];
+        })),sourceRoots,id=>id?rootRules[id]??{version:1,include:[],exclude:[]}:sourceRules,{indexing:status.indexing,failures:status.fileIndex?.failures??[]});
         return state.revision===params?.revision?{unchanged:true,revision:state.revision}:state;
       },
-      set_path_override: async (params:{path?:string;mode?:'include'|'exclude'|'inherit'}) => {
+      set_path_override: async (params:{path?:string;mode?:'include'|'exclude'|'inherit';visiblePaths?:string[]}) => {
         if(!['include','exclude','inherit'].includes(params?.mode??''))throw Error('Choose include, exclude or inherit.');
         const target=await resolveTreeTarget(sourceRoots,params.path);
         const apply=async()=>{
@@ -629,8 +634,8 @@ export async function activate(ctx: ActivateCtx) {
           if(params.mode!=='inherit')next[params.mode!].push(pattern);
           if(id){const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;}else{writeSourceRules(dataDir,next);sourceRules=next;}
           applySources([target.absolute]);
-          const state=await runtime.methods.get_tree_index_state();
-          return{rules:next,rootId:id,revision:revision(next),indexingQueued:true,treeState:state};
+          const state=await runtime.methods.get_tree_index_state({paths:params.visiblePaths}).catch(()=>undefined);
+          return{rules:next,rootId:id,revision:revision(next),indexingQueued:engine!==null,treeState:state};
         };
         return queueRuleChange(apply);
       },
@@ -792,13 +797,13 @@ export async function activate(ctx: ActivateCtx) {
         };
       },
 
-      expand: async (params: { sourcePath?: string; headingPath?: unknown[] }) => {
+      expand: async (params: { sourcePath?: string; headingPath?: unknown[];sectionId?:string }) => {
         const sourcePath = String(params?.sourcePath ?? '');
         if (!sourcePath) throw new Error('sourcePath is required');
         const headingPath = Array.isArray(params?.headingPath)
           ? params.headingPath.map(String)
           : [];
-        return requireEngine().expand(sourcePath, headingPath);
+        return requireEngine().expand(sourcePath, headingPath,params.sectionId);
       },
 
       read_session: async (params:{sessionId:string;cursor?:string;maxChars?:number}) => {
