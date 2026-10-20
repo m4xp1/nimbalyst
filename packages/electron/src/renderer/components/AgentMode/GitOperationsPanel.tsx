@@ -14,7 +14,6 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import {
-  gitStatusAtom,
   gitCommitsAtom,
   isCommittingAtom,
   worktreeRefreshCounterAtom,
@@ -47,6 +46,8 @@ import { SuperFilesPanel } from './SuperFilesPanel';
 import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
 import { type AgentModelOption } from './AgentModelPicker';
 import { isClaudeCliTerminalSession } from '../UnifiedAI/claudeCliInputRouting';
+import { watchGitStatus } from '../../utils/gitStatus';
+import type {GitStatus} from '../../store/atoms/gitOperations';
 import { buildCommitPrompt } from '@nimbalyst/runtime/ui/AgentTranscript/utils/commitPromptBuilder';
 
 // Types for worktree mode (copied from DiffModeView)
@@ -87,8 +88,9 @@ interface GitOperationsPanelProps {
 export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
   ({ workspacePath, workstreamId, sessionId, editedFiles, worktreeId, worktreePath, onWorktreeArchived, onFileClick }) => {
     // Use useAtomValue for read-only, useSetAtom for write-only to minimize re-renders
-    const gitStatus = useAtomValue(gitStatusAtom);
-    const setGitStatus = useSetAtom(gitStatusAtom);
+    // Panel status belongs to its own repository, which may differ from the pinned title-bar repository.
+    const [gitStatus,setGitStatus]=useState<GitStatus|null>(null);
+    const statusObserver=useRef<ReturnType<typeof watchGitStatus>|null>(null);
     const gitCommits = useAtomValue(gitCommitsAtom);
     const setGitCommits = useSetAtom(gitCommitsAtom);
     const isCommitting = useAtomValue(isCommittingAtom);
@@ -315,39 +317,15 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       }
     }, [gitStatus, hasStagedOutsideStatusRepo, clearGitState, workstreamId]);
 
-    // Fetch git status
-    const fetchGitStatus = useCallback(async () => {
-      if (!statusRepoPath) return;
-      try {
-        if (window.electronAPI) {
-          const status = await window.electronAPI.invoke('git:status', statusRepoPath);
-          setGitStatus(status as any);
-        }
-      } catch (error) {
-        console.error('[GitOperationsPanel] Failed to fetch git status:', error);
-      }
-    }, [statusRepoPath, setGitStatus]);
-
-    // Initial fetch and listen for git:status-changed events
-    useEffect(() => {
-      if (!statusRepoPath) return;
-
-      fetchGitStatus();
-
-      // Listen for git status changes (from GitRefWatcher)
-      // No polling needed - GitRefWatcher provides immediate updates
-      const unsubscribe = window.electronAPI?.git?.onStatusChanged?.(
-        (data: { workspacePath: string; repoPath?: string }) => {
-          if ((data.repoPath ?? data.workspacePath) === statusRepoPath) {
-            fetchGitStatus();
-          }
-        }
-      );
-
-      return () => {
-        unsubscribe?.();
-      };
-    }, [statusRepoPath, fetchGitStatus]);
+    // Reuse main-process snapshots; do not overwrite the title bar's repository state.
+    const fetchGitStatus=useCallback(()=>statusObserver.current?.refresh(),[]);
+    useEffect(()=>{
+      setGitStatus(null);
+      if(!statusRepoPath||!window.electronAPI)return;
+      const observer=watchGitStatus(window.electronAPI,statusRepoPath,setGitStatus);
+      statusObserver.current=observer;
+      return()=>{observer.dispose();if(statusObserver.current===observer)statusObserver.current=null;};
+    },[statusRepoPath]);
 
     // Fetch recent commits
     const fetchCommits = useCallback(async () => {
