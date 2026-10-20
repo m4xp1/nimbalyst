@@ -782,6 +782,10 @@ describe('Memory source folders',()=>{
   fireEvent.change(screen.getByTestId('unified-quick-open-search'),{target:{value:'СловоформаМаркер'}});
   await waitFor(()=>expect(api.semanticSearch.query).toHaveBeenLastCalledWith(WORKSPACE,'СловоформаМаркер',25,undefined,['link']));
   expect(store.get(memorySearchRootIdsAtomFamily(WORKSPACE))).toEqual(['link']);
+  fireEvent.keyDown(screen.getByRole('checkbox',{name:'link'}),{key:'Tab'});
+  expect(screen.getByRole('tab',{name:'Memory'}).getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('checkbox',{name:'link'}),{key:'Escape'});
+  await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Memory source folders'})).toBeNull());
   view.unmount();renderQuickOpen({initialTab:'search'},store);
   expect(await screen.findByRole('button',{name:'Sources: link'})).toBeTruthy();
  });
@@ -794,4 +798,16 @@ describe('Memory source folders',()=>{
   await waitFor(()=>expect((api.semanticSearch as any).filterTrackers).toHaveBeenCalledWith(WORKSPACE,['other'],['link']));
   expect(screen.queryByText('Outside folder')).toBeNull();
  });
+});
+
+it('does not replace a newer Memory folder scope with a late search response',async()=>{
+ const api=setupElectronApiMock();api.semanticSearch.isAvailable.mockResolvedValue(true);
+ let late!:(hits:any[])=>void;const held=new Promise<any[]>(resolve=>late=resolve);
+ api.semanticSearch.query.mockImplementation((_workspace:any,_query:any,_k:any,_classes:any,roots:any)=>roots?.[0]==='link'?held:Promise.resolve([{refId:'/main/new.md',refType:'doc-file',sourcePath:'docs/new.md',title:'New scope result',snippet:'Current',score:1}]));
+ const store=createStore();store.set(memorySearchRootIdsAtomFamily(WORKSPACE),['link']);
+ renderQuickOpen({initialTab:'search'},store);fireEvent.change(screen.getByTestId('unified-quick-open-search'),{target:{value:'РусскийМаркер'}});
+ await waitFor(()=>expect(api.semanticSearch.query).toHaveBeenCalledWith(WORKSPACE,'РусскийМаркер',25,undefined,['link']));
+ act(()=>store.set(memorySearchRootIdsAtomFamily(WORKSPACE),[null]));await screen.findByText('New scope result');
+ await act(async()=>late([{refId:'/link/old.md',refType:'doc-file',sourcePath:'@link/old.md',title:'Old scope result',score:1}]));
+ expect(screen.queryByText('Old scope result')).toBeNull();expect(screen.getByText('New scope result')).toBeTruthy();
 });

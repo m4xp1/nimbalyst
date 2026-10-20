@@ -282,6 +282,18 @@ describe('PrivilegedExtensionHost broker panels', () => {
 });
 
 describe('Memory search-root broker boundary', () => {
+  it('returns a newly attached folder on its first read while keeping repeated reads cached',async()=>{
+    const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');
+    const {memorySourceRoots}=await import('../../utils/memorySourceRoots');
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'search-root-attach-')),main=path.join(dir,'main'),attached=path.join(dir,'link');fs.mkdirSync(main);fs.mkdirSync(attached);
+    try{
+      expect((await memorySourceRoots(main,[main])).map(root=>root.id)).toEqual([null]);
+      const roots=await memorySourceRoots(main,[main,attached]);expect(roots).toHaveLength(2);expect(roots[1]).toMatchObject({path:fs.realpathSync.native(attached),available:true});
+      expect(await memorySourceRoots(main,[main,attached])).toEqual(roots);
+      expect((await memorySourceRoots(main,[main])).map(root=>root.id)).toEqual([null]);
+    }finally{fs.rmSync(dir,{recursive:true,force:true});}
+  });
+
   it('derives roots from the bound workspace and ignores a forged workspace payload',async()=>{
     const {dispatchBrokerMethod}=await import('../extensionBrokerDispatch');
     const roots=await dispatchBrokerMethod('memorySourceRoots',{workspacePath:'/unrelated'},{...ctx,grantedPermissions:[...ctx.grantedPermissions]}) as Array<{path:string}>;

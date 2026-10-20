@@ -24,7 +24,7 @@ const TOOLS = [
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
       'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works.',
+      'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope. ',
     inputSchema: {
       type: 'object',
       properties: {

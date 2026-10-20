@@ -120,6 +120,7 @@ export class MemoryEngine {
   private storedSummaries: ReturnType<SqliteStore['sourceSummaries']> | undefined;
   private sourceFolders:MemorySourceFolder[]|null=null;
   private fileRootOwners=new Map<string,string|null>();
+  private indexedTrackerPaths=new Set<string>();
   private queryVectors=new Map<string,{vector:number[];expires:number}>();
   private queryRequests=new Map<string,Promise<number[]>>();
 
@@ -149,7 +150,7 @@ export class MemoryEngine {
     const scope=this.searchScope(rootIds),selected=rootIds===undefined?null:new Set(scope.rootIds);
     return ids.flatMap(id=>{
       const sourcePath='tracker:'+id,rootId=this.sourceRootOf(sourcePath);
-      return this.readable({sourcePath,refType:'tracker'})&&(!selected||selected.has(rootId))?[{id,rootId}]:[];
+      return this.indexedTrackerPaths.has(sourcePath)&&this.readable({sourcePath,refType:'tracker'})&&(!selected||selected.has(rootId))?[{id,rootId}]:[];
     });
   }
   private updateFileRootOwners():void{
@@ -200,6 +201,7 @@ export class MemoryEngine {
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
+    this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.updateFileRootOwners();
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
@@ -281,6 +283,7 @@ export class MemoryEngine {
     this.invalidateView();
     this.updateFileRootOwners();
     this.snapshot=this.store.loadAll();
+    this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
 
@@ -495,7 +498,8 @@ export class MemoryEngine {
   ): Promise<SearchHit[]> {
     if(this.closed)throw Error('Memory workspace was closed.');
     const scope=this.searchScope(opts?.rootIds);
-    const selected=opts?.rootIds===undefined?null:new Set(scope.rootIds);
+    // Freeze All's folder membership while a provider request is in flight too.
+    const selected=new Set(scope.rootIds);
     if(!this.listSources().some(root=>root.available&&(!selected||selected.has(root.id))))return[];
     let vec: number[] | null = null;
     try {

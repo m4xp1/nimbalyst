@@ -52,12 +52,13 @@ test.describe.serial('Built Electron Russian Quick Open', () => {
       (globalThis as any).__searchEngine = engine;
       (globalThis as any).__searchIndexCalls = (globalThis as any).__searchFakeCalls;
       ipcMain.removeHandler('semantic-search:available'); ipcMain.handle('semantic-search:available', () => true);
-      ipcMain.removeHandler('semantic-search:query'); ipcMain.handle('semantic-search:query', async (_event, _ws, query, k, classes) => {
-        const hits = await engine.search(query, k, classes?.length ? { sourceClasses: classes } : undefined); (globalThis as any).__searchLastHits = hits;
+      ipcMain.removeHandler('semantic-search:query'); ipcMain.handle('semantic-search:query', async (_event, _ws, query, k, classes, rootIds) => {
+        const hits = await engine.search(query, k, {sourceClasses:classes?.length?classes:undefined,rootIds}); (globalThis as any).__searchLastHits = hits;
         const entities = new Map();
         for (const h of hits) { const key = `${h.refType}\0${h.refId}`; if (!entities.has(key)) entities.set(key,h); }
         return [...entities.values()].map((h: any) => ({ ...h, title: h.headingPath[0] ?? '', snippet: h.text.slice(0, 240) }));
       });
+      ipcMain.removeHandler('semantic-search:tracker-ids');ipcMain.handle('semantic-search:tracker-ids',(_event,_ws,ids,rootIds)=>engine.filterTrackerIds(ids,rootIds));
       // Seed the existing text index, not an AI provider or a second search implementation.
       const Database = require(require('node:path').join(root, 'node_modules/better-sqlite3'));
       const db = new Database(require('node:path').join(temp, 'db/sqlite-db/nimbalyst.sqlite'));

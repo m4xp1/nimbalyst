@@ -220,4 +220,4 @@ export * from './themes';
 
 export {memorySourceChanges,sameMemoryWorkspace,type MemorySourceChange} from './store/atoms/memorySources';
 export {memorySourceFoldersAtomFamily,memorySearchRootIdsAtomFamily,type MemorySourceFolder} from './store/atoms/memorySources';
-export {MemorySourcePicker} from './ui/MemorySourcePicker';
+export {MemorySourcePicker,useMemorySearchRoots} from './ui/MemorySourcePicker';

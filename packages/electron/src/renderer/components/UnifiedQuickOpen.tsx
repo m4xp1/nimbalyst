@@ -537,6 +537,8 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // The portaled folder picker owns keyboard navigation inside its menu.
+      if(e.target instanceof Element && e.target.closest('.memory-source-picker__menu') && !e.ctrlKey && !e.metaKey && !e.altKey)return;
       // Cycle tabs with Tab / Shift+Tab
       if (e.key === 'Tab') {
         e.preventDefault();

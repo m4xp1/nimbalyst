@@ -20,7 +20,7 @@ describe('source settings backend bridge',()=>{
    expect((await runtime.methods.globalSearch({query:'ОбщийПоисковыйМаркер'}) as any).results).toHaveLength(2);
    await runtime.methods.ingestRecords({records:[{id:'tracker:db',refType:'tracker',refId:'db',sourceClass:'trackers',text:'DBМаркер'}]});
    expect(await runtime.methods.filterTrackerIds({ids:['db'],rootIds:['attached-link']})).toEqual([]);
-   expect(await runtime.methods.filterTrackerIds({ids:['db'],rootIds:[null]})).toEqual([{id:'db',rootId:null}]);
+   expect(await runtime.methods.filterTrackerIds({ids:['db','not-indexed'],rootIds:[null]})).toEqual([{id:'db',rootId:null}]);
    await expect(runtime.methods.globalSearch({query:'ОбщийПоисковыйМаркер',rootIds:[]})).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
    roots=[roots[0]];await runtime.methods.list_sources();
    await expect(runtime.methods.search_project_knowledge({query:'ОбщийПоисковыйМаркер',rootIds:['attached-link']})).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');

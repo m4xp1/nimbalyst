@@ -51,13 +51,15 @@ export async function memorySourceRoots(workspace: string, paths: string[]): Pro
   const configured = new Set(paths.map(value => searchPathKey(path.resolve(value))));
   // Detach takes effect before any asynchronous filesystem probe finishes.
   snapshot.roots = snapshot.roots.filter(root => (root.treePaths ?? [root.path]).some(value => configured.has(searchPathKey(path.resolve(value)))));
+  const previousByAlias = new Map(snapshot.roots.flatMap(root =>
+    (root.treePaths ?? [root.path]).map(alias => [searchPathKey(path.resolve(alias)), root] as const)));
+  const needsRoots = [...configured].some(value => !previousByAlias.has(value));
   if (!snapshot.pending && (snapshot.paths !== signature || Date.now() - snapshot.checkedAt >= 1000)) {
     const current = snapshot;
     current.pending = (async () => {
-      const previous = current.roots;
       const described = await Promise.all(paths.map(async (value, index) => {
         const absolute = path.resolve(value);
-        const prior = previous.find(root => root.treePaths?.some(alias => searchPathKey(path.resolve(alias)) === searchPathKey(absolute)));
+        const prior = previousByAlias.get(searchPathKey(absolute));
         let timer: ReturnType<typeof setTimeout> | undefined;
         let canonical = prior?.path ?? absolute;
         let error: string | undefined;
@@ -85,6 +87,11 @@ export async function memorySourceRoots(workspace: string, paths: string[]): Pro
       }
     })().finally(() => { current.pending = undefined; });
   }
-  if (first) await snapshot.pending;
+  if (first||needsRoots) {
+    await snapshot.pending;
+    // An older background probe may have been invalidated by this attachment.
+    // Only the latest requested membership can start its replacement probe.
+    if(snapshot.requested===signature&&snapshot.paths!==signature)return memorySourceRoots(workspace,paths);
+  }
   return snapshot.roots.map(root => ({ ...root, treePaths: [...root.treePaths ?? []] }));
 }

@@ -20,8 +20,7 @@ import { SourceSettings } from './SourceSettings';
 import type { FileIndexStatus, SafeIndexError,FileOperation } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 import { coveragePalette } from './coveragePalette';
-import { MemorySourcePicker, memorySearchRootIdsAtomFamily } from '@nimbalyst/runtime';
-import { useAtom } from 'jotai';
+import { MemorySourcePicker, useMemorySearchRoots } from '@nimbalyst/runtime';
 
 interface IndexStatus {
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
@@ -131,7 +130,7 @@ function relativeTime(ms: number | null | undefined): string {
 }
 
 export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }: SettingsPanelProps) {
-  const [searchRootIds,setSearchRootIds]=useAtom(memorySearchRootIdsAtomFamily(workspacePath??''));
+  const [searchRootIds,setSearchRootIds]=useMemorySearchRoots(workspacePath??'');
   const searchGeneration=useRef(0);
   useEffect(()=>{searchGeneration.current++;setHits(null);setSearching(false);setSearchError(null);},[searchRootIds,workspacePath]);
   const isDark = theme === 'dark' || theme === 'crystal-dark';

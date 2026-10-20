@@ -44,6 +44,8 @@ import * as CollaborativeCommentUI from '@nimbalyst/runtime/editor/commenting/ui
 import {
   screenshotService,
   memorySourceChanges,
+  MemorySourcePicker,
+  useMemorySearchRoots,
   sameMemoryWorkspace,
   useDocumentPath,
   useEditorLifecycle,
@@ -479,6 +481,8 @@ CHECK:
       '@nimbalyst/runtime': {
         screenshotService,
         memorySourceChanges,
+        MemorySourcePicker,
+        useMemorySearchRoots,
         sameMemoryWorkspace,
         MaterialSymbol,
         useDocumentPath,

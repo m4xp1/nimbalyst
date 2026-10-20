@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, renameSync, rmSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MemoryEngine } from '../engine.js';
-import type { FileRecord, EngineConfig } from '../types.js';
+import type { FileRecord, EngineConfig, Embedder } from '../types.js';
 import { FakeEmbedder } from './fakeEmbedder.js';
 
 const roots: string[] = [];
@@ -59,10 +59,31 @@ describe('canonical file entity search', () => {
   });
   it('reuses only successful query vectors across scopes and concurrent searches',async()=>{
     const root=fixture();writeFileSync(path.join(root,'docs/a.md'),'# Cached\nquerycachemarker');const engine=open(root);await engine.indexAll();
-    const embed=vi.spyOn((engine as any).embedder,'embed');
+    const embed=vi.spyOn((engine as unknown as {embedder:Embedder}).embedder,'embed');
     await Promise.all([engine.search('querycachemarker',5),engine.search('querycachemarker',5,{rootIds:[null]} as any)]);
     expect(embed).toHaveBeenCalledOnce();await engine.search('querycachemarker');expect(embed).toHaveBeenCalledOnce();
     embed.mockRejectedValueOnce(new Error('network test failure'));await engine.search('failed-query');await engine.search('failed-query');expect(embed).toHaveBeenCalledTimes(3);
+  });
+  it('bounds query-vector caching by time and count and rejects detached in-flight scope',async()=>{
+    const root=fixture(),link=fixture();writeFileSync(path.join(root,'docs/a.md'),'cache marker');
+    const engine=open(root,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}}]});await engine.indexAll();
+    const provider=(engine as unknown as {embedder:Embedder}).embedder,original=provider.embed.bind(provider),embed=vi.spyOn(provider,'embed');
+    await engine.search('oldest');for(let i=0;i<32;i++)await engine.search('bounded'+i);await engine.search('oldest');expect(embed).toHaveBeenCalledTimes(34);
+    const now=Date.now(),clock=vi.spyOn(Date,'now').mockReturnValue(now+300001);
+    try{await engine.search('oldest');expect(embed).toHaveBeenCalledTimes(35);}finally{clock.mockRestore();}
+    let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
+    embed.mockImplementationOnce(async(texts:string[])=>{await gate;return original(texts);});
+    const query=engine.search('held-scope',5,{rootIds:['link']});
+    engine.setSourceFolders([{id:null,path:root,label:'Main',available:true}]);release();await expect(query).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
+  });
+  it('keeps All folder membership stable while a query embedding is in flight',async()=>{
+    const root=fixture(),link=fixture();for(const dir of [root,link])writeFileSync(path.join(dir,'docs/a.md'),'FolderSnapshotMarker');
+    const engine=open(root,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}}]});await engine.indexAll();
+    engine.setSourceFolders([{id:null,path:root,label:'Main',available:true}]);
+    let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),embedder=(engine as unknown as {embedder:Embedder}).embedder,original=embedder.embed.bind(embedder);
+    vi.spyOn(embedder,'embed').mockImplementationOnce(async(texts:string[])=>{await gate;return original(texts);});
+    const query=engine.search('FolderSnapshotMarker');engine.setSourceFolders([{id:null,path:root,label:'Main',available:true},{id:'link',path:link,label:'Link',available:true}]);release();
+    expect((await query).map(hit=>hit.sourcePath)).toEqual(['docs/a.md']);expect(await engine.search('FolderSnapshotMarker')).toHaveLength(2);
   });
   it('transitions old DOCUMENT and tracker copies to one TRACKER, retaining a standalone database card', async () => {
     const root = fixture(); writeFileSync(path.join(root,'docs/card.md'),markdown('quartzfilemarker'));

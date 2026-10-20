@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 <!-- Changes to existing functionality go here -->
+- Guide agents to discover Memory source folders and scope searches without silently broadening unavailable selections.
 
 ### Fixed
 <!-- Bug fixes go here -->

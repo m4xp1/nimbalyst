@@ -224,7 +224,7 @@ const TOOL_DESCRIPTORS = [
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
       'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works. For a specific quotation or fact, ' +
+      'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope.  For a specific quotation or fact, ' +
       'use expand when needed and identify the result as indexed evidence. For current ' +
       'session discussions or decisions, use read_session with the hit refId if that ' +
       'tool is available; search snippets do not establish complete current history.',
