@@ -253,7 +253,7 @@ export class Indexer {
 
   entityFilePaths(): string[] { return [...this.fileRecords.values()].filter(r=>!r.file.disabled).map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
-  readable(chunk: StoredChunk, beforeRuleReconciliation=false): boolean {
+  readable(chunk: Pick<StoredChunk,'sourcePath'|'refType'>, beforeRuleReconciliation=false): boolean {
     if(this.failures.has(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;

@@ -219,3 +219,5 @@ export { TrackerUnreadDot } from './readReceipts/TrackerUnreadDot';
 export * from './themes';
 
 export {memorySourceChanges,sameMemoryWorkspace,type MemorySourceChange} from './store/atoms/memorySources';
+export {memorySourceFoldersAtomFamily,memorySearchRootIdsAtomFamily,type MemorySourceFolder} from './store/atoms/memorySources';
+export {MemorySourcePicker} from './ui/MemorySourcePicker';

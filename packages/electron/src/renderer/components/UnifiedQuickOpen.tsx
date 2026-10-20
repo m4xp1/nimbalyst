@@ -20,7 +20,9 @@ import React, {
   useCallback,
   memo,
 } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { MemorySourcePicker } from '@nimbalyst/runtime/ui/MemorySourcePicker';
+import { memorySourceFoldersAtomFamily, memorySearchRootIdsAtomFamily } from '@nimbalyst/runtime/store/atoms/memorySources';
 import { usePostHog } from 'posthog-js/react';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { ProviderIcon } from '@nimbalyst/runtime/ui/icons/ProviderIcons';
@@ -405,6 +407,8 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
   // Memory search merges indexed docs, trackers, and sessions behind one tab.
   // The standalone Trackers tab remains available only when Memory is off.
   const [memoryScope, setMemoryScope] = useState<SemanticSearchScope>('all');
+  const memoryFolders = useAtomValue(memorySourceFoldersAtomFamily(workspacePath));
+  const [memoryRootIds, setMemoryRootIds] = useAtom(memorySearchRootIdsAtomFamily(workspacePath));
   const [promptActorScope, setPromptActorScope] = useState<PromptActorScope>('all');
   // Per-tab filter chip values, hoisted so they survive tab switches.
   const [fileExtFilter, setFileExtFilter] = usePersistedFilterValue(SELECTED_FILE_EXT_KEY);
@@ -797,6 +801,7 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
                   </button>
                 ))}
             </div>
+            {activeTab === 'search' && <MemorySourcePicker sources={memoryFolders} value={memoryRootIds} onChange={setMemoryRootIds}/>}
             {(activeTab === 'files' || activeTab === 'in-files') && (
               <FilterChip
                 label="Mask"
@@ -843,6 +848,8 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
                     typeFilter={trackerTypeFilter}
                     workspacePath={workspacePath}
                     includeSemantic
+                    rootIds={memoryRootIds}
+                    sourceFolders={memoryFolders}
                     onTrackerSelect={handleTrackerSelectDefault}
                     onClose={onClose}
                   />
@@ -852,6 +859,8 @@ export const UnifiedQuickOpen: React.FC<UnifiedQuickOpenProps> = ({
                     isActive={activeTab === 'search'}
                     query={activeTab === 'search' ? query : ''}
                     scope={memoryScope}
+                    rootIds={memoryRootIds}
+                    sourceFolders={memoryFolders}
                     workspacePath={workspacePath}
                     onTrackerSelect={handleTrackerSelectDefault}
                     onFileSelect={onFileSelect}
@@ -2811,7 +2820,23 @@ const MemoryScopeBubbles: React.FC<{
   />
 ));
 
+function useMemoryTrackerScope(items: TrackerItem[], workspacePath: string, rootIds: Array<string|null>|undefined, enabled: boolean, sourceFolders: unknown) {
+  const key=JSON.stringify([workspacePath,rootIds,items.map(item=>item.id),sourceFolders]);
+  const [resolved,setResolved]=useState<{key:string;ids:Set<string>;error:string|null}|null>(null);
+  useEffect(()=>{
+    if(!enabled)return;
+    let cancelled=false;
+    const filter=window.electronAPI.semanticSearch.filterTrackers;
+    if(!filter){setResolved({key,ids:new Set(rootIds===undefined?items.map(item=>item.id):[]),error:rootIds===undefined?null:'Memory source filtering is unavailable.'});return;}
+    filter(workspacePath,items.map(item=>item.id),rootIds).then(rows=>{if(!cancelled)setResolved({key,ids:new Set(rows.map(row=>row.id)),error:null});}).catch(error=>{if(!cancelled)setResolved({key,ids:new Set(),error:String(error.message??error)});});
+    return()=>{cancelled=true;};
+  },[key,enabled]);
+  return {items:!enabled?items:resolved?.key===key?items.filter(item=>resolved.ids.has(item.id)):[],error:enabled&&resolved?.key===key?resolved.error:null};
+}
+
 interface SearchPaneProps {
+  rootIds?: Array<string|null>;
+  sourceFolders?: unknown;
   isOpen: boolean;
   isActive: boolean;
   query: string;
@@ -2855,12 +2880,15 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
   isActive,
   query,
   scope,
+  rootIds,
+  sourceFolders,
   workspacePath,
   onTrackerSelect,
   onFileSelect,
   onSessionSelect,
   onClose,
 }) => {
+  const [searchError,setSearchError]=useState<string|null>(null);
   const [semanticResults, setSemanticResults] = useState<SemanticSearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -2874,6 +2902,7 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
   // queries never need it.
   const [keyLookupItems, setKeyLookupItems] = useState<TrackerItem[] | null>(null);
   const keyLookupRequested = useRef(false);
+  const scopedKeys=useMemoryTrackerScope(keyLookupItems??[],workspacePath,rootIds,Boolean(keyLookupItems),sourceFolders);
   // Only the merged "all" scope reaches trackers here; the dedicated Trackers
   // scope renders TrackersPane, which already matches on issue key.
   const issueKeyQuery =
@@ -2888,7 +2917,7 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
 
   useEffect(() => {
     setSemanticResults([]);
-  }, [scope]);
+  }, [scope,rootIds,sourceFolders]);
 
   // Debounced query → engine. Embedding the query is per-submit, not per
   // keystroke, so a short debounce keeps the dialog responsive.
@@ -2902,23 +2931,25 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
       return;
     }
     setIsLoading(true);
+    setSearchError(null);
+    setSemanticResults([]);
     const timer = setTimeout(() => {
       window.electronAPI.semanticSearch
-        .query(workspacePath, q, 25, scopeSpec.sourceClasses)
+        .query(workspacePath, q, 25, scopeSpec.sourceClasses,...(rootIds!==undefined?[rootIds]:[]))
         .then((res) => {
           if (reqId === latestReq.current) {
             setSemanticResults(Array.isArray(res) ? res : []);
           }
         })
-        .catch(() => {
-          if (reqId === latestReq.current) setSemanticResults([]);
+        .catch((error) => {
+          if (reqId === latestReq.current) {setSemanticResults([]);setSearchError(String(error.message??error));}
         })
         .finally(() => {
           if (reqId === latestReq.current) setIsLoading(false);
         });
     }, 200);
     return () => clearTimeout(timer);
-  }, [isOpen, isActive, visibleQuery, workspacePath, scopeSpec]);
+  }, [isOpen, isActive, visibleQuery, workspacePath, scopeSpec,rootIds,sourceFolders]);
 
   // Fetch the tracker list once, on the first key-shaped query.
   useEffect(() => {
@@ -2937,11 +2968,11 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
     () =>
       mergeIssueKeyMatches(
         issueKeyQuery && keyLookupItems
-          ? findTrackersByIssueKey(issueKeyQuery, keyLookupItems)
+          ? findTrackersByIssueKey(issueKeyQuery, scopedKeys.items)
           : [],
         semanticResults,
       ),
-    [issueKeyQuery, keyLookupItems, semanticResults],
+    [issueKeyQuery, scopedKeys.items, semanticResults],
   );
 
   useEffect(() => {
@@ -3016,6 +3047,7 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
 
   return (
     <div className="search-pane flex-1 overflow-y-auto">
+      {(searchError||scopedKeys.error)&&<p role="alert" className="px-4 text-nim-error">{searchError||scopedKeys.error}</p>}
       {results.length === 0 ? (
         <div className="p-10 text-center text-nim-faint">
           {!hasQuery
@@ -3088,6 +3120,8 @@ interface TrackersPaneProps {
   workspacePath: string;
   /** Merge ranked semantic tracker hits after exact title/key matches. */
   includeSemantic?: boolean;
+  rootIds?: Array<string|null>;
+  sourceFolders?: unknown;
   onTrackerSelect: (trackerId: string) => void;
   onClose: () => void;
 }
@@ -3099,11 +3133,15 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
   typeFilter,
   workspacePath,
   includeSemantic = false,
+  rootIds,
+  sourceFolders,
   onTrackerSelect,
   onClose,
 }) => {
   const [items, setItems] = useState<TrackerItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const scopedItems=useMemoryTrackerScope(items,workspacePath,rootIds,includeSemantic,sourceFolders);
+  const [searchError,setSearchError]=useState<string|null>(null);
   const [semanticResultIds, setSemanticResultIds] = useState<string[]>([]);
   const [isSemanticSearching, setIsSemanticSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -3142,9 +3180,11 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
     }
 
     setIsSemanticSearching(true);
+    setSemanticResultIds([]);
+    setSearchError(null);
     const timer = setTimeout(() => {
       window.electronAPI.semanticSearch
-        .query(workspacePath, q, 25, ['trackers'])
+        .query(workspacePath, q, 25, ['trackers'],...(rootIds!==undefined?[rootIds]:[]))
         .then((results) => {
           if (reqId !== latestSemanticReq.current) return;
           setSemanticResultIds(
@@ -3153,8 +3193,8 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
               .map((result) => result.refId),
           );
         })
-        .catch(() => {
-          if (reqId === latestSemanticReq.current) setSemanticResultIds([]);
+        .catch(error => {
+          if (reqId === latestSemanticReq.current) {setSemanticResultIds([]);setSearchError(String(error.message??error));}
         })
         .finally(() => {
           if (reqId === latestSemanticReq.current) setIsSemanticSearching(false);
@@ -3162,12 +3202,12 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
     }, 200);
 
     return () => clearTimeout(timer);
-  }, [includeSemantic, isActive, isOpen, visibleQuery, workspacePath]);
+  }, [includeSemantic, isActive, isOpen, visibleQuery, workspacePath,rootIds,sourceFolders]);
 
   // Hide archived items; apply type and exact-text filters in-memory, then
   // append any additional semantic matches without duplicating exact hits.
   const displayItems = useMemo(() => {
-    let pool = items.filter((it) => !it.archived);
+    let pool = scopedItems.items.filter((it) => !it.archived);
     if (typeFilter) {
       pool = pool.filter(
         (it) => it.type === typeFilter || (it.typeTags ?? []).includes(typeFilter),
@@ -3198,7 +3238,7 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
           (semanticRank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
       );
     return [...exactItems, ...semanticItems].slice(0, 200);
-  }, [includeSemantic, items, semanticResultIds, visibleQuery, typeFilter]);
+  }, [includeSemantic, scopedItems.items, semanticResultIds, visibleQuery, typeFilter]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -3251,6 +3291,7 @@ const TrackersPane: React.FC<TrackersPaneProps> = memo(({
 
   return (
     <div className="trackers-pane flex-1 overflow-y-auto">
+      {(searchError||scopedItems.error)&&<p role="alert" className="px-4 text-nim-error">{searchError||scopedItems.error}</p>}
       {displayItems.length === 0 ? (
         <div className="p-10 text-center text-nim-faint">
           {isLoading

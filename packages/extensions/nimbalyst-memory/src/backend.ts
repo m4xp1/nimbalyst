@@ -22,7 +22,7 @@ import { buildTreeIndexState, buildTreePolicyState, describeTreePolicy, resolveT
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import { MemoryEngine } from '../engine/dist/index.js';
+import { MemoryEngine,MEMORY_ROOT_IDS_SCHEMA } from '../engine/dist/index.js';
 import {
   buildProjectSearchResponse,
   buildPublicEngineStatus,
@@ -216,6 +216,7 @@ function resolvePlanPath(ref: string): string {
  * conversational essentials; the rest stay coding-agent-only.
  */
 const TOOL_DESCRIPTORS = [
+  {name:'list_sources',description:'List the primary and attached folders available to this workspace Memory index. Use their rootId values to restrict search_project_knowledge to one or several folders. This does not change indexing rules or filesystem permissions.',inputSchema:{type:'object',properties:{}},voiceAgent:true},
   {
     name: 'search_project_knowledge',
     description:
@@ -232,6 +233,7 @@ const TOOL_DESCRIPTORS = [
       properties: {
         query: { type: 'string', description: 'Natural-language or keyword query.' },
         k: { type: 'number', description: 'Max results (default 5).' },
+        rootIds:MEMORY_ROOT_IDS_SCHEMA,
       },
       required: ['query'],
     },
@@ -529,6 +531,7 @@ export async function activate(ctx: ActivateCtx) {
     log('info', `[memory] ${want.reason}`);
 
     engine = MemoryEngine.create(config, embedder);
+    engine.setSourceFolders(sourceRoots);
     log('info', `[memory] engine ready: root=${config.root} db=${config.dbPath}`);
 
     // Background initial index + live watch. Never blocks activation; the
@@ -570,8 +573,9 @@ export async function activate(ctx: ActivateCtx) {
   }
 
   function annotateRoot<T extends {sourcePath:string}>(hit:T) {
-    const root=sourceRoots.find(root=>root.id && hit.sourcePath.startsWith('@'+root.id+'/'));
-    return root ? {...hit,rootLabel:root.label,rootPath:root.path,relativePath:hit.sourcePath.slice(root.id!.length+2)} : hit;
+    const rootId=requireEngine().sourceRootOf(hit.sourcePath);
+    const root=sourceRoots.find(root=>root.id===rootId);
+    return {...hit,rootId,...(root?{rootLabel:root.label,rootPath:root.path,relativePath:rootId&&hit.sourcePath.startsWith('@'+rootId+'/')?hit.sourcePath.slice(rootId.length+2):hit.sourcePath}:{})};
   }
   let sourceTimer:ReturnType<typeof setTimeout>|undefined;
   let sourceGeneration=0;
@@ -627,6 +631,7 @@ export async function activate(ctx: ActivateCtx) {
     const signature = JSON.stringify(next);
     if (signature !== rootSignature) {
       sourceRoots = next; rootSignature = signature;
+      engine?.setSourceFolders(next);
       engine?.restrictSourceRoots(['harness-memory',...next.filter(root=>root.available&&root.id).map(root=>root.id!)]);
       engine?.cancelFileIndexing();
       await queueRuleChange(async()=>{applySources();});
@@ -659,7 +664,7 @@ export async function activate(ctx: ActivateCtx) {
       });},
       get_tree_index_state: async (params?:{revision?:string;paths?:string[];policyOnly?:boolean}) => {
         const eng=requireEngine();
-        if(params?.policyOnly){const state=buildTreePolicyState(treePolicy(),eng.treeDiagnostics());return state.revision===params.revision?{unchanged:true,revision:state.revision}:state;}
+        if(params?.policyOnly){const state=buildTreePolicyState(treePolicy(),eng.treeDiagnostics());return {...(state.revision===params.revision?{unchanged:true,revision:state.revision}:state),sourceRoots};}
         const status=eng.status();
         const state=await buildTreeIndexState(eng.ruleFilePaths((Array.isArray(params?.paths)?params.paths:[]).flatMap(file=>{
           if(typeof file!=='string'||!path.isAbsolute(file))return[];
@@ -708,13 +713,18 @@ export async function activate(ctx: ActivateCtx) {
         };
         return queueRuleChange(apply);
       },
-      search_project_knowledge: async (params: { query?: string; k?: number }) => {
+      list_sources: async () => ({sources:sourceRoots.filter(root=>root.id!=='harness-memory').map(root=>({rootId:root.id,label:root.label,path:root.path,available:root.available}))}),
+      filterTrackerIds: async (params:{ids:string[];rootIds?:Array<string|null>})=>requireEngine().filterTrackerIds(params.ids,params.rootIds),
+      search_project_knowledge: async (params: { query?: string; k?: number;rootIds?:Array<string|null> }) => {
         const query = String(params?.query ?? '');
         if (!query) throw new Error('query is required');
         const k = typeof params?.k === 'number' ? params.k : 5;
         const eng = requireEngine();
-        const chunks = (await eng.search(query, k)).map(annotateRoot);
+        const sourceScope=eng.searchScope(params.rootIds);
+        const chunks = (await eng.search(query, k,{rootIds:params.rootIds})).map(annotateRoot);
         return {
+          sourceScope,
+          sourceErrors:sourceRoots.filter(root=>!root.available&&sourceScope.rootIds.includes(root.id)).map(root=>({rootId:root.id,error:'Source folder is unavailable.'})),
           ...buildProjectSearchResponse(chunks, eng.retrievalCapabilities()),
           ...(chunks.some(chunk => chunk.refType === 'session') ? {
             sessionReadHint: 'For a quotation or specific fact, expand the indexed section if needed and label it indexed evidence. For current dialogue or decisions, use read_session with sessionId = the session hit refId, if that tool is available in your tool catalog (discover deferred tools through your existing discovery mechanism). Follow nextCursor to hasMore=false only for a task requiring the entire history; otherwise disclose partial reading. Do not mix snapshot versions; restart expired cursors from page one. If reading is unavailable or fails, report the limitation; indexed evidence does not prove complete current history.',
@@ -763,8 +773,10 @@ export async function activate(ctx: ActivateCtx) {
         query?: string;
         k?: number;
         sourceClasses?: string[];
+        rootIds?:Array<string|null>;
       }) => {
         const eng = requireEngine();
+        const sourceScope=eng.searchScope(params.rootIds);
         const query = String(params?.query ?? '').trim();
         if (!query) {
           const searchResponse = buildProjectSearchResponse([], eng.retrievalCapabilities());
@@ -772,6 +784,7 @@ export async function activate(ctx: ActivateCtx) {
             results: [] as GlobalSearchResult[],
             capabilities: searchResponse.capabilities,
             fallback: searchResponse.fallback,
+            sourceScope,
           };
         }
         const k = typeof params?.k === 'number' ? params.k : 20;
@@ -781,13 +794,14 @@ export async function activate(ctx: ActivateCtx) {
         const hits = await eng.search(
           query,
           Math.max(k * 4, 40),
-          sourceClasses?.length ? { sourceClasses } : undefined,
+          {sourceClasses:sourceClasses?.length?sourceClasses:undefined,rootIds:params.rootIds},
         );
         const searchResponse = buildProjectSearchResponse(hits, eng.retrievalCapabilities());
         return {
           results: collapseToEntities(hits, k).map(annotateRoot),
           capabilities: searchResponse.capabilities,
           fallback: searchResponse.fallback,
+          sourceScope,
         };
       },
 
@@ -1103,7 +1117,7 @@ export async function activate(ctx: ActivateCtx) {
       await engine?.close();
     },
   };
-  for (const name of ['search_project_knowledge','globalSearch','expand','read_doc','set_path_override'] as const) {
+  for (const name of ['list_sources','filterTrackerIds','search_project_knowledge','globalSearch','expand','read_doc','set_path_override'] as const) {
     const original=runtime.methods[name] as (...args:any[])=>Promise<any>;
     (runtime.methods as any)[name]=async (...args:any[])=>{await syncSourceRoots();return original(...args);};
   }

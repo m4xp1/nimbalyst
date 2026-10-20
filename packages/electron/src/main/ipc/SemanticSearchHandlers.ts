@@ -14,6 +14,10 @@ export const SEMANTIC_SEARCH_UNAVAILABLE = 'SEMANTIC_SEARCH_UNAVAILABLE';
  * engine is not ready so callers can distinguish that from a valid empty list.
  */
 export function registerSemanticSearchHandlers() {
+  safeHandle('semantic-search:tracker-ids',async(_event,workspacePath:string,ids:string[],rootIds?:Array<string|null>)=>{
+    if(!workspacePath||!Array.isArray(ids)||ids.some(id=>typeof id!=='string'))throw Error('workspacePath and tracker IDs are required');
+    return SemanticCatalogService.getInstance().filterTrackerIds(workspacePath,ids,rootIds);
+  });
   safeHandle(
     'semantic-search:available',
     async (_event, workspacePath: string): Promise<boolean> => {
@@ -30,6 +34,7 @@ export function registerSemanticSearchHandlers() {
       query: string,
       k?: number,
       sourceClasses?: string[],
+      rootIds?:Array<string|null>,
     ): Promise<SemanticSearchResult[]> => {
       if (!workspacePath || !query?.trim()) return [];
       const outcome = await SemanticCatalogService.getInstance().query(
@@ -37,6 +42,7 @@ export function registerSemanticSearchHandlers() {
         query,
         k ?? 20,
         Array.isArray(sourceClasses) && sourceClasses.length ? sourceClasses : undefined,
+        rootIds,
       );
       if (!outcome.available) {
         throw new Error(`${SEMANTIC_SEARCH_UNAVAILABLE}: memory index is not ready`);

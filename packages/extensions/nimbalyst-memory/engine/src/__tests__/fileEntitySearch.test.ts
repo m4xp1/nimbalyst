@@ -33,6 +33,37 @@ async function sparse(engine: MemoryEngine, query: string, classes?: string[]) {
   return (await engine.search(query,100,classes ? {sourceClasses:classes} : undefined)).filter(hit => hit.signals?.sparse);
 }
 describe('canonical file entity search', () => {
+  it('filters one or multiple roots before candidate limits and keeps virtual records in the primary workspace',async()=>{
+    const main=fixture(),link=fixture(),second=fixture();
+    writeFileSync(path.join(main,'docs/a.md'),'# Primary\nКорневойМаркер');
+    writeFileSync(path.join(link,'docs/a.md'),'# Linked\nКорневойМаркер');
+    writeFileSync(path.join(second,'docs/a.md'),'# Second\nКорневойМаркер');
+    const engine=open(main,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'second',path:second}}]});
+    await engine.indexAll();
+    await engine.ingestRecords(Array.from({length:80},(_,i)=>({id:'tracker:scope'+i,refType:'tracker',refId:'scope'+i,sourceClass:'trackers',text:'КорневойМаркер'})));
+    const one=await engine.search('КорневойМаркер',1,{rootIds:['link']} as any);
+    expect(one).toHaveLength(1);expect(one[0].sourcePath).toBe('@link/docs/a.md');
+    const many=await engine.search('КорневойМаркер',100,{rootIds:['link','second']} as any);
+    expect(new Set(many.map(hit=>hit.sourcePath))).toEqual(new Set(['@link/docs/a.md','@second/docs/a.md']));
+    const primary=await engine.search('КорневойМаркер',100,{rootIds:[null],sourceClasses:['trackers']});
+    expect(primary).toHaveLength(50); // Preserve the existing per-arm candidate cap.
+    expect(primary.every(hit=>hit.refType==='tracker')).toBe(true);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:[]} as any)).rejects.toThrow(/root|folder|source/i);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:['unknown']} as any)).rejects.toThrow(/root|folder|source/i);
+    engine.setSourceFolders([{id:null,path:main,label:'Main',available:true},{id:'link',path:link,label:'Link',available:false},{id:'second',path:second,label:'Second',available:true}]);
+    expect(await engine.search('КорневойМаркер',5,{rootIds:['link']})).toEqual([]);
+    expect(engine.expand('@link/docs/a.md',[])).toBeNull();
+    expect((await engine.search('КорневойМаркер',5,{rootIds:['second']}))[0].sourcePath).toBe('@second/docs/a.md');
+    engine.setSourceFolders([{id:null,path:main,label:'Main',available:true}]);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:['link']})).rejects.toThrow(/detached/i);
+  });
+  it('reuses only successful query vectors across scopes and concurrent searches',async()=>{
+    const root=fixture();writeFileSync(path.join(root,'docs/a.md'),'# Cached\nquerycachemarker');const engine=open(root);await engine.indexAll();
+    const embed=vi.spyOn((engine as any).embedder,'embed');
+    await Promise.all([engine.search('querycachemarker',5),engine.search('querycachemarker',5,{rootIds:[null]} as any)]);
+    expect(embed).toHaveBeenCalledOnce();await engine.search('querycachemarker');expect(embed).toHaveBeenCalledOnce();
+    embed.mockRejectedValueOnce(new Error('network test failure'));await engine.search('failed-query');await engine.search('failed-query');expect(embed).toHaveBeenCalledTimes(3);
+  });
   it('transitions old DOCUMENT and tracker copies to one TRACKER, retaining a standalone database card', async () => {
     const root = fixture(); writeFileSync(path.join(root,'docs/card.md'),markdown('quartzfilemarker'));
     const engine = open(root); await engine.indexAll();

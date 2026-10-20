@@ -60,6 +60,16 @@ async function setup() {
   return {callbacks,flush,sparse,setItems:(next:any[])=>{items=next;},getItems:()=>items};
 }
 describe('application file catalogue → actual Memory search', () => {
+  it('forwards selected roots without changing readiness on invalid scope',async()=>{
+    await setup();
+    vi.spyOn(catalog,'isAvailable').mockReturnValue(true);
+    const invalidate=vi.spyOn(catalog as any,'invalidateReadiness');
+    host.request.mockImplementation(async({method}:any)=>{if(method==='globalSearch')throw Error('MEMORY_SOURCE_SCOPE_INVALID: detached');return {ready:true,...engine.status()};});
+    const before=catalog.isAvailable(root);
+    await expect(catalog.query(root,'marker',20,['docs'],['link'])).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
+    expect(host.request).toHaveBeenCalledWith(expect.objectContaining({method:'globalSearch',params:{query:'marker',k:20,sourceClasses:['docs'],rootIds:['link']}}));
+    expect(catalog.isAvailable(root)).toBe(before);expect(invalidate).not.toHaveBeenCalled();
+  });
   it('keeps one searchable card for legacy Windows separator aliases with different metadata', async () => {
     const {setItems,getItems,callbacks,flush,sparse} = await setup();
     const file = getItems()[0];

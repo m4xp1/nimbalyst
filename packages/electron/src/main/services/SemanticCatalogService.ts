@@ -61,6 +61,7 @@ interface FileRecord extends VirtualRecord {
 
 /** Mirror of the backend `globalSearch` result shape. */
 export interface SemanticSearchResult {
+  rootId?:string|null;
   refType: string;
   refId: string;
   sourceClass: string;
@@ -368,6 +369,7 @@ export class SemanticCatalogService {
     query: string,
     k = 20,
     sourceClasses?: string[],
+    rootIds?:Array<string|null>,
   ): Promise<SemanticQueryOutcome> {
     if (!this.isAvailable(workspacePath)) {
       // The index may have gained its first chunks since our last check (from
@@ -384,16 +386,21 @@ export class SemanticCatalogService {
         moduleId: MODULE_ID,
         workspacePath,
         method: 'globalSearch',
-        params: { query, k, ...(sourceClasses?.length ? { sourceClasses } : {}) },
+        params: { query, k, ...(sourceClasses?.length ? { sourceClasses } : {}),...(rootIds!==undefined?{rootIds}:{}) },
         requiredPermission: null,
       });
       return { available: true, results: res?.results ?? [] };
     } catch (err) {
+      if(String((err as Error).message).includes('MEMORY_SOURCE_SCOPE_INVALID'))throw err;
       console.error('[SemanticCatalog] query failed:', (err as Error).message);
       const generation = this.invalidateReadiness(workspacePath);
       this.scheduleReadinessRefresh(workspacePath, generation);
       return { available: false, results: [] };
     }
+  }
+
+  async filterTrackerIds(workspacePath:string,ids:string[],rootIds?:Array<string|null>):Promise<Array<{id:string;rootId:string|null}>>{
+    return getPrivilegedExtensionHost().request({extensionId:EXT_ID,moduleId:MODULE_ID,workspacePath,method:'filterTrackerIds',params:{ids,...(rootIds!==undefined?{rootIds}:{})},requiredPermission:null});
   }
 
   private currentGeneration(workspacePath: string): number {

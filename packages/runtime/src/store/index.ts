@@ -79,3 +79,4 @@ export {
 } from './atoms/interactiveWidgetHost';
 
 export {memorySourceChangeAtom,sameMemoryWorkspace,type MemorySourceChange} from './atoms/memorySources';
+export {memorySourceFoldersAtomFamily,memorySearchRootIdsAtomFamily,type MemorySourceFolder} from './atoms/memorySources';

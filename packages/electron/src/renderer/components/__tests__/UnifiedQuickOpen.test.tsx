@@ -43,6 +43,7 @@ vi.mock('posthog-js/react', () => ({
   usePostHog: () => undefined,
 }));
 
+import {memorySourceFoldersAtomFamily,memorySearchRootIdsAtomFamily} from '@nimbalyst/runtime/store/atoms/memorySources';
 import { UnifiedQuickOpen } from '../UnifiedQuickOpen';
 import { NavigationDialogKeyboardHandler } from '../NavigationDialogKeyboardHandler';
 
@@ -768,4 +769,29 @@ describe('Quick Open Russian search and request freshness', () => {
     await act(async () => resolve([{ path: WORKSPACE + '/Старый.md', type: 'file' }]));
     expect(screen.queryByText('Старый.md')).toBeNull(); expect(screen.getByText(fullText('Новый.md'))).toBeTruthy();
   });
+});
+
+
+describe('Memory source folders',()=>{
+ it('combines the folder selection with type scope and preserves it when reopened',async()=>{
+  const api=setupElectronApiMock();api.semanticSearch.isAvailable.mockResolvedValue(true);
+  const store=createStore();store.set(memorySourceFoldersAtomFamily(WORKSPACE),[{id:null,label:'main',path:WORKSPACE,available:true},{id:'link',label:'link',path:'/link',available:true}]);
+  const view=renderQuickOpen({initialTab:'search'},store);
+  fireEvent.click(await screen.findByRole('button',{name:'Sources: All'}));
+  fireEvent.click(screen.getByLabelText('link'));
+  fireEvent.change(screen.getByTestId('unified-quick-open-search'),{target:{value:'СловоформаМаркер'}});
+  await waitFor(()=>expect(api.semanticSearch.query).toHaveBeenLastCalledWith(WORKSPACE,'СловоформаМаркер',25,undefined,['link']));
+  expect(store.get(memorySearchRootIdsAtomFamily(WORKSPACE))).toEqual(['link']);
+  view.unmount();renderQuickOpen({initialTab:'search'},store);
+  expect(await screen.findByRole('button',{name:'Sources: link'})).toBeTruthy();
+ });
+ it('does not leak exact tracker keys from a different folder',async()=>{
+  const api=setupElectronApiMock([{id:'other',issueKey:'BUG-123',title:'Outside folder',type:'bug',status:'open'}]);api.semanticSearch.isAvailable.mockResolvedValue(true);
+  Object.assign(api.semanticSearch,{filterTrackers:vi.fn().mockResolvedValue([])});
+  const store=createStore();store.set(memorySearchRootIdsAtomFamily(WORKSPACE),['link']);
+  renderQuickOpen({initialTab:'search'},store);
+  fireEvent.change(screen.getByTestId('unified-quick-open-search'),{target:{value:'BUG-123'}});
+  await waitFor(()=>expect((api.semanticSearch as any).filterTrackers).toHaveBeenCalledWith(WORKSPACE,['other'],['link']));
+  expect(screen.queryByText('Outside folder')).toBeNull();
+ });
 });

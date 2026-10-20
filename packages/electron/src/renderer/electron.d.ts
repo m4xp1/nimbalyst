@@ -164,6 +164,7 @@ interface TeamManagementWindowTarget {
 }
 
 interface SemanticSearchResult {
+  rootId?: string | null;
   rootLabel?: string;
   rootPath?: string;
   relativePath?: string;
@@ -281,12 +282,14 @@ interface ElectronAPI {
   };
   // Global semantic search (nimbalyst-memory). Empty/false when memory is off.
   semanticSearch: {
+    filterTrackers: (workspacePath: string, ids: string[], rootIds?: Array<string | null>) => Promise<Array<{id: string; rootId: string | null}>>;
     isAvailable: (workspacePath: string) => Promise<boolean>;
     query: (
       workspacePath: string,
       query: string,
       k?: number,
       sourceClasses?: string[],
+      rootIds?: Array<string | null>,
     ) => Promise<SemanticSearchResult[]>;
   };
 

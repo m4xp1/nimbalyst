@@ -1085,12 +1085,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Global semantic search (nimbalyst-memory engine). Returns empty / false when
   // the memory extension is disabled so the Quick Open Memory tab can hide.
   semanticSearch: {
+      filterTrackers:(workspacePath:string,ids:string[],rootIds?:Array<string|null>)=>ipcRenderer.invoke('semantic-search:tracker-ids',workspacePath,ids,rootIds) as Promise<Array<{id:string;rootId:string|null}>>,
     isAvailable: (workspacePath: string) =>
       ipcRenderer.invoke('semantic-search:available', workspacePath) as Promise<boolean>,
-    query: (workspacePath: string, query: string, k?: number, sourceClasses?: string[]) =>
-      ipcRenderer.invoke('semantic-search:query', workspacePath, query, k, sourceClasses) as Promise<
+      query: (workspacePath: string, query: string, k?: number, sourceClasses?: string[],rootIds?:Array<string|null>) =>
+        ipcRenderer.invoke('semantic-search:query', workspacePath, query, k, sourceClasses,...(rootIds!==undefined?[rootIds]:[])) as Promise<
         Array<{
           refType: string;
+            rootId?:string|null;
           refId: string;
           sourceClass: string;
           sourcePath: string;

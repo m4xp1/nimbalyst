@@ -20,6 +20,8 @@ import { SourceSettings } from './SourceSettings';
 import type { FileIndexStatus, SafeIndexError,FileOperation } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 import { coveragePalette } from './coveragePalette';
+import { MemorySourcePicker, memorySearchRootIdsAtomFamily } from '@nimbalyst/runtime';
+import { useAtom } from 'jotai';
 
 interface IndexStatus {
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
@@ -129,6 +131,9 @@ function relativeTime(ms: number | null | undefined): string {
 }
 
 export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }: SettingsPanelProps) {
+  const [searchRootIds,setSearchRootIds]=useAtom(memorySearchRootIdsAtomFamily(workspacePath??''));
+  const searchGeneration=useRef(0);
+  useEffect(()=>{searchGeneration.current++;setHits(null);setSearching(false);setSearchError(null);},[searchRootIds,workspacePath]);
   const isDark = theme === 'dark' || theme === 'crystal-dark';
   const muted = 'var(--nim-text-muted)';
 
@@ -448,21 +453,24 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     if (!callBackendTool) return;
     const q = query.trim();
     if (!q) return;
+    const generation=++searchGeneration.current;
     setSearching(true);
     setSearchError(null);
     try {
       const res = (await callBackendTool('memory.search_project_knowledge', {
         query: q,
         k: 6,
+        ...(searchRootIds!==undefined?{rootIds:searchRootIds}:{}),
       })) as { chunks?: SearchHit[] };
-      setHits(Array.isArray(res?.chunks) ? res.chunks : []);
+      if(generation===searchGeneration.current)setHits(Array.isArray(res?.chunks) ? res.chunks : []);
     } catch (err) {
+      if(generation!==searchGeneration.current)return;
       setSearchError(err instanceof Error ? err.message : String(err));
       setHits([]);
     } finally {
-      setSearching(false);
+      if(generation===searchGeneration.current)setSearching(false);
     }
-  }, [callBackendTool, query]);
+  }, [callBackendTool, query,searchRootIds]);
 
   // --- Derived ------------------------------------------------------------
 
@@ -1124,6 +1132,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
           >
             {searching ? 'Searching…' : 'Search'}
           </button>
+          <MemorySourcePicker sources={coverageRoots} value={searchRootIds} onChange={setSearchRootIds}/>
         </div>
 
         {searchError && <p style={ERR}>{searchError}</p>}

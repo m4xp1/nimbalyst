@@ -73,9 +73,23 @@ describe('MCP server adapter (end-to-end over in-memory transport)', () => {
     const client = await connect(engine);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['expand', 'index', 'read_doc', 'recall', 'remember', 'search_project_knowledge', 'status'].sort()
+      ['expand', 'index', 'list_sources', 'read_doc', 'recall', 'remember', 'search_project_knowledge', 'status'].sort()
     );
     await engine.close();
+  });
+
+  it('discovers configured folders and rejects invalid search scopes without host-only tools', async()=>{
+    const engine=await bootEngine('keyword-only');
+    const client=await connect(engine);
+    try {
+      const sources=parse(await client.callTool({name:'list_sources',arguments:{}})) as any;
+      expect(sources.sources).toEqual([expect.objectContaining({rootId:null,available:true})]);
+      const selected=parse(await client.callTool({name:'search_project_knowledge',arguments:{query:'realtime',rootIds:[null]}})) as any;
+      expect(selected.chunks[0]).toMatchObject({rootId:null,sourcePath:'docs/voice.md'});
+      expect(selected.sourceScope).toEqual({mode:'selected',rootIds:[null]});
+      for(const rootIds of [[],['foreign']])expect((await client.callTool({name:'search_project_knowledge',arguments:{query:'realtime',rootIds}})).isError).toBe(true);
+      expect((await client.listTools()).tools.some(tool=>tool.name==='read_session')).toBe(false);
+    } finally {await client.close();await engine.close();}
   });
 
   it('search_project_knowledge returns grounded chunks with citations', async () => {

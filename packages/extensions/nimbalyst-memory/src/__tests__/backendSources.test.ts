@@ -4,6 +4,28 @@ import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,wr
 import { activate } from '../backend';
 import { Indexer,MemoryEngine } from '../../engine/dist/index.js';
 describe('source settings backend bridge',()=>{
+ it('exposes folder IDs and applies scopes to MCP, Quick Open and exact tracker lookup',async()=>{
+  const base=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-search-scopes-'))),root=path.join(base,'main'),link=path.join(base,'link');
+  for(const dir of [root,link]){mkdirSync(path.join(dir,'docs'),{recursive:true});writeFileSync(path.join(dir,'docs/a.md'),'# Тест\nОбщийПоисковыйМаркер');}
+  let roots=[{id:null as string|null,path:root,label:'main',available:true},{id:'attached-link',path:link,label:'link',available:true}];
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(base,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySourceRoots:async()=>roots}});
+  try{
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   const sources=await runtime.methods.list_sources() as any;expect(sources.sources.map((s:any)=>s.rootId)).toEqual([null,'attached-link']);
+   const selected=await runtime.methods.search_project_knowledge({query:'ОбщийПоисковыйМаркер',rootIds:['attached-link']}) as any;
+   expect(selected.chunks).toHaveLength(1);expect(selected.chunks[0]).toMatchObject({rootId:'attached-link',rootLabel:'link'});
+   expect(selected.sourceScope).toEqual({mode:'selected',rootIds:['attached-link']});
+   const primary=await runtime.methods.globalSearch({query:'ОбщийПоисковыйМаркер',rootIds:[null],sourceClasses:['docs']}) as any;
+   expect(primary.results).toHaveLength(1);expect(primary.results[0].rootId).toBeNull();
+   expect((await runtime.methods.globalSearch({query:'ОбщийПоисковыйМаркер'}) as any).results).toHaveLength(2);
+   await runtime.methods.ingestRecords({records:[{id:'tracker:db',refType:'tracker',refId:'db',sourceClass:'trackers',text:'DBМаркер'}]});
+   expect(await runtime.methods.filterTrackerIds({ids:['db'],rootIds:['attached-link']})).toEqual([]);
+   expect(await runtime.methods.filterTrackerIds({ids:['db'],rootIds:[null]})).toEqual([{id:'db',rootId:null}]);
+   await expect(runtime.methods.globalSearch({query:'ОбщийПоисковыйМаркер',rootIds:[]})).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
+   roots=[roots[0]];await runtime.methods.list_sources();
+   await expect(runtime.methods.search_project_knowledge({query:'ОбщийПоисковыйМаркер',rootIds:['attached-link']})).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
+  }finally{await runtime.deactivate();rmSync(base,{recursive:true,force:true});}
+ });
  it('acknowledges one background rebuild while its indexing is still running and preserves legacy completion',async()=>{
   const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-background-rebuild-')));
   const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
