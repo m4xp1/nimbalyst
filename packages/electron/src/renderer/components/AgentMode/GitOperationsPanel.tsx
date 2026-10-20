@@ -10,12 +10,12 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/types';
 import {
   gitCommitsAtom,
-  isCommittingAtom,
+  isCommittingAtomFamily,
   worktreeRefreshCounterAtom,
 } from '../../store/atoms/gitOperations';
 import {
@@ -24,7 +24,8 @@ import {
   workstreamChildrenAtom,
   setWorkstreamStagedFilesAtom,
   setWorkstreamCommitMessageAtom,
-  clearWorkstreamGitStateAtom,
+  settleWorkstreamCommitAtom,
+  workstreamStateAtom,
 } from '../../store/atoms/workstreamState';
 import { worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
 import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
@@ -93,8 +94,14 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const statusObserver=useRef<ReturnType<typeof watchGitStatus>|null>(null);
     const gitCommits = useAtomValue(gitCommitsAtom);
     const setGitCommits = useSetAtom(gitCommitsAtom);
-    const isCommitting = useAtomValue(isCommittingAtom);
-    const setIsCommitting = useSetAtom(isCommittingAtom);
+    const atomStore=useStore();
+    const committingAtom=isCommittingAtomFamily(workspacePath);
+    const isCommitting=useAtomValue(committingAtom);
+    const setIsCommitting=useSetAtom(committingAtom);
+    const commitFlight=useRef(false);
+    const contextKey=JSON.stringify([workspacePath,workstreamId]);
+    const panelContext=useRef(contextKey);panelContext.current=contextKey;
+    const [commitFeedback,setCommitFeedback]=useState<{context:string;error?:string;message?:string}|null>(null);
 
     /**
      * Repository the branch/ahead-behind readout and the recent-commit list
@@ -151,7 +158,7 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const setStagedFilesAction = useSetAtom(setWorkstreamStagedFilesAtom);
     const commitMessage = useAtomValue(workstreamCommitMessageAtom(workstreamId));
     const setCommitMessageAction = useSetAtom(setWorkstreamCommitMessageAtom);
-    const clearGitState = useSetAtom(clearWorkstreamGitStateAtom);
+    const settleCommit=useSetAtom(settleWorkstreamCommitAtom);
 
     // Helper functions to wrap atom actions with workstreamId
     const setStagedFiles = useCallback((files: Set<string>) => {
@@ -301,22 +308,8 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       setSelectedAgentModel(defaultModel);
     }, [defaultModel]);
 
-    // Clear git state when there are no more uncommitted changes.
-    // `gitStatus` describes `statusRepoPath` alone, so in a multi-repo workspace
-    // a clean repo says nothing about files staged from a sibling repo -- only
-    // clear once nothing outside this repo is still staged.
-    const hasStagedOutsideStatusRepo = useMemo(
-      () => stagedFilesArr.some(
-        (filePath) => filePath.startsWith('/') && !isPathInWorkspace(filePath, statusRepoPath)
-      ),
-      [stagedFilesArr, statusRepoPath]
-    );
-    useEffect(() => {
-      if (gitStatus && !gitStatus.hasUncommitted && !hasStagedOutsideStatusRepo) {
-        clearGitState(workstreamId);
-      }
-    }, [gitStatus, hasStagedOutsideStatusRepo, clearGitState, workstreamId]);
-
+    // A clean status snapshot must not erase an in-flight or newly typed draft.
+    // Selection and message are settled atomically from the actual commit result.
     // Reuse main-process snapshots; do not overwrite the title bar's repository state.
     const fetchGitStatus=useCallback(()=>statusObserver.current?.refresh(),[]);
     useEffect(()=>{
@@ -330,10 +323,11 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     // Fetch recent commits
     const fetchCommits = useCallback(async () => {
       if (!statusRepoPath) return;
+      const requestedContext=panelContext.current;
       try {
         if (window.electronAPI) {
           const result = await window.electronAPI.invoke('git:log', statusRepoPath, 10);
-          setGitCommits(result as any);
+          if(requestedContext===panelContext.current)setGitCommits(result as any);
         }
       } catch (error) {
         console.error('[GitOperationsPanel] Failed to fetch commits:', error);
@@ -360,75 +354,28 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       };
     }, [statusRepoPath, fetchCommits]);
 
-    // Handle manual commit
-    const handleManualCommit = useCallback(async () => {
-      if (!commitMessage?.trim() || stagedFiles.size === 0) {
-        return;
-      }
-
-      setIsCommitting(true);
-      try {
-        if (window.electronAPI) {
-          const filesToCommit = Array.from(stagedFiles);
-          const result = (await window.electronAPI.invoke(
-            'git:commit',
-            workspacePath,
-            commitMessage,
-            filesToCommit
-          )) as {
-            success: boolean;
-            commitHash?: string;
-            error?: string;
-            committedFiles?: string[];
-          };
-
-          // A selection spanning two repos becomes two commits, and the second
-          // can fail after the first lands. Keep whatever did not commit
-          // selected so the retry is precise instead of starting from nothing.
-          const committed = new Set(result.committedFiles ?? (result.success ? filesToCommit : []));
-          const remaining = filesToCommit.filter((filePath) => !committed.has(filePath));
-
-          if (remaining.length === 0) {
-            // Clear all git state (commit message, staged files)
-            clearGitState(workstreamId);
-          } else {
-            if (committed.size > 0) {
-              setStagedFilesAction({ workstreamId, files: remaining });
-            }
-            if (!result.success) {
-              console.error('[GitOperationsPanel] Commit failed:', result.error);
-            }
-          }
-
-          if (committed.size > 0) {
-            // Refresh git status and commits
-            const [newStatus, newCommits] = await Promise.all([
-              window.electronAPI.invoke('git:status', statusRepoPath),
-              window.electronAPI.invoke('git:log', statusRepoPath, 10),
-            ]);
-            setGitStatus(newStatus as any);
-            setGitCommits(newCommits as any);
-          }
+    // Capture the latest atom values on the first click, before crossing IPC.
+    const handleManualCommit=useCallback(async()=>{
+      if(commitFlight.current||atomStore.get(committingAtom))return;
+      const draft=atomStore.get(workstreamStateAtom(workstreamId));
+      const message=draft.commitMessage;
+      const files=draft.stagedFiles.filter(isWorkspaceCommittablePath);
+      if(!message?.trim()||!files.length)return;
+      commitFlight.current=true;setIsCommitting(true);
+      setCommitFeedback({context:contextKey,message:'Committing…'});
+      try{
+        if(!window.electronAPI)throw Error('Git is unavailable.');
+        const result=await window.electronAPI.invoke('git:commit',workspacePath,message,files) as {success:boolean;error?:string;committedFiles?:string[]};
+        const committedFiles=(result.committedFiles??(result.success?files:[])).filter(file=>files.includes(file));
+        if(committedFiles.length)settleCommit({workstreamId,message,files,committedFiles});
+        if(panelContext.current===contextKey){
+          setCommitFeedback(result.success&&committedFiles.length?{context:contextKey,message:'Committed.'}:{context:contextKey,error:result.error??'No selected files were committed.'});
+          if(committedFiles.length){void fetchGitStatus();void fetchCommits();}
         }
-      } catch (error) {
-        // Leave the message and selection alone: nothing is known to have
-        // committed, and clearing them makes the retry harder, not easier.
-        console.error('[GitOperationsPanel] Commit failed:', error);
-      } finally {
-        setIsCommitting(false);
-      }
-    }, [
-      commitMessage,
-      stagedFiles,
-      workspacePath,
-      workstreamId,
-      setIsCommitting,
-      clearGitState,
-      setStagedFilesAction,
-      statusRepoPath,
-      setGitStatus,
-      setGitCommits,
-    ]);
+      }catch(error){
+        if(panelContext.current===contextKey)setCommitFeedback({context:contextKey,error:error instanceof Error?error.message:String(error)});
+      }finally{commitFlight.current=false;setIsCommitting(false);}
+    },[atomStore,committingAtom,workstreamId,isWorkspaceCommittablePath,contextKey,workspacePath,settleCommit,setIsCommitting,fetchGitStatus,fetchCommits]);
 
     // Handle smart commit (AI-assisted)
     const handleSmartCommit = useCallback(async () => {
@@ -1404,6 +1351,7 @@ Please proceed with this strategy.`;
                     >
                       {isCommitting ? 'Committing...' : `Commit (${stagedFiles.size})`}
                     </button>
+                    {commitFeedback?.context===contextKey&&<p role={commitFeedback.error?'alert':'status'} className={commitFeedback.error?'text-xs text-[var(--nim-error)] m-0':'text-xs text-[var(--nim-text-muted)] m-0'}>{commitFeedback.error??commitFeedback.message}</p>}
                   </div>
                 )}
 

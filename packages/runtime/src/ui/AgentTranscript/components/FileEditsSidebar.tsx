@@ -836,7 +836,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
         )}
         {editedFiles.length === 0 ? (
           <div className="file-edits-sidebar__empty p-4 text-[var(--nim-text-faint)] text-sm text-center">
-            {scopeMode === 'current-changes' && totalSessionFilesCount && totalSessionFilesCount > 0 ? (
+            {scopeMode === 'current-changes' && (totalSessionFilesCount ?? 0) > 0 ? (
               // Uncommitted Session Edits mode with no uncommitted changes
               <div className="flex flex-col items-center">
                 <div>No uncommitted changes</div>
@@ -848,7 +848,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
                     Show all session edits ({totalSessionFilesCount})
                   </button>
                 )}
-                {onShowAllUncommitted && totalUncommittedCount && totalUncommittedCount > 0 && (
+                {onShowAllUncommitted && (totalUncommittedCount ?? 0) > 0 && (
                   <button
                     onClick={onShowAllUncommitted}
                     className="mt-2 text-[var(--nim-primary)] hover:underline cursor-pointer bg-transparent border-none text-sm"
@@ -861,7 +861,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
               // Uncommitted Session Edits mode with no session files at all
               <>
                 <div>No files edited yet</div>
-                {onShowAllUncommitted && totalUncommittedCount && totalUncommittedCount > 0 && (
+                {onShowAllUncommitted && (totalUncommittedCount ?? 0) > 0 && (
                   <button
                     onClick={onShowAllUncommitted}
                     className="mt-2 text-[var(--nim-primary)] hover:underline cursor-pointer bg-transparent border-none text-sm"
@@ -874,7 +874,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
               // All Session Edits mode with no files
               <>
                 <div>No files edited in this session</div>
-                {onShowAllUncommitted && totalUncommittedCount && totalUncommittedCount > 0 && (
+                {onShowAllUncommitted && (totalUncommittedCount ?? 0) > 0 && (
                   <button
                     onClick={onShowAllUncommitted}
                     className="mt-2 text-[var(--nim-primary)] hover:underline cursor-pointer bg-transparent border-none text-sm"
@@ -887,7 +887,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
               // All Uncommitted Files mode with no files
               <>
                 <div>No uncommitted files</div>
-                {onShowSessionFiles && totalSessionFilesCount && totalSessionFilesCount > 0 && (
+                {onShowSessionFiles && (totalSessionFilesCount ?? 0) > 0 && (
                   <button
                     onClick={onShowSessionFiles}
                     className="mt-2 text-[var(--nim-primary)] hover:underline cursor-pointer bg-transparent border-none text-sm"
@@ -908,7 +908,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
               editedFiles.map(file => renderFile(file))
             )}
             {/* Show link to all uncommitted files when in session-files mode and there are additional uncommitted files */}
-            {scopeMode === 'session-files' && onShowAllUncommitted && totalUncommittedCount && totalUncommittedCount > editedFiles.length && (
+            {scopeMode === 'session-files' && onShowAllUncommitted && (totalUncommittedCount ?? 0) > editedFiles.length && (
               <div className="file-edits-sidebar__uncommitted-hint px-2 py-3 text-center">
                 <button
                   onClick={onShowAllUncommitted}

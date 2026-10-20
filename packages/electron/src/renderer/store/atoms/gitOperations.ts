@@ -48,7 +48,7 @@ const commitMessageAtomFamily = atomFamily((_workspacePath: string) =>
   atom<string>('')
 );
 
-const isCommittingAtomFamily = atomFamily((_workspacePath: string) =>
+export const isCommittingAtomFamily = atomFamily((_workspacePath: string) =>
   atom<boolean>(false)
 );
 
