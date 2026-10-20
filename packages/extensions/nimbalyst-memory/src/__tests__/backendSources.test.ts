@@ -1,9 +1,34 @@
-import {treePolicyIncludes} from '../../engine/src/ruleProgram';
 // @vitest-environment node
+import {treePolicyIncludes} from '../../engine/src/ruleProgram';
 import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,realpathSync } from 'node:fs';import { tmpdir } from 'node:os';import path from 'node:path';
 import { activate } from '../backend';
 import { Indexer,MemoryEngine } from '../../engine/dist/index.js';
 describe('source settings backend bridge',()=>{
+ it('acknowledges one background rebuild while its indexing is still running and preserves legacy completion',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-background-rebuild-')));
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
+  let index:ReturnType<typeof vi.spyOn>|undefined;
+  try{
+   await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+   index=vi.spyOn(MemoryEngine.prototype,'indexAll').mockImplementation(async()=>{await gate;return{indexed:0,files:0};});
+   const ack=await runtime.methods.rebuild({background:true});expect(ack).toMatchObject({ok:true,queued:true,operationId:expect.any(Number)});
+   expect(await runtime.methods.rebuild({background:true})).toEqual(ack);
+   expect((await runtime.methods.status() as any).indexing).toBe(true);
+   const legacy=runtime.methods.rebuild();release();await expect(legacy).resolves.toMatchObject({ok:true,indexed:0,files:0});
+   expect(index).toHaveBeenCalledOnce();
+  }finally{release();index?.mockRestore();await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+ it('reads confirmed rules without waiting for unrelated source-root filesystem checks',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-fast-rule-read-')));
+  let hold=false,release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySourceRoots:async()=>{if(hold)await gate;return[{id:null,path:root,label:'main',available:true,treePaths:[root]}];}}});
+  try {
+   hold=true;
+   const result=await Promise.race([runtime.methods.get_sources().then(()=> 'rules'),new Promise<string>(resolve=>setTimeout(()=>resolve('blocked'),100))]);
+   expect(result).toBe('rules');
+  } finally {hold=false;release();await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
  it('adds current-reading guidance only to desktop MCP session hits while preserving mixed search and reader identity',async()=>{
   const root=mkdtempSync(path.join(tmpdir(),'memory-reading-hint-'));
   mkdirSync(path.join(root,'docs'));writeFileSync(path.join(root,'docs/a.md'),'# Document\nОбщийПоисковыйМаркер ТолькоДокументМаркер');

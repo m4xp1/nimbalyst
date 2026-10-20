@@ -124,7 +124,7 @@ export function createMcpServer(engine: MemoryEngine): Server {
           if (!query) throw new McpError(ErrorCode.InvalidParams, 'query is required');
           const k = typeof args.k === 'number' ? args.k : 5;
           const chunks = await engine.search(query, k);
-          return jsonResult(buildProjectSearchResponse(chunks, engine.status().retrieval));
+          return jsonResult(buildProjectSearchResponse(chunks, engine.retrievalCapabilities()));
         }
         case 'expand': {
           const sourcePath = String(args.sourcePath ?? '');

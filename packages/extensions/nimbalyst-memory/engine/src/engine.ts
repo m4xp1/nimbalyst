@@ -112,6 +112,20 @@ export class MemoryEngine {
   private embedderChanged = false;
   /** Last query-embedding error message, or null if the last embed succeeded. */
   private lastEmbedError: string | null = null;
+  private readableSources = new Map<string, boolean>();
+  private aggregateCache = new Map<string | null | undefined, Pick<EngineStatus,
+    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'>>();
+  private storedSummaries: ReturnType<SqliteStore['sourceSummaries']> | undefined;
+
+  private invalidateView(): void {
+    this.readableSources.clear();this.aggregateCache.clear();this.storedSummaries=undefined;
+  }
+
+  /** Query capabilities do not aggregate the catalog or consult the filesystem. */
+  retrievalCapabilities(): RetrievalCapabilities {
+    const available=this.embedder.info.dims>0&&!this.lastEmbedError;
+    return {mode:available?'hybrid':'keyword-only',semantic:available?{available:true}:{available:false,reason:'optional-embedding-provider-unavailable'},keyword:{available:true,source:'local-project-index'}};
+  }
 
   private log(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
     this.config.onLog?.(level, message);
@@ -177,7 +191,7 @@ export class MemoryEngine {
     const remaining=base.remainingFiles??(base.discoveredFiles===null?null:Math.max(0,base.discoveredFiles-(base.completedFiles??0)-(base.failedFiles??0)));
     const error=failures[0]?.error??base.globalError??(base.phase==='enumerate'?base.error:null);
     const settled=base.state!=='not-started' && base.state!=='building';
-    const hasSaved=rootId===undefined?this.store.count()>0:this.store.sourceSummaries().some(row=>this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
+    const hasSaved=(this.storedSummaries??=this.store.sourceSummaries()).some(row=>rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
     return {...base,remainingFiles:remaining,failedFiles:failures.length,failureCount:failures.length,failures:failures.slice(0,100),error,
       completedFiles:settled&&base.discoveredFiles!==null?Math.max(0,base.discoveredFiles-(remaining??0)-failures.length):base.completedFiles,
       state:this.indexing?'building':failures.length || error || (remaining??0)>0?(hasSaved?'partial':'failed'):settled?'ready':base.state};
@@ -194,15 +208,19 @@ export class MemoryEngine {
   // Rules describe desired membership; search changes when the background job
   // actually reconciles the store. Access/root removal and failures still apply.
   private availableSourceRoots:Set<string>|null=null;
-  restrictSourceRoots(ids:string[]):void{this.availableSourceRoots=new Set(ids);}
+  restrictSourceRoots(ids:string[]):void{this.availableSourceRoots=new Set(ids);this.invalidateView();}
   private sourceRootAllowed(sourcePath:string):boolean {
     return !sourcePath.startsWith('@')||!this.availableSourceRoots||this.availableSourceRoots.has(sourcePath.slice(1).split('/')[0]);
   }
   private pendingReadableSources:Set<string>|null=null;
   private readable(chunk:StoredChunk):boolean {
-    return this.sourceRootAllowed(chunk.sourcePath)&&this.indexer.readable(chunk,this.pendingReadableSources?.has(chunk.sourcePath)===true);
+    if(!this.sourceRootAllowed(chunk.sourcePath)||this.indexer.sourceFailed(chunk.sourcePath))return false;
+    let readable=this.readableSources.get(chunk.sourcePath);
+    if(readable===undefined){readable=this.indexer.readable(chunk,this.pendingReadableSources?.has(chunk.sourcePath)===true);this.readableSources.set(chunk.sourcePath,readable);}
+    return readable;
   }
   private refreshSnapshot(): void {
+    this.invalidateView();
     this.snapshot=this.store.loadAll();
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
@@ -304,6 +322,7 @@ export class MemoryEngine {
   ):Promise<{indexed:number;files:number}> {
     if(this.closed)return Promise.reject(Error('Memory is closed.'));
     if(!this.pendingReadableSources)this.pendingReadableSources=new Set(this.snapshot.filter(chunk=>this.readable(chunk)).map(chunk=>chunk.sourcePath));
+    this.invalidateView();
     const previous=this.indexer;
     previous.cancel();
     if(this.indexing)this.interruptedScan=true;
@@ -369,6 +388,7 @@ export class MemoryEngine {
 
   async syncFileRecords(records: FileRecord[], obsoleteIds: string[] = []): Promise<void> {
     await this.fileWork.run(async()=>{
+    this.invalidateView();
     this.activeSourcePaths=[...new Set([...this.store.getFileRecords(),...records].flatMap(record=>{try{return[resolveInRoots(this.roots,record.file.path).abs];}catch{return[];}}))];
     try {
       for (const id of obsoleteIds) this.store.deleteSource(id);
@@ -552,41 +572,28 @@ export class MemoryEngine {
   // --- Lifecycle -----------------------------------------------------------
 
   status(rootId?:string|null): EngineStatus {
-    const summaries=this.store.sourceSummaries().filter(row=>(!row.sourcePath.startsWith('@')||this.roots.some(root=>root.id&&row.sourcePath.startsWith('@'+root.id+'/'))) && (rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
+    let counts=this.aggregateCache.get(rootId);
+    if(!counts){
+    const summaries=(this.storedSummaries??=this.store.sourceSummaries()).filter(row=>(!row.sourcePath.startsWith('@')||this.roots.some(root=>root.id&&row.sourcePath.startsWith('@'+root.id+'/'))) && (rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const bySourceClass:Record<string,number>={};
     for(const row of summaries)bySourceClass[row.sourceClass]=(bySourceClass[row.sourceClass]??0)+row.chunks;
     const chunks=summaries.reduce((n,row)=>n+row.chunks,0),dense=summaries.reduce((n,row)=>n+row.dense,0);
     const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
     const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,sessions:new Set(availableRows.filter(r=>r.refType==='session').map(r=>r.sourcePath)).size,trackers:new Set(availableRows.filter(r=>r.refType==='tracker').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
-    const semanticAvailable = this.embedder.info.dims > 0 && !this.lastEmbedError;
-    const retrieval: RetrievalCapabilities = {
-      mode: semanticAvailable ? 'hybrid' : 'keyword-only',
-      semantic: semanticAvailable
-        ? { available: true }
-        : {
-            available: false,
-            reason: 'optional-embedding-provider-unavailable',
-          },
-      keyword: { available: true, source: 'local-project-index' },
-    };
+    counts={available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
+    this.aggregateCache.set(rootId,counts);
+    }
     return {
-      available,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
-      chunks,
-      denseChunks:dense,
-      bySourceClass,
-      sourceFiles: new Set(summaries.map(row=>row.sourcePath)).size,
-      lastIndexedAt: summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,
+      ...counts,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
       embedder: this.embedder.info,
       embedderChanged: this.embedderChanged,
       indexing: rootId===undefined?this.operation?.state==='running'||this.operation?.state==='queued':this.rootOperations[rootId??'primary']?.state==='running',
       fileIndex:this.fileStatus(rootId),
-      indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,
       watching: this.watcher?.isWatching(rootId) ?? false,
-      chunksWithoutVectors: chunks-dense,
       embeddingError: this.lastEmbedError ? safeIndexError(new Error(this.lastEmbedError)) : null,
       lastEmbedError: this.lastEmbedError,
-      retrieval,
+      retrieval:this.retrievalCapabilities(),
       root: this.config.root,
     };
   }
