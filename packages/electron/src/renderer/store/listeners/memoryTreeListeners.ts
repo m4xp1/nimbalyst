@@ -1,10 +1,11 @@
 import {treePolicyIncludes,type MemoryTreePolicy} from '../../../../../extensions/nimbalyst-memory/engine/src/ruleProgram';
 import {memorySourceChangeAtom,sameMemoryWorkspace,store} from '@nimbalyst/runtime/store';
+import {memorySourceFoldersAtomFamily} from '@nimbalyst/runtime/store/atoms/memorySources';
 import {memoryTreeAvailableAtom,memoryTreeIncludedPathsAtom,memoryTreePathKey,memoryTreeErrorsAtom,memoryTreeIndexingAtom} from '../atoms/memoryTree';
 import {rawFileTreeAtom,type RendererFileTreeItem} from '../atoms/fileTree';
 interface Context {workspacePath:string;disposed:boolean;epoch:number;busy:boolean;pending:boolean;revision?:string;policy?:MemoryTreePolicy;}
 let active:Context|undefined;
-function clear(){store.set(memoryTreeErrorsAtom,new Map<string,string>());store.set(memoryTreeIndexingAtom,false);store.set(memoryTreeAvailableAtom,false);store.set(memoryTreeIncludedPathsAtom,new Set<string>());}
+function clear(){if(active)store.set(memorySourceFoldersAtomFamily(active.workspacePath),[]);store.set(memoryTreeErrorsAtom,new Map<string,string>());store.set(memoryTreeIndexingAtom,false);store.set(memoryTreeAvailableAtom,false);store.set(memoryTreeIncludedPathsAtom,new Set<string>());}
 function applyPolicy(ctx:Context,policy:MemoryTreePolicy):void {
  ctx.policy=policy;const included=new Set<string>(),nodes:RendererFileTreeItem[]=[...store.get(rawFileTreeAtom)];
  while(nodes.length){const node=nodes.pop()!;if(treePolicyIncludes(policy,node.path,node.type==='directory')){
@@ -19,6 +20,11 @@ async function backend(ctx:Context,toolName:string,args:Record<string,unknown>={
 }
 function applyState(ctx:Context,state:any):void {
  if(!state || typeof state.revision!=='string')throw Error('Memory source state unavailable');
+ if(Array.isArray(state.sourceRoots)){
+  const next=state.sourceRoots.filter((root:any)=>root.id!=='harness-memory').map((root:any)=>({id:root.id,label:root.label,path:root.path,available:root.available}));
+  const atom=memorySourceFoldersAtomFamily(ctx.workspacePath);
+  if(JSON.stringify(store.get(atom))!==JSON.stringify(next))store.set(atom,next);
+ }
  if(!state.unchanged){
   if(!Array.isArray(state.files)||!Array.isArray(state.directories))throw Error('Invalid Memory source state');
   if(state.treePolicy)applyPolicy(ctx,state.treePolicy);else if(ctx.policy)applyPolicy(ctx,ctx.policy);else store.set(memoryTreeIncludedPathsAtom,new Set([...state.files,...state.directories].map(memoryTreePathKey)));

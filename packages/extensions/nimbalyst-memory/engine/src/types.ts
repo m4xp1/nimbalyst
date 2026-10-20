@@ -65,6 +65,17 @@ export interface Chunk {
 
 export type ChunkGranularity = 'chunk' | 'page';
 
+/** Logical folders selectable for retrieval; harness memory belongs to primary. */
+export interface MemorySourceFolder {
+  id:string|null;path:string;label:string;available:boolean;error?:string;
+}
+export interface MemorySearchOptions {sourceClasses?:string[];rootIds?:Array<string|null>;}
+export interface MemorySearchScope {mode:'all'|'selected';rootIds:Array<string|null>;}
+export const MEMORY_ROOT_IDS_SCHEMA = {
+  type:'array',minItems:1,items:{anyOf:[{type:'string'},{type:'null'}]},
+  description:'Optional folder IDs from list_sources. Omit for All; [null] selects the primary workspace; select one or several IDs. An empty array is invalid. Separate from content categories.',
+} as const;
+
 /**
  * Legacy upper bound for the page overview. The actual excerpt is additionally
  * constrained by the byte-safe embedding body budget. Chunk rows retain full

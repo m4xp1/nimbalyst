@@ -94,3 +94,6 @@ src/
   mcp/server.ts         MCP adapter over the engine
   serve.ts              thin stdio launcher
 ```
+
+
+Search scope: `list_sources` returns configured folder IDs. Pass optional `rootIds` to `search_project_knowledge` for one or several folders (`null` means the main root); omit for All. Empty/unknown IDs are errors, never a fallback to All. Filtering happens before retrieval candidate limits and RRF. Responses add `sourceScope` and each hit's `rootId`; existing fields remain compatible. This standalone server does not discover desktop attached folders or offer live `read_session`. Successful query vectors use a 32-entry, five-minute cache scoped to the engine/provider with concurrent-request sharing; errors are retried rather than cached.

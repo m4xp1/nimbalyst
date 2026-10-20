@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, renameSync, rmSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MemoryEngine } from '../engine.js';
-import type { FileRecord, EngineConfig } from '../types.js';
+import type { FileRecord, EngineConfig, Embedder } from '../types.js';
 import { FakeEmbedder } from './fakeEmbedder.js';
 
 const roots: string[] = [];
@@ -33,6 +33,58 @@ async function sparse(engine: MemoryEngine, query: string, classes?: string[]) {
   return (await engine.search(query,100,classes ? {sourceClasses:classes} : undefined)).filter(hit => hit.signals?.sparse);
 }
 describe('canonical file entity search', () => {
+  it('filters one or multiple roots before candidate limits and keeps virtual records in the primary workspace',async()=>{
+    const main=fixture(),link=fixture(),second=fixture();
+    writeFileSync(path.join(main,'docs/a.md'),'# Primary\nКорневойМаркер');
+    writeFileSync(path.join(link,'docs/a.md'),'# Linked\nКорневойМаркер');
+    writeFileSync(path.join(second,'docs/a.md'),'# Second\nКорневойМаркер');
+    const engine=open(main,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'second',path:second}}]});
+    await engine.indexAll();
+    await engine.ingestRecords(Array.from({length:80},(_,i)=>({id:'tracker:scope'+i,refType:'tracker',refId:'scope'+i,sourceClass:'trackers',text:'КорневойМаркер'})));
+    const one=await engine.search('КорневойМаркер',1,{rootIds:['link']} as any);
+    expect(one).toHaveLength(1);expect(one[0].sourcePath).toBe('@link/docs/a.md');
+    const many=await engine.search('КорневойМаркер',100,{rootIds:['link','second']} as any);
+    expect(new Set(many.map(hit=>hit.sourcePath))).toEqual(new Set(['@link/docs/a.md','@second/docs/a.md']));
+    const primary=await engine.search('КорневойМаркер',100,{rootIds:[null],sourceClasses:['trackers']});
+    expect(primary).toHaveLength(50); // Preserve the existing per-arm candidate cap.
+    expect(primary.every(hit=>hit.refType==='tracker')).toBe(true);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:[]} as any)).rejects.toThrow(/root|folder|source/i);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:['unknown']} as any)).rejects.toThrow(/root|folder|source/i);
+    engine.setSourceFolders([{id:null,path:main,label:'Main',available:true},{id:'link',path:link,label:'Link',available:false},{id:'second',path:second,label:'Second',available:true}]);
+    expect(await engine.search('КорневойМаркер',5,{rootIds:['link']})).toEqual([]);
+    expect(engine.expand('@link/docs/a.md',[])).toBeNull();
+    expect((await engine.search('КорневойМаркер',5,{rootIds:['second']}))[0].sourcePath).toBe('@second/docs/a.md');
+    engine.setSourceFolders([{id:null,path:main,label:'Main',available:true}]);
+    await expect(engine.search('КорневойМаркер',5,{rootIds:['link']})).rejects.toThrow(/detached/i);
+  });
+  it('reuses only successful query vectors across scopes and concurrent searches',async()=>{
+    const root=fixture();writeFileSync(path.join(root,'docs/a.md'),'# Cached\nquerycachemarker');const engine=open(root);await engine.indexAll();
+    const embed=vi.spyOn((engine as unknown as {embedder:Embedder}).embedder,'embed');
+    await Promise.all([engine.search('querycachemarker',5),engine.search('querycachemarker',5,{rootIds:[null]} as any)]);
+    expect(embed).toHaveBeenCalledOnce();await engine.search('querycachemarker');expect(embed).toHaveBeenCalledOnce();
+    embed.mockRejectedValueOnce(new Error('network test failure'));await engine.search('failed-query');await engine.search('failed-query');expect(embed).toHaveBeenCalledTimes(3);
+  });
+  it('bounds query-vector caching by time and count and rejects detached in-flight scope',async()=>{
+    const root=fixture(),link=fixture();writeFileSync(path.join(root,'docs/a.md'),'cache marker');
+    const engine=open(root,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}}]});await engine.indexAll();
+    const provider=(engine as unknown as {embedder:Embedder}).embedder,original=provider.embed.bind(provider),embed=vi.spyOn(provider,'embed');
+    await engine.search('oldest');for(let i=0;i<32;i++)await engine.search('bounded'+i);await engine.search('oldest');expect(embed).toHaveBeenCalledTimes(34);
+    const now=Date.now(),clock=vi.spyOn(Date,'now').mockReturnValue(now+300001);
+    try{await engine.search('oldest');expect(embed).toHaveBeenCalledTimes(35);}finally{clock.mockRestore();}
+    let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);
+    embed.mockImplementationOnce(async(texts:string[])=>{await gate;return original(texts);});
+    const query=engine.search('held-scope',5,{rootIds:['link']});
+    engine.setSourceFolders([{id:null,path:root,label:'Main',available:true}]);release();await expect(query).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
+  });
+  it('keeps All folder membership stable while a query embedding is in flight',async()=>{
+    const root=fixture(),link=fixture();for(const dir of [root,link])writeFileSync(path.join(dir,'docs/a.md'),'FolderSnapshotMarker');
+    const engine=open(root,{sources:[{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'docs',include:['docs/**/*.md'],root:{id:'link',path:link}}]});await engine.indexAll();
+    engine.setSourceFolders([{id:null,path:root,label:'Main',available:true}]);
+    let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),embedder=(engine as unknown as {embedder:Embedder}).embedder,original=embedder.embed.bind(embedder);
+    vi.spyOn(embedder,'embed').mockImplementationOnce(async(texts:string[])=>{await gate;return original(texts);});
+    const query=engine.search('FolderSnapshotMarker');engine.setSourceFolders([{id:null,path:root,label:'Main',available:true},{id:'link',path:link,label:'Link',available:true}]);release();
+    expect((await query).map(hit=>hit.sourcePath)).toEqual(['docs/a.md']);expect(await engine.search('FolderSnapshotMarker')).toHaveLength(2);
+  });
   it('transitions old DOCUMENT and tracker copies to one TRACKER, retaining a standalone database card', async () => {
     const root = fixture(); writeFileSync(path.join(root,'docs/card.md'),markdown('quartzfilemarker'));
     const engine = open(root); await engine.indexAll();

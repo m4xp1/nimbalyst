@@ -81,3 +81,14 @@ pnpm run typecheck
 ```
 
 Engine tests run under the repo's root vitest (`packages/extensions/nimbalyst-memory/engine/src/__tests__`).
+
+
+### Search selected folders
+
+Quick Open → Memory and **Try your memory** offer **Sources: All** when folders are attached. Select one or several folders independently of Docs/Trackers/Sessions. The choice is shared by these Memory search surfaces for the current workspace until the app closes. Coverage and Additional text sources keep their independent selections. Searching never changes indexing rules or agent permissions.
+
+Agents first call `list_sources` to discover actual `rootId` values. `search_project_knowledge({query, rootIds: [null]})` searches only the main workspace; `rootIds: ["<returned-id>"]` searches an attached folder, and an array can combine folders. Omit `rootIds` for All. An empty list, unknown ID or detached folder is an explicit error; never retry it as All without changing the requested scope. A known unavailable folder returns no stale hits and is reported as unavailable. Folder scope applies before dense/sparse candidate limits and RRF, including exact tracker-key lookup. Native database records, sessions, durable facts and personal harness memory belong to the main workspace; file-backed cards follow physical file ownership. Attached folders do not import foreign project databases or histories.
+
+Hits retain their existing fields and add folder metadata; the MCP response also describes `sourceScope`. Use the returned `sourcePath` with `expand`/`read_doc`. For current session discussion, continue using `read_session(sessionId = hit.refId)` and the snapshot/pagination rules above. Voice uses only listed tools and delegates current dialogue reading to `ask_coding_agent`. The standalone engine discovers only its configured roots and has no host history broker.
+
+Rule lists and Coverage use cached metadata independently of indexing. Refresh reads status; Rebuild acknowledges background work immediately. Successful query embeddings are cached per engine/provider for five minutes (at most 32 queries); concurrent identical queries share one request. Failed embeddings are not cached. No reindexing or embedding regeneration is needed to change search scope.

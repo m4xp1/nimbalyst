@@ -255,7 +255,7 @@ import {
 import { gitStatusAtom } from './store/atoms/gitOperations';
 import { activeFileRepoPathAtom, workspaceRepoPathsAtom } from './store/atoms/workspaceRepos';
 import { repoLabels } from './utils/workspaceRepos';
-import { normalizeGitStatus } from './utils/gitStatus';
+import { normalizeGitStatus, watchGitStatus } from './utils/gitStatus';
 import { useGitActivity, type GitActivityEntry } from './hooks/useGitActivity';
 import {
   GIT_SHOW_OUTPUT_REQUEST_EVENT,
@@ -805,65 +805,10 @@ export default function App() {
   }, [workspacePath]);
 
   useEffect(() => {
-    let cancelled = false;
     setGitStatus(null);
-    if (!gitRepoPath) return () => {
-      cancelled = true;
-    };
-
-    // Two orderings can regress the displayed counts: a `git:status` response
-    // landing after a newer one, and a revisioned snapshot arriving out of
-    // order. `generation` settles the first, `appliedRevision` the second.
-    let generation = 0;
-    let appliedGeneration = 0;
-    let appliedRevision = -1;
-
-    const applySnapshot = (status: unknown, revision?: number) => {
-      if (cancelled) return;
-      if (revision !== undefined) {
-        if (revision <= appliedRevision) return;
-        appliedRevision = revision;
-      }
-      appliedGeneration = ++generation;
-      setGitStatus(normalizeGitStatus(status));
-    };
-
-    const refreshGitStatus = async () => {
-      const requested = ++generation;
-      try {
-        const result = await window.electronAPI?.invoke('git:status', gitRepoPath);
-        if (cancelled || requested < appliedGeneration) return;
-        appliedGeneration = requested;
-        setGitStatus(normalizeGitStatus(result));
-      } catch (error) {
-        if (!cancelled && requested >= appliedGeneration) {
-          appliedGeneration = requested;
-          setGitStatus(null);
-          console.error('[App] Failed to refresh title-bar git status:', error);
-        }
-      }
-    };
-
-    void refreshGitStatus();
-    const unsubscribe = window.electronAPI?.git?.onStatusChanged?.((data) => {
-      // Multi-root: a move in a repo the indicator is not showing must not
-      // repaint it, and must never have its snapshot applied. Payloads without
-      // `repoPath` predate multi-root and only ever concern the one repo.
-      const eventRepo = data.repoPath ?? data.workspacePath;
-      if (eventRepo !== gitRepoPath) return;
-      // Main computes the snapshot when it publishes a revision; the index and
-      // ref watchers still send the legacy path-only shape, which needs a read.
-      if (data.status) {
-        applySnapshot(data.status, data.revision);
-        return;
-      }
-      void refreshGitStatus();
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
+    if(!gitRepoPath||!window.electronAPI)return;
+    const observer=watchGitStatus(window.electronAPI,gitRepoPath,setGitStatus);
+    return observer.dispose;
   }, [setGitStatus, gitRepoPath]);
 
   useEffect(() => {

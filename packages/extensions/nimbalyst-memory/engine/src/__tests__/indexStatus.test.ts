@@ -9,6 +9,14 @@ const roots:string[]=[],engines:MemoryEngine[]=[];
 function setup(){const root=mkdtempSync(path.join(tmpdir(),'memory-status-'));roots.push(root);mkdirSync(path.join(root,'docs'));const embedder=new FakeEmbedder();const engine=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(engine);return{root,embedder,engine};}
 afterEach(async()=>{for(const e of engines.splice(0))await e.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true});});
 describe('truthful index status',()=>{
+ it('reuses Coverage aggregates until searchable content changes',async()=>{
+  const {root,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\ncacheprobe');await engine.indexAll();
+  const summaries=vi.spyOn((engine as any).store,'sourceSummaries');
+  for(let i=0;i<12;i++){expect(engine.status().available?.indexedFiles).toBe(1);expect(engine.status(null).available?.indexedFiles).toBe(1);}
+  expect(summaries).toHaveBeenCalledTimes(1);
+  writeFileSync(path.join(root,'docs/b.md'),'# Second\ncacheprobe');await engine.indexAll();
+  expect(engine.status().available?.indexedFiles).toBe(2);expect(summaries).toHaveBeenCalledTimes(2);
+ });
  it('uses unknown scan counts until enumeration and status reads never embed',async()=>{
   const {root,embedder,engine}=setup(),spy=vi.spyOn(embedder,'embed');
   expect(engine.status().fileIndex?.discoveredFiles).toBeNull();expect(engine.status().watching).toBe(false);

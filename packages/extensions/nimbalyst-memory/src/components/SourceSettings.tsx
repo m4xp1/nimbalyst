@@ -19,9 +19,12 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
   const live = useRef(false);
   const revisions=useRef(new Map<string|null,string>());
   const drafts=useRef(new Map<string|null,typeof draft.current>());
+  const confirmed=useRef(new Map<string|null,Rules>());
+  const pendingLoads=useRef(new Map<string|null,Promise<Rules>>());
   const [conflict,setConflict]=useState(false);
   const adopt=useRef((id:string|null,rules:Rules)=>{});
   adopt.current=(id,rules)=>{
+    confirmed.current.set(id,rules);
     if(draft.current.rootId!==id||!live.current)return;
     if(draft.current.dirty){setConflict(true);setError('Saved rules changed elsewhere. Your draft is kept; reload the saved rules before saving again.');return;}
     const inc=rules.include.join('\n'),exc=rules.exclude.join('\n');
@@ -46,9 +49,10 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
       try {
         const expectedRevision=revisions.current.get(id);
         const receipt=await call('memory.set_sources',{...rules,...(id?{rootId:id}:{}),...(expectedRevision?{expectedRevision}:{})});
+        confirmed.current.set(id,{...(receipt?.rules??rules),...(receipt?.revision?{revision:receipt.revision}:{})});
         if(receipt?.revision)revisions.current.set(id,receipt.revision);
         const cached=drafts.current.get(id);
-        if(cached&&JSON.stringify({rootId:id,version:1,include:parse(cached.include),exclude:parse(cached.exclude)})===key)drafts.current.delete(id);
+        if(cached&&JSON.stringify({rootId:id,version:1,include:parse(cached.include),exclude:parse(cached.exclude)})===key){cached.dirty=false;drafts.current.set(id,cached);}
         if(draft.current.rootId===id&&draft.current.loaded)generation.current++;
         if(draft.current.rootId===id&&JSON.stringify({rootId:id,version:1,include:parse(draft.current.include),exclude:parse(draft.current.exclude)})===key)draft.current.dirty=false;
         if(workspacePath&&receipt?.revision)memorySourceChanges.publish({workspacePath,rootId:id,rules:receipt.rules??rules,revision:receipt.revision,treePolicy:receipt.treePolicy});
@@ -67,23 +71,38 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
     flush.current();
     drafts.current.set(draft.current.rootId,{...draft.current});
     const current=++generation.current;
-    setRootId(id);setLoaded(false);
+    setRootId(id);setError(null);setConflict(false);
     draft.current={rootId:id,include:'',exclude:'',loaded:false,dirty:false};
+    const cachedDraft=drafts.current.get(id);
+    if(cachedDraft?.dirty){
+      draft.current={...cachedDraft};setInclude(cachedDraft.include);setExclude(cachedDraft.exclude);setLoaded(true);return;
+    }
+    const cachedRules=confirmed.current.get(id);
+    if(cachedRules){adopt.current(id,cachedRules);return;}
+    setLoaded(false);setInclude('');setExclude('');
     try {
-      await queue.current;
-      const rules:Rules=await bridge.current.callBackendTool?.('memory.get_sources',id ? {rootId:id} : undefined);
+      let request=pendingLoads.current.get(id);
+      if(!request){request=bridge.current.callBackendTool!('memory.get_sources',id ? {rootId:id} : undefined);pendingLoads.current.set(id,request);}
+      const rules:Rules=await request;
+      pendingLoads.current.delete(id);confirmed.current.set(id,rules);
       if(!live.current || current!==generation.current)return;
       const cached=drafts.current.get(id);
       if(cached?.dirty){draft.current=cached;setInclude(cached.include);setExclude(cached.exclude);setLoaded(true);setConflict(true);setError('Your unsaved draft is kept. Reload the saved rules to discard it.');}
       else adopt.current(id,rules);
-    }catch{if(live.current && current===generation.current)setError('Could not load saved sources.');}
+    }catch{pendingLoads.current.delete(id);if(live.current && current===generation.current)setError('Could not load saved sources.');}
   };
   useEffect(() => {
     live.current=true;
     void loadRoot(null);
-    const refresh=()=>{void bridge.current.callBackendTool?.('memory.get_source_roots').then(value=>{
+    let refreshing=false;
+    const refresh=()=>{if(refreshing)return;refreshing=true;void bridge.current.callBackendTool?.('memory.get_source_roots',{includeRules:true}).then(value=>{
       if(live.current && Array.isArray(value)){
         const next=selectableSourceFolders(value);setRoots(next);
+        for(const root of next){if(root.rules){
+          const incoming={...root.rules,revision:root.rulesRevision??root.rules.revision};
+          if(root.id!==draft.current.rootId)confirmed.current.set(root.id,incoming);
+          else if(!draft.current.loaded || incoming.revision!==revisions.current.get(root.id)){generation.current++;adopt.current(root.id,incoming);}
+        }}
         const remote=next.find(root=>root.id===draft.current.rootId)?.rulesRevision;
         if(draft.current.loaded&&remote&&remote!==revisions.current.get(draft.current.rootId)){
           const id=draft.current.rootId,current=generation.current;
@@ -91,16 +110,19 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
         }bridge.current.onRootsChanged?.(next);
         if(draft.current.rootId && !next.some(root=>root.id===draft.current.rootId))void loadRoot(null);
       }
-    }).catch(()=>{});};
+    }).catch(()=>{}).finally(()=>{refreshing=false;});};
     refresh();const timer=setInterval(refresh,2000);
-    const stop=memorySourceChanges.subscribe(change=>{if(change&&change.rootId===draft.current.rootId&&sameMemoryWorkspace(change.workspacePath,workspacePath)&&change.revision!==revisions.current.get(change.rootId)){generation.current++;adopt.current(change.rootId,{...change.rules,revision:change.revision});}});
+    const stop=memorySourceChanges.subscribe(change=>{if(change&&sameMemoryWorkspace(change.workspacePath,workspacePath)&&change.revision!==revisions.current.get(change.rootId)){
+      const rules={...change.rules,revision:change.revision};confirmed.current.set(change.rootId,rules);
+      if(change.rootId===draft.current.rootId){generation.current++;adopt.current(change.rootId,rules);}
+    }});
     return ()=>{stop();clearInterval(timer);flush.current();live.current=false;generation.current++;};
   }, []);
   const field = { width: '100%', minHeight: 75, fontFamily: 'monospace',
     background: 'var(--nim-bg)', color: 'var(--nim-text)', border: '1px solid var(--nim-border)', borderRadius: 6, padding: 8 } as const;
   return <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Additional text sources</h3>
-    {roots.length>1 && <label>Source folder<select aria-label="Source folder" value={rootId??''} disabled={!loaded}
+    {roots.length>1 && <label>Source folder<select aria-label="Source folder" value={rootId??''}
       onChange={event=>{void loadRoot(event.target.value||null);}}>
       {roots.map(root=><option key={root.id??'primary'} value={root.id??''}>{root.label} — {root.path}{root.available?'':' (unavailable)'}</option>)}
     </select></label>}
@@ -124,6 +146,6 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
       value={exclude} onChange={e => { draft.current.exclude = e.target.value; draft.current.dirty = true; setExclude(e.target.value); }}
       onBlur={() => flush.current()} placeholder="research/drafts/**" /></label>
     {error && <p role="alert">{error}</p>}
-    {conflict&&<button type="button" onClick={()=>{draft.current.dirty=false;drafts.current.delete(rootId);void loadRoot(rootId);}}>Reload saved rules</button>}
+    {conflict&&<button type="button" onClick={()=>{draft.current.dirty=false;drafts.current.delete(rootId);confirmed.current.delete(rootId);void loadRoot(rootId);}}>Reload saved rules</button>}
   </section>;
 }

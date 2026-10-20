@@ -15,3 +15,4 @@ export { documentDirtyAtom, documentDiffStateAtom, documentAttachCountAtom, regi
 export { type GitCommitProposalData } from './atoms/gitCommitProposals';
 export { interactiveWidgetHostAtom, setInteractiveWidgetHost, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost, getInteractiveWidgetHost, cleanupInteractiveWidgetHost, } from './atoms/interactiveWidgetHost';
 export { memorySourceChangeAtom, sameMemoryWorkspace, type MemorySourceChange } from './atoms/memorySources';
+export { memorySourceFoldersAtomFamily, memorySearchRootIdsAtomFamily, type MemorySourceFolder } from './atoms/memorySources';

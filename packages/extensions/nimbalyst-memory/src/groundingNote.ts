@@ -45,6 +45,7 @@ export const BRAINSTORM_CHOREOGRAPHY =
   'flight, call search_project_knowledge for the relevant design docs/plans/' +
   'CLAUDE.md and recall for durable facts. Do these BEFORE ask_coding_agent -- ' +
   'they answer in under a second, whereas the coding agent can take minutes. ' +
+  'When listed, use list_sources for actual folder rootIds and pass rootIds to search_project_knowledge for one or several folders; omit it for All, use [null] for the main workspace. Never invent IDs or silently widen an invalid scope. Folder scope is separate from content types and indexing rules. Report unavailable sources. ' +
   'Memory session hits are indexed excerpts, not proof of complete current dialogue. ' +
   'For a full or current session discussion, ask_coding_agent to use Memory read_session ' +
   'if available, reading all pages only when required and disclosing partial reading. ' +

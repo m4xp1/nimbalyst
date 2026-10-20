@@ -20,10 +20,12 @@ import { SourceSettings } from './SourceSettings';
 import type { FileIndexStatus, SafeIndexError,FileOperation } from '../../engine/dist/index.js';
 import { isKeywordOnly, isSemanticProviderFailing } from '../capabilityResults';
 import { coveragePalette } from './coveragePalette';
+import { MemorySourcePicker, useMemorySearchRoots } from '@nimbalyst/runtime';
 
 interface IndexStatus {
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
   sourceUpdate?:{pending:boolean;error:SafeIndexError|null};
+  rebuildOperation?:{id:number;state:string;error:SafeIndexError|null}|null;
   operation?:FileOperation|null;
   lastFullScan?:FileIndexStatus;
   ready?: boolean;
@@ -128,6 +130,9 @@ function relativeTime(ms: number | null | undefined): string {
 }
 
 export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }: SettingsPanelProps) {
+  const [searchRootIds,setSearchRootIds]=useMemorySearchRoots(workspacePath??'');
+  const searchGeneration=useRef(0);
+  useEffect(()=>{searchGeneration.current++;setHits(null);setSearching(false);setSearchError(null);},[searchRootIds,workspacePath]);
   const isDark = theme === 'dark' || theme === 'crystal-dark';
   const muted = 'var(--nim-text-muted)';
 
@@ -326,7 +331,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     if (!callBackendTool) return;
     setRebuilding(true);
     try {
-      await callBackendTool('memory.rebuild');
+      await callBackendTool('memory.rebuild',{background:true});
     } catch (err) {
       setStatusError('Rebuild did not finish. Check the index status below for the next action.');
     } finally {
@@ -447,21 +452,24 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     if (!callBackendTool) return;
     const q = query.trim();
     if (!q) return;
+    const generation=++searchGeneration.current;
     setSearching(true);
     setSearchError(null);
     try {
       const res = (await callBackendTool('memory.search_project_knowledge', {
         query: q,
         k: 6,
+        ...(searchRootIds!==undefined?{rootIds:searchRootIds}:{}),
       })) as { chunks?: SearchHit[] };
-      setHits(Array.isArray(res?.chunks) ? res.chunks : []);
+      if(generation===searchGeneration.current)setHits(Array.isArray(res?.chunks) ? res.chunks : []);
     } catch (err) {
+      if(generation!==searchGeneration.current)return;
       setSearchError(err instanceof Error ? err.message : String(err));
       setHits([]);
     } finally {
-      setSearching(false);
+      if(generation===searchGeneration.current)setSearching(false);
     }
-  }, [callBackendTool, query]);
+  }, [callBackendTool, query,searchRootIds]);
 
   // --- Derived ------------------------------------------------------------
 
@@ -472,7 +480,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const lastScan=status?.lastFullScan??status?.fileIndex;
   const activeOperation=operation?.state==='queued'||operation?.state==='running';
   const problems=status?.fileIndex?.failures??[];
-  const needsAttention=Boolean(status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||operation?.error||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const needsAttention=Boolean(status?.rebuildOperation?.error||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||operation?.error||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
 
@@ -772,6 +780,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
             {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
+            {status.rebuildOperation?.error&&<p role="alert" style={ERR}>{errorAction(status.rebuildOperation.error)}</p>}
             {!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
             {!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&operation?.error&&<p role="alert" style={ERR}>{errorAction(operation.error)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
@@ -1122,6 +1131,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
           >
             {searching ? 'Searching…' : 'Search'}
           </button>
+          <MemorySourcePicker sources={coverageRoots} value={searchRootIds} onChange={setSearchRootIds}/>
         </div>
 
         {searchError && <p style={ERR}>{searchError}</p>}

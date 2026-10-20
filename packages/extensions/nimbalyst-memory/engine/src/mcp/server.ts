@@ -12,9 +12,11 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { MemoryEngine } from '../engine.js';
+import {MEMORY_ROOT_IDS_SCHEMA} from '../types.js';
 import { buildProjectSearchResponse, buildPublicEngineStatus } from '../searchResponse.js';
 
 const TOOLS = [
+  {name:'list_sources',description:'List configured Memory source folders and their rootId values for scoped search. The primary workspace has rootId null.',inputSchema:{type:'object',properties:{}}},
   {
     name: 'search_project_knowledge',
     description:
@@ -22,12 +24,13 @@ const TOOLS = [
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
       'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works.',
+      'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope. ',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Natural-language or keyword query.' },
         k: { type: 'number', description: 'Max results (default 5).' },
+        rootIds:MEMORY_ROOT_IDS_SCHEMA,
       },
       required: ['query'],
     },
@@ -119,12 +122,14 @@ export function createMcpServer(engine: MemoryEngine): Server {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     try {
       switch (name) {
+        case 'list_sources':return jsonResult({sources:engine.listSources().map(root=>({rootId:root.id,label:root.label,path:root.path,available:root.available}))});
         case 'search_project_knowledge': {
           const query = String(args.query ?? '');
           if (!query) throw new McpError(ErrorCode.InvalidParams, 'query is required');
           const k = typeof args.k === 'number' ? args.k : 5;
-          const chunks = await engine.search(query, k);
-          return jsonResult(buildProjectSearchResponse(chunks, engine.status().retrieval));
+          const rootIds=args.rootIds as Array<string|null>|undefined,sourceScope=engine.searchScope(rootIds);
+          const chunks = (await engine.search(query,k,{rootIds})).map(hit=>({...hit,rootId:engine.sourceRootOf(hit.sourcePath,hit.sourceClass)}));
+          return jsonResult({...buildProjectSearchResponse(chunks, engine.retrievalCapabilities()),sourceScope});
         }
         case 'expand': {
           const sourcePath = String(args.sourcePath ?? '');

@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.6] - 2026-10-20
+
+### Added
+- Filter Memory searches by one or several workspace folders in Quick Open, settings, and agent tools.
+
+### Changed
+- Guide agents to discover Memory source folders and scope searches without silently broadening unavailable selections.
+
+### Fixed
+- Show Manual Commit progress and errors, prevent duplicate submission, preserve newer drafts and remove stray zeroes below edited files.
+- Keep Git ahead/behind counts current after Push without competing panel reads or cross-repository updates.
+- Keep Memory source-folder and Coverage controls responsive during background indexing.
+
 ## [0.81.7+m4xp1.5] - 2026-10-20
 
 ### Fixed

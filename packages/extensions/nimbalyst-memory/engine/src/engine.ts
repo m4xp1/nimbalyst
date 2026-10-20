@@ -9,6 +9,7 @@
  * these methods.
  */
 import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { safeIndexError, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
 import type {
   Embedder,
@@ -20,9 +21,10 @@ import type {
   FileRecord,
   SourceSet,
   StoredChunk,
+  MemorySourceFolder, MemorySearchOptions, MemorySearchScope,
 } from './types.js';
 import { SqliteStore } from './store/sqliteStore.js';
-import { resolveInRoots, resolveRoots, type ResolvedRoot } from './roots.js';
+import { resolveInRoots, resolveRoots, locateAbsolute, type ResolvedRoot } from './roots.js';
 import {validateEmbeddingResponse} from './embeddingInput.js';
 import { isInsideRealRoot } from './sourceRules.js';
 import { Indexer, type IndexProgress } from './indexer/indexer.js';
@@ -112,6 +114,75 @@ export class MemoryEngine {
   private embedderChanged = false;
   /** Last query-embedding error message, or null if the last embed succeeded. */
   private lastEmbedError: string | null = null;
+  private readableSources = new Map<string, boolean>();
+  private aggregateCache = new Map<string | null | undefined, Pick<EngineStatus,
+    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'>>();
+  private storedSummaries: ReturnType<SqliteStore['sourceSummaries']> | undefined;
+  private sourceFolders:MemorySourceFolder[]|null=null;
+  private fileRootOwners=new Map<string,string|null>();
+  private indexedTrackerPaths=new Set<string>();
+  private queryVectors=new Map<string,{vector:number[];expires:number}>();
+  private queryRequests=new Map<string,Promise<number[]>>();
+
+  listSources():MemorySourceFolder[]{
+    if(this.sourceFolders)return this.sourceFolders.map(root=>({...root}));
+    return this.roots.filter(root=>root.id!=='harness-memory').map(root=>({id:root.id,path:root.dir,label:path.basename(root.dir)||root.dir,available:root.id===null||!this.availableSourceRoots||this.availableSourceRoots.has(root.id)}));
+  }
+  setSourceFolders(folders:MemorySourceFolder[]):void{
+    this.sourceFolders=folders.filter(root=>root.id!=='harness-memory').map(root=>({...root}));
+    this.availableSourceRoots=new Set(folders.filter(root=>root.available&&root.id).map(root=>root.id!));
+    this.updateFileRootOwners();this.invalidateView();
+  }
+  searchScope(rootIds?:Array<string|null>):MemorySearchScope{
+    const folders=this.listSources();
+    if(rootIds===undefined)return{mode:'all',rootIds:folders.map(root=>root.id)};
+    if(!Array.isArray(rootIds)||rootIds.length===0)throw Error('MEMORY_SOURCE_SCOPE_INVALID: rootIds must select at least one source folder; omit it for All.');
+    const known=new Set(folders.map(root=>root.id));
+    if(rootIds.some(id=>(id!==null&&typeof id!=='string')||!known.has(id)))throw Error('MEMORY_SOURCE_SCOPE_INVALID: Unknown or detached source folder in rootIds.');
+    return{mode:'selected',rootIds:[...new Set(rootIds)]};
+  }
+  sourceRootOf(sourcePath:string,sourceClass?:string):string|null{
+    if(sourceClass==='harness-memory'||sourcePath.startsWith('@harness-memory/'))return null;
+    if(this.fileRootOwners.has(sourcePath))return this.fileRootOwners.get(sourcePath)!;
+    return /^@([^/]+)\//.exec(sourcePath)?.[1]??null;
+  }
+  filterTrackerIds(ids:string[],rootIds?:Array<string|null>):Array<{id:string;rootId:string|null}>{
+    const scope=this.searchScope(rootIds),selected=rootIds===undefined?null:new Set(scope.rootIds);
+    return ids.flatMap(id=>{
+      const sourcePath='tracker:'+id,rootId=this.sourceRootOf(sourcePath);
+      return this.indexedTrackerPaths.has(sourcePath)&&this.readable({sourcePath,refType:'tracker'})&&(!selected||selected.has(rootId))?[{id,rootId}]:[];
+    });
+  }
+  private updateFileRootOwners():void{
+    this.fileRootOwners.clear();
+    const folders=this.sourceFolders?.map(root=>({id:root.id,dir:root.path,personal:true}))??this.roots;
+    for(const record of this.store.getFileRecords()){
+      try{const owner=locateAbsolute(folders,resolveInRoots(this.roots,record.file.path).abs)?.root;this.fileRootOwners.set(record.id,owner?.id==='harness-memory'?null:owner?.id??null);}catch{/* An invalid projection remains unreadable in the indexer. */}
+    }
+  }
+  private queryVector(query:string):Promise<number[]>{
+    const key=JSON.stringify([this.embedder.info,query]),now=Date.now(),saved=this.queryVectors.get(key);
+    if(saved&&saved.expires>now){this.queryVectors.delete(key);this.queryVectors.set(key,saved);return Promise.resolve(saved.vector);}
+    if(saved)this.queryVectors.delete(key);
+    const pending=this.queryRequests.get(key);if(pending)return pending;
+    const request=(async()=>{
+      const vectors=await this.embedder.embed([query]);validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
+      const vector=vectors[0];
+      if(!this.closed){this.queryVectors.set(key,{vector,expires:Date.now()+300000});while(this.queryVectors.size>32)this.queryVectors.delete(this.queryVectors.keys().next().value!);}
+      return vector;
+    })().finally(()=>{this.queryRequests.delete(key);});
+    this.queryRequests.set(key,request);return request;
+  }
+
+  private invalidateView(): void {
+    this.readableSources.clear();this.aggregateCache.clear();this.storedSummaries=undefined;
+  }
+
+  /** Query capabilities do not aggregate the catalog or consult the filesystem. */
+  retrievalCapabilities(): RetrievalCapabilities {
+    const available=this.embedder.info.dims>0&&!this.lastEmbedError;
+    return {mode:available?'hybrid':'keyword-only',semantic:available?{available:true}:{available:false,reason:'optional-embedding-provider-unavailable'},keyword:{available:true,source:'local-project-index'}};
+  }
 
   private log(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
     this.config.onLog?.(level, message);
@@ -130,6 +201,8 @@ export class MemoryEngine {
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
+    this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
+    this.updateFileRootOwners();
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
 
@@ -168,8 +241,7 @@ export class MemoryEngine {
 
   /** Harness memory and virtual records belong to the primary logical workspace. */
   private coverageRoot(sourcePath:string,sourceClass?:string):string|null {
-    if(sourceClass==='harness-memory')return null;
-    return this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
+    return this.sourceRootOf(sourcePath,sourceClass);
   }
   private fileStatus(rootId?:string|null):FileIndexStatus {
     const base=rootId===undefined?this.fileIndex:this.rootScans[rootId??'primary']??{state:'not-started' as const,phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
@@ -177,7 +249,7 @@ export class MemoryEngine {
     const remaining=base.remainingFiles??(base.discoveredFiles===null?null:Math.max(0,base.discoveredFiles-(base.completedFiles??0)-(base.failedFiles??0)));
     const error=failures[0]?.error??base.globalError??(base.phase==='enumerate'?base.error:null);
     const settled=base.state!=='not-started' && base.state!=='building';
-    const hasSaved=rootId===undefined?this.store.count()>0:this.store.sourceSummaries().some(row=>this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
+    const hasSaved=(this.storedSummaries??=this.store.sourceSummaries()).some(row=>rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
     return {...base,remainingFiles:remaining,failedFiles:failures.length,failureCount:failures.length,failures:failures.slice(0,100),error,
       completedFiles:settled&&base.discoveredFiles!==null?Math.max(0,base.discoveredFiles-(remaining??0)-failures.length):base.completedFiles,
       state:this.indexing?'building':failures.length || error || (remaining??0)>0?(hasSaved?'partial':'failed'):settled?'ready':base.state};
@@ -194,16 +266,24 @@ export class MemoryEngine {
   // Rules describe desired membership; search changes when the background job
   // actually reconciles the store. Access/root removal and failures still apply.
   private availableSourceRoots:Set<string>|null=null;
-  restrictSourceRoots(ids:string[]):void{this.availableSourceRoots=new Set(ids);}
+  restrictSourceRoots(ids:string[]):void{this.availableSourceRoots=new Set(ids);this.invalidateView();}
   private sourceRootAllowed(sourcePath:string):boolean {
-    return !sourcePath.startsWith('@')||!this.availableSourceRoots||this.availableSourceRoots.has(sourcePath.slice(1).split('/')[0]);
+    const rootId=this.sourceRootOf(sourcePath);
+    if(rootId===null)return !this.sourceFolders||this.sourceFolders.some(root=>root.id===null&&root.available);
+    return !this.availableSourceRoots||this.availableSourceRoots.has(rootId);
   }
   private pendingReadableSources:Set<string>|null=null;
-  private readable(chunk:StoredChunk):boolean {
-    return this.sourceRootAllowed(chunk.sourcePath)&&this.indexer.readable(chunk,this.pendingReadableSources?.has(chunk.sourcePath)===true);
+  private readable(chunk:Pick<StoredChunk,'sourcePath'|'refType'>):boolean {
+    if(!this.sourceRootAllowed(chunk.sourcePath)||this.indexer.sourceFailed(chunk.sourcePath))return false;
+    let readable=this.readableSources.get(chunk.sourcePath);
+    if(readable===undefined){readable=this.indexer.readable(chunk,this.pendingReadableSources?.has(chunk.sourcePath)===true);this.readableSources.set(chunk.sourcePath,readable);}
+    return readable;
   }
   private refreshSnapshot(): void {
+    this.invalidateView();
+    this.updateFileRootOwners();
     this.snapshot=this.store.loadAll();
+    this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
 
@@ -304,6 +384,7 @@ export class MemoryEngine {
   ):Promise<{indexed:number;files:number}> {
     if(this.closed)return Promise.reject(Error('Memory is closed.'));
     if(!this.pendingReadableSources)this.pendingReadableSources=new Set(this.snapshot.filter(chunk=>this.readable(chunk)).map(chunk=>chunk.sourcePath));
+    this.invalidateView();
     const previous=this.indexer;
     previous.cancel();
     if(this.indexing)this.interruptedScan=true;
@@ -369,6 +450,7 @@ export class MemoryEngine {
 
   async syncFileRecords(records: FileRecord[], obsoleteIds: string[] = []): Promise<void> {
     await this.fileWork.run(async()=>{
+    this.invalidateView();
     this.activeSourcePaths=[...new Set([...this.store.getFileRecords(),...records].flatMap(record=>{try{return[resolveInRoots(this.roots,record.file.path).abs];}catch{return[];}}))];
     try {
       for (const id of obsoleteIds) this.store.deleteSource(id);
@@ -412,12 +494,16 @@ export class MemoryEngine {
   async search(
     query: string,
     k = 5,
-    opts?: { sourceClasses?: string[] },
+    opts?: MemorySearchOptions,
   ): Promise<SearchHit[]> {
+    if(this.closed)throw Error('Memory workspace was closed.');
+    const scope=this.searchScope(opts?.rootIds);
+    // Freeze All's folder membership while a provider request is in flight too.
+    const selected=new Set(scope.rootIds);
+    if(!this.listSources().some(root=>root.available&&(!selected||selected.has(root.id))))return[];
     let vec: number[] | null = null;
     try {
-      const vectors=await this.embedder.embed([query]);validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
-      const [embedded]=vectors;
+      const embedded=await this.queryVector(query);
       vec = embedded ?? null;
       if (this.lastEmbedError) {
         this.log('info', '[engine] query embedding recovered; dense retrieval re-enabled');
@@ -434,8 +520,10 @@ export class MemoryEngine {
       }
       this.lastEmbedError = msg;
     }
+    if(this.closed)throw Error('Memory workspace was closed.');
+    this.searchScope(opts?.rootIds);
     const parents=this.store.getSessionProjection().parents;
-    return this.retriever.search(query, vec, k, {...opts,accepts:chunk=>this.readable(chunk)}).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
+    return this.retriever.search(query, vec, k, {...opts,accepts:chunk=>this.readable(chunk)&&(!selected||selected.has(this.sourceRootOf(chunk.sourcePath,chunk.sourceClass)))}).filter(hit=>!this.indexer.sourceFailed(hit.sourcePath)).map(hit=>hit.refType==='session'
       ? {...hit,parentSessionId:parents[hit.sourcePath]??null}:hit);
   }
 
@@ -552,41 +640,28 @@ export class MemoryEngine {
   // --- Lifecycle -----------------------------------------------------------
 
   status(rootId?:string|null): EngineStatus {
-    const summaries=this.store.sourceSummaries().filter(row=>(!row.sourcePath.startsWith('@')||this.roots.some(root=>root.id&&row.sourcePath.startsWith('@'+root.id+'/'))) && (rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
+    let counts=this.aggregateCache.get(rootId);
+    if(!counts){
+    const summaries=(this.storedSummaries??=this.store.sourceSummaries()).filter(row=>(!row.sourcePath.startsWith('@')||this.roots.some(root=>root.id&&row.sourcePath.startsWith('@'+root.id+'/'))) && (rootId===undefined || this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const bySourceClass:Record<string,number>={};
     for(const row of summaries)bySourceClass[row.sourceClass]=(bySourceClass[row.sourceClass]??0)+row.chunks;
     const chunks=summaries.reduce((n,row)=>n+row.chunks,0),dense=summaries.reduce((n,row)=>n+row.dense,0);
     const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
     const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,sessions:new Set(availableRows.filter(r=>r.refType==='session').map(r=>r.sourcePath)).size,trackers:new Set(availableRows.filter(r=>r.refType==='tracker').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
-    const semanticAvailable = this.embedder.info.dims > 0 && !this.lastEmbedError;
-    const retrieval: RetrievalCapabilities = {
-      mode: semanticAvailable ? 'hybrid' : 'keyword-only',
-      semantic: semanticAvailable
-        ? { available: true }
-        : {
-            available: false,
-            reason: 'optional-embedding-provider-unavailable',
-          },
-      keyword: { available: true, source: 'local-project-index' },
-    };
+    counts={available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
+    this.aggregateCache.set(rootId,counts);
+    }
     return {
-      available,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
-      chunks,
-      denseChunks:dense,
-      bySourceClass,
-      sourceFiles: new Set(summaries.map(row=>row.sourcePath)).size,
-      lastIndexedAt: summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,
+      ...counts,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
       embedder: this.embedder.info,
       embedderChanged: this.embedderChanged,
       indexing: rootId===undefined?this.operation?.state==='running'||this.operation?.state==='queued':this.rootOperations[rootId??'primary']?.state==='running',
       fileIndex:this.fileStatus(rootId),
-      indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,
       watching: this.watcher?.isWatching(rootId) ?? false,
-      chunksWithoutVectors: chunks-dense,
       embeddingError: this.lastEmbedError ? safeIndexError(new Error(this.lastEmbedError)) : null,
       lastEmbedError: this.lastEmbedError,
-      retrieval,
+      retrieval:this.retrievalCapabilities(),
       root: this.config.root,
     };
   }
@@ -598,6 +673,7 @@ export class MemoryEngine {
 
   async close(): Promise<void> {
     this.closed=true;this.indexer.cancel();
+    this.queryVectors.clear();this.queryRequests.clear();
     await this.fileWork.idle();
     await this.waitForIndexing();
     await this.watcher?.stop();

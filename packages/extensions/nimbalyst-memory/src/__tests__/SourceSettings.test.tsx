@@ -66,7 +66,7 @@ describe('selectable source folders',()=>{
  it('hides the selector for one physical workspace even with duplicate or harness roots',async()=>{
   const call=vi.fn(async(name:string)=>name==='memory.get_sources'?initial:name==='memory.get_source_roots'?[{id:null,path:'C:/Main',label:'Main',available:true},{id:'duplicate',path:'c:/main/',label:'alias',available:true},{id:'harness-memory',path:'C:/private/memory',label:'harness',available:true}]:{});
   render(<SourceSettings callBackendTool={call} onApplied={()=>{}}/>);await field();
-  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.get_source_roots'));
+  await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.get_source_roots',{includeRules:true}));
   expect(screen.queryByRole('combobox',{name:'Source folder'})).toBeNull();
  });
 });

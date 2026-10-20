@@ -1106,6 +1106,20 @@ export const clearWorkstreamGitStateAtom = atom(
   }
 );
 
+/** Settle only the submitted draft; edits made while Git ran remain available. */
+export const settleWorkstreamCommitAtom = atom(
+  null,
+  (get, set, input: {workstreamId: string; message: string; files: string[]; committedFiles: string[]}) => {
+    const state = get(workstreamStateAtom(input.workstreamId));
+    const committed = new Set(input.committedFiles.filter(file => input.files.includes(file)));
+    const complete = input.files.every(file => committed.has(file));
+    set(workstreamStateAtom(input.workstreamId), {
+      stagedFiles: state.stagedFiles.filter(file => !committed.has(file)),
+      ...(complete && state.commitMessage === input.message ? {commitMessage: '', activeProposalId: null} : {}),
+    });
+  },
+);
+
 /**
  * Set file scope mode for a workstream.
  */

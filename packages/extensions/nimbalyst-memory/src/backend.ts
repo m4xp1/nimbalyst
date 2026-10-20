@@ -22,7 +22,7 @@ import { buildTreeIndexState, buildTreePolicyState, describeTreePolicy, resolveT
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import { MemoryEngine } from '../engine/dist/index.js';
+import { MemoryEngine,MEMORY_ROOT_IDS_SCHEMA } from '../engine/dist/index.js';
 import {
   buildProjectSearchResponse,
   buildPublicEngineStatus,
@@ -216,6 +216,7 @@ function resolvePlanPath(ref: string): string {
  * conversational essentials; the rest stay coding-agent-only.
  */
 const TOOL_DESCRIPTORS = [
+  {name:'list_sources',description:'List the primary and attached folders available to this workspace Memory index. Use their rootId values to restrict search_project_knowledge to one or several folders. This does not change indexing rules or filesystem permissions.',inputSchema:{type:'object',properties:{}},voiceAgent:true},
   {
     name: 'search_project_knowledge',
     description:
@@ -223,7 +224,7 @@ const TOOL_DESCRIPTORS = [
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
       'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works. For a specific quotation or fact, ' +
+      'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope.  For a specific quotation or fact, ' +
       'use expand when needed and identify the result as indexed evidence. For current ' +
       'session discussions or decisions, use read_session with the hit refId if that ' +
       'tool is available; search snippets do not establish complete current history.',
@@ -232,6 +233,7 @@ const TOOL_DESCRIPTORS = [
       properties: {
         query: { type: 'string', description: 'Natural-language or keyword query.' },
         k: { type: 'number', description: 'Max results (default 5).' },
+        rootIds:MEMORY_ROOT_IDS_SCHEMA,
       },
       required: ['query'],
     },
@@ -407,8 +409,8 @@ const TOOL_DESCRIPTORS = [
     description:
       'Force a full re-index of the project markdown. Re-walks the sources, ' +
       're-chunks changed files, and refreshes the retrieval snapshot. Returns the ' +
-      'number of chunks indexed and files seen.',
-    inputSchema: { type: 'object', properties: {} },
+      'number of chunks indexed and files seen. With background=true, returns a queued operationId immediately; status reports completion or failure.',
+    inputSchema: { type: 'object', properties: {background:{type:'boolean'}} },
     voiceAgent: false,
   },
   {
@@ -529,6 +531,7 @@ export async function activate(ctx: ActivateCtx) {
     log('info', `[memory] ${want.reason}`);
 
     engine = MemoryEngine.create(config, embedder);
+    engine.setSourceFolders(sourceRoots);
     log('info', `[memory] engine ready: root=${config.root} db=${config.dbPath}`);
 
     // Background initial index + live watch. Never blocks activation; the
@@ -570,8 +573,9 @@ export async function activate(ctx: ActivateCtx) {
   }
 
   function annotateRoot<T extends {sourcePath:string}>(hit:T) {
-    const root=sourceRoots.find(root=>root.id && hit.sourcePath.startsWith('@'+root.id+'/'));
-    return root ? {...hit,rootLabel:root.label,rootPath:root.path,relativePath:hit.sourcePath.slice(root.id!.length+2)} : hit;
+    const rootId=requireEngine().sourceRootOf(hit.sourcePath);
+    const root=sourceRoots.find(root=>root.id===rootId);
+    return {...hit,rootId,...(root?{rootLabel:root.label,rootPath:root.path,relativePath:rootId&&hit.sourcePath.startsWith('@'+rootId+'/')?hit.sourcePath.slice(rootId.length+2):hit.sourcePath}:{})};
   }
   let sourceTimer:ReturnType<typeof setTimeout>|undefined;
   let sourceGeneration=0;
@@ -580,6 +584,10 @@ export async function activate(ctx: ActivateCtx) {
   let sourceScheduled=false;
   const sourcePaths=new Set<string>();
   let sourceUpdate:{pending:boolean;error:ReturnType<typeof safeIndexError>|null}={pending:false,error:null};
+  type RebuildOperation={id:number;state:'queued'|'running'|'completed'|'failed';error:ReturnType<typeof safeIndexError>|null};
+  let rebuildTask:Promise<{indexed:number;files:number}>|null=null;
+  let rebuildSequence=0;
+  let rebuildOperation:RebuildOperation|null=null;
   function configureSources():void {
     config.sources=attachedSources(FACTS_DIR,workspacePath,sourceRoots,sourceRules,rootRules);
     config.workspaceExclude=sourceRules.exclude;
@@ -611,18 +619,22 @@ export async function activate(ctx: ActivateCtx) {
     if(sourceTimer)clearTimeout(sourceTimer);
     sourceTimer=setTimeout(flushSources,25);sourceTimer.unref?.();
   }
-  async function syncSourceRoots(): Promise<void> {
+  let rootsRequest:Promise<void>|undefined;
+  function syncSourceRoots():Promise<void>{
+    if(!rootsRequest)rootsRequest=checkSourceRoots().finally(()=>{rootsRequest=undefined;});
+    return rootsRequest;
+  }
+  async function checkSourceRoots(): Promise<void> {
     if (disposed || !ctx.services.memorySourceRoots) return;
     const next = await ctx.services.memorySourceRoots();
     if (disposed) return;
     const signature = JSON.stringify(next);
     if (signature !== rootSignature) {
       sourceRoots = next; rootSignature = signature;
+      engine?.setSourceFolders(next);
       engine?.restrictSourceRoots(['harness-memory',...next.filter(root=>root.available&&root.id).map(root=>root.id!)]);
       engine?.cancelFileIndexing();
       await queueRuleChange(async()=>{applySources();});
-    } else {
-      await sourceChanges;
     }
   }
   const sourcePoll = ctx.services.memorySourceRoots ? setInterval(() => {
@@ -639,17 +651,20 @@ export async function activate(ctx: ActivateCtx) {
       scope: 'global' as const,
     })), ...['get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: {type:'object',properties:{rootId:{type:'string'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: {type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
 
   const runtime = {
     methods: {
-      get_source_roots: async () => { await syncSourceRoots(); return sourceRoots.map(root=>({...root,rulesRevision:revision(root.id?rootRules[root.id]??{version:1,include:[],exclude:[]}:sourceRules)})); },
+      get_source_roots: async (params?:{includeRules?:boolean}) => {await syncSourceRoots();return sourceRoots.map(root=>{
+        const rules=root.id?rootRules[root.id]??{version:1 as const,include:[],exclude:[]}:sourceRules;
+        return {...root,rulesRevision:revision(rules),...(params?.includeRules?{rules:{...rules,revision:revision(rules)}}:{})};
+      });},
       get_tree_index_state: async (params?:{revision?:string;paths?:string[];policyOnly?:boolean}) => {
         const eng=requireEngine();
-        if(params?.policyOnly){const state=buildTreePolicyState(treePolicy(),eng.treeDiagnostics());return state.revision===params.revision?{unchanged:true,revision:state.revision}:state;}
+        if(params?.policyOnly){const state=buildTreePolicyState(treePolicy(),eng.treeDiagnostics());return {...(state.revision===params.revision?{unchanged:true,revision:state.revision}:state),sourceRoots};}
         const status=eng.status();
         const state=await buildTreeIndexState(eng.ruleFilePaths((Array.isArray(params?.paths)?params.paths:[]).flatMap(file=>{
           if(typeof file!=='string'||!path.isAbsolute(file))return[];
@@ -677,7 +692,6 @@ export async function activate(ctx: ActivateCtx) {
         return queueRuleChange(apply);
       },
       get_sources: async (params?: {rootId?: string | null}) => {
-        await sourceChanges.catch(() => {});
         const id=params?.rootId;
         if (!id) return {...sourceRules,revision:revision(sourceRules)};
         if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
@@ -699,14 +713,19 @@ export async function activate(ctx: ActivateCtx) {
         };
         return queueRuleChange(apply);
       },
-      search_project_knowledge: async (params: { query?: string; k?: number }) => {
+      list_sources: async () => ({sources:sourceRoots.filter(root=>root.id!=='harness-memory').map(root=>({rootId:root.id,label:root.label,path:root.path,available:root.available}))}),
+      filterTrackerIds: async (params:{ids:string[];rootIds?:Array<string|null>})=>requireEngine().filterTrackerIds(params.ids,params.rootIds),
+      search_project_knowledge: async (params: { query?: string; k?: number;rootIds?:Array<string|null> }) => {
         const query = String(params?.query ?? '');
         if (!query) throw new Error('query is required');
         const k = typeof params?.k === 'number' ? params.k : 5;
         const eng = requireEngine();
-        const chunks = (await eng.search(query, k)).map(annotateRoot);
+        const sourceScope=eng.searchScope(params.rootIds);
+        const chunks = (await eng.search(query, k,{rootIds:params.rootIds})).map(annotateRoot);
         return {
-          ...buildProjectSearchResponse(chunks, eng.status().retrieval),
+          sourceScope,
+          sourceErrors:sourceRoots.filter(root=>!root.available&&sourceScope.rootIds.includes(root.id)).map(root=>({rootId:root.id,error:'Source folder is unavailable.'})),
+          ...buildProjectSearchResponse(chunks, eng.retrievalCapabilities()),
           ...(chunks.some(chunk => chunk.refType === 'session') ? {
             sessionReadHint: 'For a quotation or specific fact, expand the indexed section if needed and label it indexed evidence. For current dialogue or decisions, use read_session with sessionId = the session hit refId, if that tool is available in your tool catalog (discover deferred tools through your existing discovery mechanism). Follow nextCursor to hasMore=false only for a task requiring the entire history; otherwise disclose partial reading. Do not mix snapshot versions; restart expired cursors from page one. If reading is unavailable or fails, report the limitation; indexed evidence does not prove complete current history.',
           } : {}),
@@ -754,15 +773,18 @@ export async function activate(ctx: ActivateCtx) {
         query?: string;
         k?: number;
         sourceClasses?: string[];
+        rootIds?:Array<string|null>;
       }) => {
         const eng = requireEngine();
+        const sourceScope=eng.searchScope(params.rootIds);
         const query = String(params?.query ?? '').trim();
         if (!query) {
-          const searchResponse = buildProjectSearchResponse([], eng.status().retrieval);
+          const searchResponse = buildProjectSearchResponse([], eng.retrievalCapabilities());
           return {
             results: [] as GlobalSearchResult[],
             capabilities: searchResponse.capabilities,
             fallback: searchResponse.fallback,
+            sourceScope,
           };
         }
         const k = typeof params?.k === 'number' ? params.k : 20;
@@ -772,13 +794,14 @@ export async function activate(ctx: ActivateCtx) {
         const hits = await eng.search(
           query,
           Math.max(k * 4, 40),
-          sourceClasses?.length ? { sourceClasses } : undefined,
+          {sourceClasses:sourceClasses?.length?sourceClasses:undefined,rootIds:params.rootIds},
         );
-        const searchResponse = buildProjectSearchResponse(hits, eng.status().retrieval);
+        const searchResponse = buildProjectSearchResponse(hits, eng.retrievalCapabilities());
         return {
           results: collapseToEntities(hits, k).map(annotateRoot),
           capabilities: searchResponse.capabilities,
           fallback: searchResponse.fallback,
+          sourceScope,
         };
       },
 
@@ -891,7 +914,7 @@ export async function activate(ctx: ActivateCtx) {
         return {
           ready: true,
           ...buildPublicEngineStatus(engineStatus),
-          sourceUpdate:update,indexing:update.pending||engineStatus.indexing,
+          sourceUpdate:update,rebuildOperation,indexing:update.pending||engineStatus.indexing||rebuildOperation?.state==='queued'||rebuildOperation?.state==='running',
           ...(selected?{root:selected.path,watching:selected.available && engineStatus.watching}:{}),
           sourceRoots,
           sourceRootErrors: sourceRoots.filter(root=>!root.available && (rootId===undefined || root.id===rootId)),
@@ -1022,12 +1045,27 @@ export async function activate(ctx: ActivateCtx) {
         return { ok: true, enabled: true, activeMode: selection.mode, model: model.repo };
       },
 
-      rebuild: async () => {
-        await sourceChanges;flushSources();await sourceIndexing;
-        const result = await requireEngine().indexAll();
-        await ctx.services.memorySessions?.({op:'rebuild'});
-        log('info', `[memory] rebuild: indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
-        return { ok: true, ...result };
+      rebuild: async (params?:{background?:boolean}) => {
+        if(!rebuildTask){
+          const operation:RebuildOperation={id:++rebuildSequence,state:'queued',error:null};
+          rebuildOperation=operation;
+          rebuildTask=new Promise<{indexed:number;files:number}>((resolve,reject)=>{
+            setTimeout(()=>{void (async()=>{
+              if(disposed)throw Error('Memory workspace was closed.');
+              operation.state='running';
+              await syncSourceRoots();await sourceChanges;flushSources();await sourceIndexing;
+              const result=await requireEngine().indexAll();
+              if(disposed)throw Error('Memory workspace was closed.');
+              await ctx.services.memorySessions?.({op:'rebuild'});
+              operation.state='completed';
+              log('info',`[memory] rebuild: indexed ${result.indexed} chunk(s) across ${result.files} file(s)`);
+              return result;
+            })().then(resolve,reject);},0);
+          });
+          void rebuildTask.catch(error=>{operation.state='failed';operation.error=safeIndexError(error);log('error','[memory] rebuild failed: '+operation.error.category);}).finally(()=>{rebuildTask=null;});
+        }
+        if(params?.background)return{ok:true,queued:true,operationId:rebuildOperation!.id};
+        return {ok:true,...await rebuildTask};
       },
 
       distill_candidate_facts: async (params: { sourceClass?: string; maxDocs?: number }) => {
@@ -1074,11 +1112,12 @@ export async function activate(ctx: ActivateCtx) {
       await sourceChanges.catch(() => {});
       engine?.cancelFileIndexing();
       await sourceIndexing;
+      await rebuildTask?.catch(()=>{});
       await engine?.waitForIndexing();
       await engine?.close();
     },
   };
-  for (const name of ['get_sources','set_sources','search_project_knowledge','globalSearch','expand','read_doc','status','rebuild','set_path_override'] as const) {
+  for (const name of ['list_sources','filterTrackerIds','search_project_knowledge','globalSearch','expand','read_doc','set_path_override'] as const) {
     const original=runtime.methods[name] as (...args:any[])=>Promise<any>;
     (runtime.methods as any)[name]=async (...args:any[])=>{await syncSourceRoots();return original(...args);};
   }
