@@ -7,6 +7,7 @@
  * fenced code headings are ignored. Oversized blocks, including code, are split
  * without losing their text so embedding input always stays bounded.
  */
+import {documentFrontmatter} from './frontmatter.js';
 import {structuredChunks} from './structuredChunks.js';
 import type { Chunk } from './types.js';
 
@@ -26,18 +27,10 @@ export interface ChunkOptions {
 
 /** Strip a leading YAML frontmatter block (`--- ... ---`). */
 export function stripFrontmatter(text: string): string {
-  if (!text.startsWith('---')) return text;
-  const lines = text.split('\n');
-  if (lines[0].trim() !== '---') return text;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') {
-      return lines.slice(i + 1).join('\n');
-    }
-  }
-  return text;
+  return text.slice(documentFrontmatter(text).bodyStart);
 }
 
 export function chunkMarkdown(sourcePath:string,sourceClass:string,raw:string,opts:ChunkOptions={},ref?:{refType?:string;refId?:string}):Chunk[]{
   const body=opts.plainText?raw:stripFrontmatter(raw);
-  return structuredChunks(sourcePath,sourceClass,raw,raw.length-body.length,opts,ref);
+  return body.trim()?structuredChunks(sourcePath,sourceClass,raw,raw.length-body.length,opts,ref):structuredChunks(sourcePath,sourceClass,raw,0,{...opts,plainText:true},ref);
 }

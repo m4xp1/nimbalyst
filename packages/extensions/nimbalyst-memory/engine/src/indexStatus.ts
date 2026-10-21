@@ -1,4 +1,4 @@
-export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number; stage?:IndexIssueStage; code?:string }
+export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number; stage?:IndexIssueStage; code?:string; projectionOnly?:boolean }
 export interface SafeIndexError { category: 'authentication'|'quota'|'rate-limit'|'network'|'access'|'input'|'other'; action:string }
 /** Classify locally; never forward provider responses, credentials or document text. */
 export function safeIndexError(error:unknown):SafeIndexError {

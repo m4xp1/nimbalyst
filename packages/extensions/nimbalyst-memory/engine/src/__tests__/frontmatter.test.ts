@@ -28,3 +28,10 @@ describe('parseFrontmatter', () => {
     expect(data).toEqual({});
   });
 });
+
+
+describe('document YAML aliases',()=>{
+ it('preserves shared arrays across metadata fields without expanding recursive aliases',async()=>{
+  const {documentFrontmatter}=await import('../frontmatter.js');const parsed=documentFrontmatter('---\nshared: &names [Alpha, Beta]\naliases: *names\n---\nBody');expect(parsed.warning).toBeUndefined();expect(parsed.data.aliases).toEqual(['Alpha','Beta']);
+ });
+});

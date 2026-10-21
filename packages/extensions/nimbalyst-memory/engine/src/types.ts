@@ -286,3 +286,13 @@ export interface Fact {
   /** File mtime epoch millis; recency for contradiction resolution. */
   mtime: number;
 }
+
+/** One auxiliary record per file: never a quoted chunk or a Coverage source. */
+export interface SourceSearchRecord {
+ sourcePath:string;sourceClass:string;refType:string;refId:string;version:number;
+ fileName:string;relativePath:string;fields:Record<string,string[]>;
+ context:string;contextHash:string;denseEmbedding:number[]|null;
+ embedderId:string;model:string;dims:number;
+ warning?:'invalid-frontmatter';metadataRange?:{start:number;end:number};
+}
+export interface SearchFieldMatch {field:string;value:string;match:'exact'|'stem';sourceRange?:{start:number;end:number};}

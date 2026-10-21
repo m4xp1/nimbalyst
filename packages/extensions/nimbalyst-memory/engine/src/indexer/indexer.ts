@@ -16,7 +16,7 @@ import type {
   Embedder,
   EngineConfig,
   SourceSet,
-  StoredChunk,
+  StoredChunk, SourceSearchRecord,
   VirtualRecord,
   FileRecord,
 } from '../types.js';
@@ -24,6 +24,7 @@ import { parseFrontmatter } from '../frontmatter.js';
 import { safeIndexError, isProviderIndexFailure, type SourceIndexFailure } from '../indexStatus.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
 import { embeddingInput, legacyEmbeddingInput,validateEmbeddingResponse, utf8Prefix, MAX_CHUNK_BODY_BYTES } from '../embeddingInput.js';
+import {sourceSearchRecord} from '../sourceSearch.js';
 import { chunkMarkdown } from '../chunker.js';
 import { sha256 } from '../hash.js';
 import { termFrequencies } from '../retrieval/bm25.js';
@@ -63,6 +64,9 @@ interface PreparedSource {
   pending: { idx: number; input: string }[];
   /** Every row already stored with identical content and metadata; nothing to write. */
   unchanged: boolean;
+  chunksUnchanged:boolean;
+  sourceRecord?:SourceSearchRecord;
+  sourcePendingInput?:string;
 }
 
 /** True when every field chunking produced matches the stored row. */
@@ -112,13 +116,13 @@ function pageRowFor(
 
 export class Indexer {
   private failures = new Map<string,SourceIndexFailure>();
-  sourceFailed(sourcePath:string):boolean {return this.failures.has(sourcePath);}
+  sourceFailed(sourcePath:string):boolean {return this.failures.has(sourcePath)&&!this.failures.get(sourcePath)?.projectionOnly;}
   failuresForStatus():SourceIndexFailure[] { return [...this.failures.values()]; }
   private recordFailure(sourcePath:string,error:unknown):void {
     const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
     const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
     const relativePath=record?.file.path??(rootId&&rootId!=='harness-memory'?sourcePath.slice(rootId.length+2):sourcePath);
-    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),stage:isProviderIndexFailure(error)||safeIndexError(error).category==='input'?'embeddings':'read',code:typeof (error as {code?:string})?.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined,updatedAt:Date.now()});
+    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),projectionOnly:(error as {projectionOnly?:boolean})?.projectionOnly===true,stage:isProviderIndexFailure(error)||safeIndexError(error).category==='input'?'embeddings':'read',code:typeof (error as {code?:string})?.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined,updatedAt:Date.now()});
     this.persistFailures();
   }
   private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
@@ -254,7 +258,7 @@ export class Indexer {
   entityFilePaths(): string[] { return [...this.fileRecords.values()].filter(r=>!r.file.disabled).map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
   readable(chunk: Pick<StoredChunk,'sourcePath'|'refType'>, beforeRuleReconciliation=false): boolean {
-    if(this.failures.has(chunk.sourcePath))return false;
+    if(this.sourceFailed(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
       return beforeRuleReconciliation || this.classifyDocument(chunk.sourcePath) !== null;
@@ -577,17 +581,15 @@ export class Indexer {
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
     if (p.unchanged) return 0;
-    if (p.pending.length) {
-      const vectors = await this.embedder.embed(p.pending.map((t) => t.input));
-      validateEmbeddingResponse(vectors,p.pending.length,this.embedder.info.dims);
-      p.pending.forEach((t, i) => {
-        p.stored[t.idx].denseEmbedding = vectors[i] ?? null;
-      });
-    }
+    const inputs=p.pending.map(t=>t.input);if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
+    if(inputs.length){try{const vectors=await this.embedder.embed(inputs);validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
+      // A failed auxiliary migration must not quarantine an unchanged, verified body.
+      if(!p.pending.length&&p.sourceRecord&&!this.cancelled){this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);const prior=error as {message?:string;code?:string;status?:number};throw Object.assign(new Error(prior?.message??String(error),{cause:error}),{projectionOnly:true,code:prior?.code,status:prior?.status});}
+      throw error;
+    }}
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
-    this.store.upsertChunks(p.stored);
-    this.store.pruneSource(sourcePath, p.stored.map((c) => c.id));
-    return p.pending.length;
+    this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);
+    return inputs.length;
   }
 
   /**
@@ -605,7 +607,7 @@ export class Indexer {
     // A2: the page-level vector rides the same dirty-check and prune path as
     // the chunks, so it stays consistent with them for free.
     const page = this.config.pageVectors?pageRowFor(sourcePath, sourceClass, raw, chunks.length, ref):null;
-    const rows = (page ? [...chunks, page] : chunks).map(c=>({...c,embeddingInputHash:sha256(embeddingInput(c.headingPath,c.text,c.context)),projectionVersion:2}));
+    const rows = (page ? [...chunks, page] : chunks).map(c=>({...c,embeddingInputHash:sha256(embeddingInput(c.headingPath,c.text,c.context)),projectionVersion:3}));
     const existing = new Map(this.store.chunksForSource(sourcePath).map((c) => [c.id, c]));
     const info = this.embedder.info;
     const reusableByInput=new Map<string,StoredChunk>();
@@ -629,11 +631,21 @@ export class Indexer {
         updatedAt: Date.now(),
       };
     });
-    const unchanged =
+    const chunksUnchanged =
       pending.length === 0 &&
       existing.size === rows.length &&
       rows.every((c) => sameChunk(c, existing.get(c.id)!));
-    return { sourcePath, stored, pending, unchanged };
+    let sourceRecord:SourceSearchRecord|undefined,sourcePendingInput:string|undefined;
+    if((ref?.refType??'doc-file')==='doc-file'){
+      sourceRecord=sourceSearchRecord(sourcePath,sourceClass,raw,chunks,info,ref,!/\.md$/i.test(sourcePath));
+      const previous=this.store.sourceSearchFor(sourcePath);
+      if(previous&&previous.contextHash===sourceRecord.contextHash&&previous.embedderId===info.id&&previous.model===info.model&&previous.dims===info.dims&&(info.dims===0||previous.denseEmbedding?.length===info.dims&&previous.denseEmbedding.every(Number.isFinite)))sourceRecord.denseEmbedding=previous.denseEmbedding;
+      else sourcePendingInput=sourceRecord.context;
+      const comparable=(record:SourceSearchRecord|null|undefined)=>{if(!record)return null;const {denseEmbedding,...data}=record;void denseEmbedding;return JSON.stringify(data);};
+      const unchanged=chunksUnchanged&&!sourcePendingInput&&comparable(previous)===comparable(sourceRecord);
+      return{sourcePath,stored,pending,unchanged,chunksUnchanged,sourceRecord,sourcePendingInput};
+    }
+    return { sourcePath, stored, pending, unchanged:chunksUnchanged,chunksUnchanged };
   }
 
   /** Drop a source file from the index. */

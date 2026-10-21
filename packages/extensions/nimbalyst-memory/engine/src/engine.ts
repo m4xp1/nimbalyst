@@ -20,9 +20,10 @@ import type {
   VirtualRecord,
   FileRecord,
   SourceSet,
-  StoredChunk,
+  StoredChunk, SourceSearchRecord,
   MemorySourceFolder, MemorySearchOptions, MemorySearchScope,
 } from './types.js';
+import { SOURCE_SEARCH_VERSION } from './sourceSearch.js';
 import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, locateAbsolute, type ResolvedRoot } from './roots.js';
 import {validateEmbeddingResponse} from './embeddingInput.js';
@@ -34,6 +35,7 @@ import { Retriever } from './retrieval/retriever.js';
 import { FactsStore, type RecallQuery, type RememberInput } from './facts/facts.js';
 
 export interface EngineStatus {
+  sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?: {chunks:number;sourceFiles:number;indexedFiles:number;sessions:number;trackers:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
   operation?:FileOperation|null;
   lastFullScan?:FileIndexStatus;
@@ -90,6 +92,7 @@ const SOURCE_PATH_FORMAT = 2;
 
 export class MemoryEngine {
   private store: SqliteStore;
+  private sourceRecords:SourceSearchRecord[]=[];
   private roots: ResolvedRoot[];
   private rootScans:Record<string,FileIndexStatus>={};
   private issues=new IndexIssueLedger();
@@ -117,7 +120,7 @@ export class MemoryEngine {
   private lastEmbedError: string | null = null;
   private readableSources = new Map<string, boolean>();
   private aggregateCache = new Map<string | null | undefined, Pick<EngineStatus,
-    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'>>();
+    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'|'sourceProjection'>>();
   private storedSummaries: ReturnType<SqliteStore['sourceSummaries']> | undefined;
   private sourceFolders:MemorySourceFolder[]|null=null;
   private fileRootOwners=new Map<string,string|null>();
@@ -204,6 +207,7 @@ export class MemoryEngine {
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
+    this.sourceRecords=store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.updateFileRootOwners();
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
@@ -287,6 +291,7 @@ export class MemoryEngine {
     this.invalidateView();
     this.updateFileRootOwners();
     this.snapshot=this.store.loadAll();
+    this.sourceRecords=this.store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
   }
@@ -657,7 +662,9 @@ export class MemoryEngine {
     const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
     const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,sessions:new Set(availableRows.filter(r=>r.refType==='session').map(r=>r.sourcePath)).size,trackers:new Set(availableRows.filter(r=>r.refType==='tracker').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
-    counts={available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
+    const records=new Map(this.sourceRecords.map(record=>[record.sourcePath,record]));
+    const sourceProjection={version:SOURCE_SEARCH_VERSION,pendingFiles:summaries.filter(row=>row.refType==='doc-file'&&(records.get(row.sourcePath)?.version!==SOURCE_SEARCH_VERSION||this.embedder.info.dims>0&&!records.get(row.sourcePath)?.denseEmbedding?.length)).length,warnings:this.sourceRecords.filter(record=>record.warning&&this.readable(record)&&(rootId===undefined||this.coverageRoot(record.sourcePath,record.sourceClass)===rootId)).map(record=>({sourcePath:record.sourcePath,relativePath:record.relativePath,warning:record.warning!}))};
+    counts={sourceProjection,available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
     this.aggregateCache.set(rootId,counts);
     }
     return {

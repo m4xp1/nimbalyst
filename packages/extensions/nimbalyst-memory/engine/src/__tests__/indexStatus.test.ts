@@ -274,3 +274,12 @@ describe('source discovery verifies actual scopes',()=>{
   expect(engine.status().fileIndex?.issues?.filter(issue=>issue.state==='active')).toEqual([]);
  });
 });
+
+
+describe('auxiliary document projection failures',()=>{
+ it('keeps a verified existing body searchable when only a new context vector fails',async()=>{
+  const {root,engine,embedder}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nBODY_REMAINS_AVAILABLE');await engine.indexAll();
+  (engine as any).store.writeSourceProjection(undefined,'docs/a.md');const failure=vi.spyOn(embedder,'embed').mockRejectedValue(Object.assign(Error('private provider response'),{status:429}));
+  await expect(engine.indexAll()).rejects.toThrow();expect(engine.status().available?.indexedFiles).toBe(1);expect(engine.status().sourceProjection?.pendingFiles).toBe(1);expect(engine.status().fileIndex?.failures).toMatchObject([{projectionOnly:true,stage:'embeddings'}]);expect(engine.expand('docs/a.md',['A'])?.text).toContain('BODY_REMAINS_AVAILABLE');failure.mockRestore();await engine.indexAll();expect(engine.status().sourceProjection?.pendingFiles).toBe(0);expect(engine.status().fileIndex?.failures).toEqual([]);
+ });
+});

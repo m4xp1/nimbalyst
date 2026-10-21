@@ -23,6 +23,7 @@ import { coveragePalette } from './coveragePalette';
 import { MemorySourcePicker, useMemorySearchRoots } from '@nimbalyst/runtime';
 
 interface IndexStatus {
+  sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
   sourceUpdate?:{pending:boolean;error:SafeIndexError|null};
   rebuildOperation?:{id:number;state:string;error:SafeIndexError|null}|null;
@@ -780,6 +781,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               <strong>Updating index</strong>
               {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Finding affected files…</p>}
             </div>}
+            {!!status.sourceProjection?.pendingFiles&&<p>Search metadata update: {status.sourceProjection.pendingFiles} files pending. Available indexed content remains searchable.</p>}
+            {!!status.sourceProjection?.warnings.length&&<ul aria-label="Document metadata warnings">{status.sourceProjection.warnings.map(warning=><li key={warning.sourcePath}><code>{warning.relativePath}</code> — Invalid YAML frontmatter; searching the literal text without field priority.</li>)}</ul>}
             {!!activeIssues.length&&<ul className="nimbalyst-memory-observer-errors" aria-label="Current source observation errors">{activeIssues.map(issue=><li key={issue.id} role="alert"><strong>{issueScope(issue)}</strong>{issue.relativePath&&<> / <code>{issue.relativePath}</code></>} — {issue.stage} · {issue.error.category}{issue.code? ' · '+issue.code:''} · Active error, last observed {new Date(issue.updatedAt).toLocaleString()}<p>{issue.stage==='discovery'||issue.stage==='watch'?'Check access and source settings. The error clears after this scope is successfully verified.':errorAction(issue.error)}</p></li>)}</ul>}
             {!!issues?.some(issue=>issue.state==='recovered')&&<details><summary>Recovered source errors</summary><ul>{issues.filter(issue=>issue.state==='recovered').map(issue=><li key={issue.id}>{issueScope(issue)} — {issue.stage} · recovered {new Date(issue.resolvedAt??issue.updatedAt).toLocaleString()}</li>)}</ul></details>}
             {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
