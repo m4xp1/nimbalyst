@@ -17,7 +17,7 @@ import {
   sessionFileEditsAtom,
   sessionGitStatusAtom,
   setSessionPendingReviewFilesAtom,
-  workspaceUncommittedFilesAtom,
+  workspaceUncommittedFilesAtom,workspaceUncommittedFilesReadyAtom,
   worktreeChangedFilesAtom,
   worktreeGitStatusAtom,
   type FileEditWithSession,
@@ -253,6 +253,7 @@ export function initFileStateListeners(workspacePath: string): () => void {
       const result = await window.electronAPI.invoke('git:get-uncommitted-files', workspacePath);
       if (result.success && result.files) {
         store.set(workspaceUncommittedFilesAtom(workspacePath), result.files);
+        store.set(workspaceUncommittedFilesReadyAtom(workspacePath),true);
       }
     } catch (error) {
       console.error('[fileStateListeners] Failed to load initial uncommitted files:', error);
@@ -377,6 +378,7 @@ export function initFileStateListeners(workspacePath: string): () => void {
           );
           if (uncommittedResult.success && uncommittedResult.files) {
             store.set(workspaceUncommittedFilesAtom(refreshPath), uncommittedResult.files);
+            store.set(workspaceUncommittedFilesReadyAtom(refreshPath),true);
           }
 
           // 2. Refresh git status for ALL sessions in this workspace

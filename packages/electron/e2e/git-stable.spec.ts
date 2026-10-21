@@ -81,6 +81,33 @@ for (const marketplace of [true, false]) {
    await page.getByTestId('window-top-bar-git-status').click();await expect(page.getByRole('menuitem',{name:/Open Git Log/})).toBeDisabled();await page.keyboard.press('Escape');
    await invoke('extensions:set-enabled','com.nimbalyst.git',true);await close();await launch();await openPanel();
   },180000);
+  test('Manual Select all ignores ten unchanged session-history files on the first commit',async()=>{
+   if(await page.locator('.git-log-panel').isVisible())await page.keyboard.press('Control+Shift+G');
+   const history=Array.from({length:11},(_,i)=>'history-'+i+'.txt');
+   for(const name of history)await fs.writeFile(path.join(workspace,name),'history baseline\n');
+   git(['add','--',...history]);git(['commit','-m','artificial history']);
+   const sid='manual-history-fixture';
+   expect((await invoke('test:insert-session',{id:sid,workspaceId:workspace,provider:'openai-codex',title:'Artificial manual selection'})).success).toBe(true);
+   for(const name of history)expect((await invoke('session-files:add-link',sid,workspace,path.join(workspace,name),'edited')).success).toBe(true);
+   await fs.writeFile(path.join(workspace,history[0]),'selected current change\n');
+   await fs.writeFile(path.join(workspace,'staged.txt'),'keep unrelated staging\n');git(['add','staged.txt']);
+   await fs.writeFile(path.join(workspace,'unstaged.txt'),'keep unrelated working change\n');
+   const foreignStage=git(['diff','--cached']),foreignWork=git(['diff','--','unstaged.txt']);
+   await page.evaluate(({sid,workspace})=>window.dispatchEvent(new CustomEvent('open-ai-session',{detail:{sessionId:sid,workspacePath:workspace}})),{sid,workspace});
+   const operations=page.locator('.git-operations-panel').filter({visible:true}).first();await expect(operations).toBeVisible();
+   await operations.getByRole('button',{name:'Manual commit message',exact:true}).click();
+   const select=page.locator('.file-edits-sidebar__root-checkbox').filter({visible:true});await expect(select).toContainText('1 uncommitted');await select.locator('[class*="cursor-pointer"]').first().click();
+   await expect(operations.getByRole('button',{name:'Commit (1)',exact:true})).toBeVisible();
+   await operations.getByPlaceholder('Enter commit message...').fill('manual single selected first click');
+   const beforeCount=Number(git(['rev-list','--count','HEAD']));await operations.getByRole('button',{name:'Commit (1)',exact:true}).click();
+   await expect(operations.getByRole('status')).toHaveText('Committed.');expect(Number(git(['rev-list','--count','HEAD']))).toBe(beforeCount+1);
+   expect(git(['diff-tree','--no-commit-id','--name-only','-r','HEAD'])).toBe(history[0]);expect(git(['diff','--cached'])).toBe(foreignStage);expect(git(['diff','--','unstaged.txt'])).toBe(foreignWork);
+   const hooks=path.join(temp,'manual-hooks');await fs.mkdir(hooks);await fs.writeFile(path.join(hooks,'pre-commit'),'#!/bin/sh\necho MANUAL_SELECTION_REJECT >&2\nexit 1\n',{mode:0o755});git(['config','core.hooksPath',hooks]);
+   await fs.writeFile(path.join(workspace,history[0]),'rejected current change\n');await expect(select).toContainText('1 uncommitted');await select.locator('[class*="cursor-pointer"]').first().click();
+   const before=git(['rev-parse','HEAD']);await operations.getByPlaceholder('Enter commit message...').fill('keep refused draft');await operations.getByRole('button',{name:'Commit (1)',exact:true}).click();
+   await expect(operations.getByRole('alert')).toContainText('MANUAL_SELECTION_REJECT');expect(git(['rev-parse','HEAD'])).toBe(before);expect(git(['diff','--cached'])).toBe(foreignStage);expect(await operations.getByPlaceholder('Enter commit message...').inputValue()).toBe('keep refused draft');
+   git(['config','--unset','core.hooksPath']);assertGitSandbox(workspace,temp);git(['reset','--hard','HEAD']);
+  },90000);
   test('panel commits exactly the selection and reports hook failure without losing other edits', async () => {
    const panel=page.locator('.git-log-panel');if(!await panel.isVisible())await openPanel();await panel.getByRole('button',{name:/^Changes/}).click();
    await fs.writeFile(path.join(workspace,'staged.txt'),'keep staged\n');git(['add','staged.txt']);

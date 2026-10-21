@@ -412,3 +412,52 @@ describe('GitWorktreeService.getWorktreeStatus isMerged', () => {
     expect(status.isMerged).toBe(true);
   });
 });
+
+describe('GitWorktreeService selected private-index commits', () => {
+  let fixture: string;
+  let worktree: string;
+  const service = new GitWorktreeService();
+  const git = (cwd: string, args: string[]) => execFileSync('git', args, {
+    cwd, env: gitSandboxEnv(undefined, { pinConfigPaths: false }), encoding: 'utf8',
+  }).trim();
+  beforeEach(() => {
+    fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'nimbalyst-gws-selection-'));
+    const repo = path.join(fixture, 'repo');
+    fs.mkdirSync(repo);
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['config', 'user.name', 'Fixture']);
+    git(repo, ['config', 'user.email', 'fixture@example.invalid']);
+    git(repo, ['config', 'commit.gpgsign', 'false']);
+    for (const name of ['selected.txt', 'staged.txt', 'unstaged.txt']) fs.writeFileSync(path.join(repo, name), 'initial\n');
+    assertGitSandbox(repo, fixture);
+    git(repo, ['add', '.']);
+    git(repo, [...FIXTURE_IDENTITY_ARGS, 'commit', '-qm', 'initial']);
+    worktree = path.join(fixture, 'worktree');
+    git(repo, ['worktree', 'add', '-qb', 'fixture/selection', worktree]);
+    for (const name of ['selected.txt', 'staged.txt', 'unstaged.txt']) fs.writeFileSync(path.join(worktree, name), 'changed\n');
+    assertGitSandbox(worktree, fixture);
+    git(worktree, ['add', 'staged.txt']);
+  });
+  afterEach(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  it('commits only the selection on the first call and preserves unrelated staging and working files', async () => {
+    const before = git(worktree, ['rev-parse', 'HEAD']);
+    const staged = git(worktree, ['diff', '--cached']);
+    const unstaged = git(worktree, ['diff', '--', 'unstaged.txt']);
+    const result = await service.commitChanges(worktree, 'one selected file', ['selected.txt']);
+    expect(result.hash).not.toBe(before);
+    expect(git(worktree, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('selected.txt');
+    expect(git(worktree, ['diff', '--cached'])).toBe(staged);
+    expect(git(worktree, ['diff', '--', 'unstaged.txt'])).toBe(unstaged);
+  });
+  it('retains HEAD and staging when the pre-commit hook refuses', async () => {
+    const hook = git(worktree, ['rev-parse', '--git-path', 'hooks/pre-commit']);
+    const hookPath = path.resolve(worktree, hook);
+    fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+    fs.writeFileSync(hookPath, '#!/bin/sh\necho fixture-refusal >&2\nexit 1\n', { mode: 0o755 });
+    const before = git(worktree, ['rev-parse', 'HEAD']);
+    const staged = git(worktree, ['diff', '--cached']);
+    await expect(service.commitChanges(worktree, 'refused selection', ['selected.txt'])).rejects.toThrow('fixture-refusal');
+    expect(git(worktree, ['rev-parse', 'HEAD'])).toBe(before);
+    expect(git(worktree, ['diff', '--cached'])).toBe(staged);
+  });
+});
