@@ -110,6 +110,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   // Get all session IDs in this workstream (must be declared before useEffects that use it)
   const workstreamSessions = useAtomValue(workstreamSessionsAtom(workstreamId));
   const hasMultipleSessions = workstreamSessions.length > 1;
+  const [sessionStatusReady,setSessionStatusReady]=useState(false);
 
   // Read all file/git data from atoms (NO local state, NO IPC subscriptions)
   // Use workstream atoms which combine ALL data from all child sessions
@@ -164,18 +165,13 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
     }
   }, [workstreamId, effectiveWorkspacePath, worktreeId, worktreePath]);
 
-  // Lazy load file state for all child sessions in the workstream
-  useEffect(() => {
-    // Load file state for the workstream itself (parent)
-    loadInitialSessionFileState(workstreamId, effectiveWorkspacePath);
-
-    // Also load file state for all child sessions
-    workstreamSessions.forEach(sessionId => {
-      if (sessionId !== workstreamId) {
-        loadInitialSessionFileState(sessionId, effectiveWorkspacePath);
-      }
-    });
-  }, [workstreamId, effectiveWorkspacePath, workstreamSessions]);
+  // Preserve restored choices until the current sessions have published fresh Git status.
+  useEffect(()=>{
+    let live=true;setSessionStatusReady(false);
+    void Promise.all([...new Set([workstreamId,...workstreamSessions])].map(id=>loadInitialSessionFileState(id,effectiveWorkspacePath)))
+      .then(()=>{if(live)setSessionStatusReady(true);});
+    return()=>{live=false;};
+  },[workstreamId,effectiveWorkspacePath,workstreamSessions]);
 
   // Group by directory state from Jotai
   const [groupByDirectory] = useAtom(diffTreeGroupByDirectoryAtom);
@@ -355,7 +351,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   const eligibleEditedFilePaths=useMemo(()=>eligibleCommitPaths(editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath),[editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath]);
   const commitEligibleFiles=useMemo(()=>new Set(eligibleEditedFilePaths),[eligibleEditedFilePaths]);
   const stagedFiles=useMemo(()=>new Set(selectedCommitPaths(stagedFilesArr,editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath)),[stagedFilesArr,editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath]);
-  useEffect(()=>{if(worktreeId||!rootsLoaded||!statusReady)return;const current=atomStore.get(workstreamStagedFilesAtom(workstreamId));const eligible=eligibleCommitPaths(current,changedPaths,committableRoots,effectiveWorkspacePath);if(eligible.length!==current.length)setStagedFilesAction({workstreamId,files:eligible});},[worktreeId,rootsLoaded,statusReady,stagedFilesArr,changedPaths,committableRoots,effectiveWorkspacePath,atomStore,workstreamId,setStagedFilesAction]);
+  useEffect(()=>{if(worktreeId||!rootsLoaded||!statusReady||!sessionStatusReady)return;const current=atomStore.get(workstreamStagedFilesAtom(workstreamId));const eligible=eligibleCommitPaths(current,changedPaths,committableRoots,effectiveWorkspacePath);if(eligible.length!==current.length)setStagedFilesAction({workstreamId,files:eligible});},[worktreeId,rootsLoaded,statusReady,sessionStatusReady,stagedFilesArr,changedPaths,committableRoots,effectiveWorkspacePath,atomStore,workstreamId,setStagedFilesAction]);
 
   // For worktrees: compute the set of staged files from worktreeChangedFiles
   // Convert relative paths to absolute for matching with fileEdits

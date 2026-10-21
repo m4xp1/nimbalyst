@@ -64,6 +64,7 @@ for (const marketplace of [true, false]) {
   },60000);
   test.afterAll(close);
   test('registers exactly one Git, opens from menu and shortcut, survives restart and explicit disable', async () => {
+   test.setTimeout(180000);
    const installed=await invoke('extensions:list-installed');
    // list-installed returns the extension array directly.
    const entries=Array.isArray(installed)?installed:installed.data;
@@ -80,8 +81,9 @@ for (const marketplace of [true, false]) {
    await invoke('extensions:set-enabled','com.nimbalyst.git',false);await close();await launch();
    await page.getByTestId('window-top-bar-git-status').click();await expect(page.getByRole('menuitem',{name:/Open Git Log/})).toBeDisabled();await page.keyboard.press('Escape');
    await invoke('extensions:set-enabled','com.nimbalyst.git',true);await close();await launch();await openPanel();
-  },180000);
+  });
   test('Manual Select all ignores ten unchanged session-history files on the first commit',async()=>{
+   test.setTimeout(90000);
    if(await page.locator('.git-log-panel').isVisible())await page.keyboard.press('Control+Shift+G');
    const history=Array.from({length:11},(_,i)=>'history-'+i+'.txt');
    for(const name of history)await fs.writeFile(path.join(workspace,name),'history baseline\n');
@@ -107,7 +109,7 @@ for (const marketplace of [true, false]) {
    const before=git(['rev-parse','HEAD']);await operations.getByPlaceholder('Enter commit message...').fill('keep refused draft');await operations.getByRole('button',{name:'Commit (1)',exact:true}).click();
    await expect(operations.getByRole('alert')).toContainText('MANUAL_SELECTION_REJECT');expect(git(['rev-parse','HEAD'])).toBe(before);expect(git(['diff','--cached'])).toBe(foreignStage);expect(await operations.getByPlaceholder('Enter commit message...').inputValue()).toBe('keep refused draft');
    git(['config','--unset','core.hooksPath']);assertGitSandbox(workspace,temp);git(['reset','--hard','HEAD']);
-  },90000);
+  });
   test('panel commits exactly the selection and reports hook failure without losing other edits', async () => {
    const panel=page.locator('.git-log-panel');if(!await panel.isVisible())await openPanel();await panel.getByRole('button',{name:/^Changes/}).click();
    await fs.writeFile(path.join(workspace,'staged.txt'),'keep staged\n');git(['add','staged.txt']);

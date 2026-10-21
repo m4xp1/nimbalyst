@@ -15,3 +15,11 @@ export function eligibleCommitPaths(files:readonly string[],uncommitted:readonly
 export function selectedCommitPaths(selection:readonly string[],visible:readonly string[],uncommitted:readonly string[],roots:readonly string[],base:string):string[]{
  const selected=new Set(selection.map(file=>commitPathKey(file,base)));return eligibleCommitPaths(visible,uncommitted,roots,base).filter(file=>selected.has(commitPathKey(file,base)));
 }
+
+/** Apply an authoritative status response only to the files it actually checked. */
+export function reconcileCommitStatus(existing:readonly string[],status:Record<string,{status:string}>,base:string):string[]{
+ const checked=new Set(Object.keys(status).map(file=>commitPathKey(file,base)));
+ const next=existing.filter(file=>!checked.has(commitPathKey(file,base)));
+ for(const [file,value]of Object.entries(status))if(value.status!=='unchanged')next.push(resolvedCommitPath(file,base));
+ return [...new Map(next.map(file=>[commitPathKey(file,base),file])).values()];
+}
