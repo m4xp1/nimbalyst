@@ -118,7 +118,7 @@ export class Indexer {
     const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
     const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
     const relativePath=record?.file.path??(rootId&&rootId!=='harness-memory'?sourcePath.slice(rootId.length+2):sourcePath);
-    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),updatedAt:Date.now()});
+    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),stage:isProviderIndexFailure(error)||safeIndexError(error).category==='input'?'embeddings':'read',code:typeof (error as {code?:string})?.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined,updatedAt:Date.now()});
     this.persistFailures();
   }
   private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
@@ -317,17 +317,19 @@ export class Indexer {
   }
 
   /** Resolve all source files (first matching source set wins). */
-  async enumerate(): Promise<FileRef[]> {
+  async enumerate(rootId?:string|null): Promise<FileRef[]> {
     const seen = new Map<string, string>();
     for (const set of this.config.sources) {
-      const matches = await this.globSet(set);
+      const root=rootForSet(this.roots,set);if(rootId!==undefined&&root.id!==rootId)continue;
+      let matches:string[];try{matches=await this.globSet(set);}catch(error){if(error&&typeof error==='object')Object.assign(error,{memoryIndexContext:{stage:'discovery',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})}});throw error;}
       for (const sp of matches) if (!seen.has(sp)) seen.set(sp, set.sourceClass);
     }
     for (const record of this.fileRecords.values()) {
+      if(rootId!==undefined&&rootId!==null)continue;
       const hit = this.classify(record.file.path);
       if (hit) seen.set(hit.sourcePath, record.sourceClass);
     }
-    this.knownFiles=new Set(seen.keys());
+    if(rootId===undefined)this.knownFiles=new Set(seen.keys());else{for(const key of this.knownFiles)if(parseSourcePath(this.roots,key).root.id===rootId)this.knownFiles.delete(key);for(const key of seen.keys())this.knownFiles.add(key);}
     return Array.from(seen.entries()).map(([sourcePath, sourceClass]) => ({
       sourcePath,
       sourceClass,

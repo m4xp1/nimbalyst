@@ -480,7 +480,11 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const lastScan=status?.lastFullScan??status?.fileIndex;
   const activeOperation=operation?.state==='queued'||operation?.state==='running';
   const problems=status?.fileIndex?.failures??[];
-  const needsAttention=Boolean(status?.rebuildOperation?.error||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||operation?.error||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const issues=status?.fileIndex?.issues;
+  const activeIssues=issues?.filter(issue=>issue.state==='active')??[];
+  const historicalOperationError=issues===undefined?operation?.error:null;
+  const issueScope=(issue:NonNullable<FileIndexStatus['issues']>[number])=>issue.rootId===undefined?'All sources (scope unknown)':coverageRoots.find(root=>root.id===issue.rootId)?.label??(issue.rootId===null?'Primary workspace':issue.rootId);
+  const needsAttention=Boolean(activeIssues.length||status?.rebuildOperation?.error||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
 
@@ -776,13 +780,15 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               <strong>Updating index</strong>
               {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Finding affected files…</p>}
             </div>}
-            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {errorAction(f.error)}</li>)}
+            {!!activeIssues.length&&<ul className="nimbalyst-memory-observer-errors" aria-label="Current source observation errors">{activeIssues.map(issue=><li key={issue.id} role="alert"><strong>{issueScope(issue)}</strong>{issue.relativePath&&<> / <code>{issue.relativePath}</code></>} — {issue.stage} · {issue.error.category}{issue.code? ' · '+issue.code:''} · Active error, last observed {new Date(issue.updatedAt).toLocaleString()}<p>{issue.stage==='discovery'||issue.stage==='watch'?'Check access and source settings. The error clears after this scope is successfully verified.':errorAction(issue.error)}</p></li>)}</ul>}
+            {!!issues?.some(issue=>issue.state==='recovered')&&<details><summary>Recovered source errors</summary><ul>{issues.filter(issue=>issue.state==='recovered').map(issue=><li key={issue.id}>{issueScope(issue)} — {issue.stage} · recovered {new Date(issue.resolvedAt??issue.updatedAt).toLocaleString()}</li>)}</ul></details>}
+            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
             {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
             {status.rebuildOperation?.error&&<p role="alert" style={ERR}>{errorAction(status.rebuildOperation.error)}</p>}
-            {!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
-            {!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&operation?.error&&<p role="alert" style={ERR}>{errorAction(operation.error)}</p>}
+            {!activeIssues.length&&!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
+            {!activeIssues.length&&!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&historicalOperationError&&<p role="alert" style={ERR}>{errorAction(historicalOperationError)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
             {!status.indexing&&needsAttention&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}
             <details><summary>Index diagnostics</summary>

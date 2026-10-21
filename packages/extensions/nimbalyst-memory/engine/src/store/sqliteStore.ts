@@ -168,11 +168,11 @@ export class SqliteStore {
   }
 
   /** Sanitized derived diagnostics; never stores provider responses or file bodies. */
-  getIndexDiagnostics(): {failures:import('../indexStatus.js').SourceIndexFailure[];scans:Record<string,import('../indexStatus.js').FileIndexStatus>} {
+  getIndexDiagnostics(): {failures:import('../indexStatus.js').SourceIndexFailure[];scans:Record<string,import('../indexStatus.js').FileIndexStatus>;issues?:import('../indexStatus.js').IndexIssue[]} {
     const row=this.db.prepare("SELECT value FROM meta WHERE key='index_diagnostics'").get() as {value:string}|undefined;
     if(!row)return {failures:[],scans:{}};
     const value=JSON.parse(row.value);
-    return {failures:Array.isArray(value.failures)?value.failures:[],scans:value.scans??{}};
+    return {failures:Array.isArray(value.failures)?value.failures:[],scans:value.scans??{},issues:Array.isArray(value.issues)?value.issues:[]};
   }
   setIndexDiagnostics(value:ReturnType<SqliteStore['getIndexDiagnostics']>):void {
     this.db.prepare("INSERT INTO meta(key,value) VALUES('index_diagnostics',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value));
