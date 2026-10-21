@@ -49,6 +49,7 @@ export interface Bm25Scored {
   id: string;
   score: number;
   keywordMatch?: 'exact' | 'stem';
+  matchedTerms?:number;
 }
 
 /**
@@ -60,6 +61,7 @@ class Bm25Projection {
   private docLen = new Map<string, number>();
   private df = new Map<string, number>();
   private avgdl = 0;
+  private lengthNorm=new Map<string,number>();
 
   constructor(docs: Bm25Doc[]) {
     this.docs = docs;
@@ -77,6 +79,7 @@ class Bm25Projection {
       total += len;
     }
     this.avgdl = docs.length ? total / docs.length : 0;
+    if(this.avgdl)for(const [id,len]of this.docLen)this.lengthNorm.set(id,K1*(1-B+B*len/this.avgdl));
   }
 
   private idf(term: string): number {
@@ -84,6 +87,12 @@ class Bm25Projection {
     const df = this.df.get(term) ?? 0;
     // BM25+ style non-negative idf.
     return Math.log(1 + (n - df + 0.5) / (df + 0.5));
+  }
+
+  /** Query-local IDF preparation: score each document without rescanning or sorting per term. */
+  scorer(term:string):(id:string,tf:Record<string,number>)=>number{
+    if(!this.avgdl)return()=>0;const idf=this.idf(term);
+    return(id,tf)=>{const f=tfCount(tf,term);return f?idf*f*(K1+1)/(f+(this.lengthNorm.get(id)??K1)):0;};
   }
 
   /** Score every doc against the query; returns matches sorted desc. */
@@ -115,8 +124,11 @@ export class Bm25Index {
   private exact: Bm25Projection;
   private stems: Bm25Projection;
   private stemmer = new RussianStemmer();
+  private originalDocs:Bm25Doc[];
+  private stemDocs=new Map<string,Bm25Doc>();
 
   constructor(docs: Bm25Doc[]) {
+    this.originalDocs=docs;
     this.exact = new Bm25Projection(docs);
     const cache = new Map<string, string>();
     this.stems = new Bm25Projection(docs.map(d => {
@@ -131,8 +143,21 @@ export class Bm25Index {
         }
         tf[key] = (tf[key] ?? 0) + count;
       }
-      return { id: d.id, tf };
+      const projected={id:d.id,tf};this.stemDocs.set(d.id,projected);return projected;
     }));
+  }
+
+  /** Add every query concept once; a literal match does not disable other inflections. */
+  searchComplete(query:string):Bm25Scored[]{
+    const terms=informativeTerms(query),groups=new Map<string,string[]>();
+    for(const term of terms){const key=RUSSIAN_WORD.test(term)?this.stemmer.stem(term):term;const list=groups.get(key)??[];list.push(term);groups.set(key,list);}
+    const plans=[...groups].map(([concept,variants])=>({exact:variants.map(term=>this.exact.scorer(term)),stem:variants.some(term=>RUSSIAN_WORD.test(term))?this.stems.scorer(concept):null}));
+    const combined:Bm25Scored[]=[];
+    for(const doc of this.originalDocs){let score=0,matchedTerms=0,usedStem=false;const projected=this.stemDocs.get(doc.id)!;
+      for(const plan of plans){let value=0;for(const exact of plan.exact)value=Math.max(value,exact(doc.id,doc.tf));if(!value&&plan.stem){value=plan.stem(doc.id,projected.tf);if(value)usedStem=true;}if(value){score+=value;matchedTerms++;}}
+      if(score)combined.push({id:doc.id,score,matchedTerms,keywordMatch:usedStem?'stem':'exact'});
+    }
+    return combined.sort((a,b)=>groups.size===1&&a.keywordMatch!==b.keywordMatch?(a.keywordMatch==='exact'?-1:1):b.score-a.score);
   }
 
   search(query: string): Bm25Scored[] {
@@ -147,3 +172,10 @@ export class Bm25Index {
     return [...exact, ...additional];
   }
 }
+
+
+const QUERY_STOP_WORDS=new Set('как где откуда куда когда чтобы что это этот эта эти для над под при или который которая которое какие какой понять найти покажи the a an to of in on at and or how where which what is are from with by find show'.split(' '));
+/** Only the scoring query is filtered; embedding input and persisted terms stay verbatim. */
+export function hasContentTerms(query:string):boolean{return tokenize(query).some(term=>!QUERY_STOP_WORDS.has(term));}
+export function informativeTerms(query:string):string[]{const all=[...new Set(tokenize(query))],content=all.filter(term=>!QUERY_STOP_WORDS.has(term));return content.length?content:all;}
+export function queryConceptCount(query:string):number{const stemmer=new RussianStemmer();return new Set(informativeTerms(query).map(term=>RUSSIAN_WORD.test(term)?stemmer.stem(term):term)).size;}

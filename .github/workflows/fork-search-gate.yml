@@ -55,6 +55,11 @@ jobs:
           packages/runtime/src/extensions/__tests__/ExtensionLoader.settingsRoutes.test.ts
           packages/runtime/src/extensions/__tests__/ExtensionLoader.filesystem.test.ts
           packages/extensions/git/src/__tests__
+          packages/electron/src/renderer/store/listeners/__tests__/fileStateListeners.commitSelection.test.ts
+          packages/runtime/src/ui/git/__tests__/commitSelection.test.ts
+          packages/runtime/src/ui/AgentTranscript/components/__tests__/FileEditsSidebar.commitSelection.test.tsx
+          packages/electron/src/main/services/__tests__/GitStatusService.executeGitStatus.test.ts
+          packages/electron/src/main/services/__tests__/GitWorktreeService.test.ts
           packages/electron/src/main/services/__tests__/GitCommitService.test.ts
           packages/electron/src/main/services/__tests__/GitCommitService.multiRepo.test.ts
           packages/electron/src/main/ipc/__tests__/GitHandlers.operands.test.ts

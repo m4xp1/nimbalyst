@@ -10,7 +10,7 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { safeIndexError, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
+import { IndexIssueLedger, type IndexIssueScope, safeIndexError, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
 import type {
   Embedder,
   EngineConfig,
@@ -20,9 +20,10 @@ import type {
   VirtualRecord,
   FileRecord,
   SourceSet,
-  StoredChunk,
+  StoredChunk, SourceSearchRecord,
   MemorySourceFolder, MemorySearchOptions, MemorySearchScope,
 } from './types.js';
+import { SOURCE_SEARCH_VERSION } from './sourceSearch.js';
 import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, locateAbsolute, type ResolvedRoot } from './roots.js';
 import {validateEmbeddingResponse} from './embeddingInput.js';
@@ -34,6 +35,7 @@ import { Retriever } from './retrieval/retriever.js';
 import { FactsStore, type RecallQuery, type RememberInput } from './facts/facts.js';
 
 export interface EngineStatus {
+  sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?: {chunks:number;sourceFiles:number;indexedFiles:number;sessions:number;trackers:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
   operation?:FileOperation|null;
   lastFullScan?:FileIndexStatus;
@@ -90,8 +92,10 @@ const SOURCE_PATH_FORMAT = 2;
 
 export class MemoryEngine {
   private store: SqliteStore;
+  private sourceRecords:SourceSearchRecord[]=[];
   private roots: ResolvedRoot[];
   private rootScans:Record<string,FileIndexStatus>={};
+  private issues=new IndexIssueLedger();
   private indexer: Indexer;
   private facts: FactsStore;
   private retriever: Retriever;
@@ -116,7 +120,7 @@ export class MemoryEngine {
   private lastEmbedError: string | null = null;
   private readableSources = new Map<string, boolean>();
   private aggregateCache = new Map<string | null | undefined, Pick<EngineStatus,
-    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'>>();
+    'available'|'chunks'|'denseChunks'|'bySourceClass'|'sourceFiles'|'lastIndexedAt'|'indexedFiles'|'chunksWithoutVectors'|'sourceProjection'>>();
   private storedSummaries: ReturnType<SqliteStore['sourceSummaries']> | undefined;
   private sourceFolders:MemorySourceFolder[]|null=null;
   private fileRootOwners=new Map<string,string|null>();
@@ -198,12 +202,15 @@ export class MemoryEngine {
     this.indexer = new Indexer(config, store, embedder);
     const saved=store.getIndexDiagnostics().scans;
     this.fileIndex=saved.all??this.fileIndex;
+    this.issues=new IndexIssueLedger(store.getIndexDiagnostics().issues??[]);
+    if(this.fileIndex.globalError){const prior=this.fileIndex.globalError;this.issues.record({}, {stage:'unknown'});const rows=this.issues.list();rows.find(row=>row.stage==='unknown'&&row.rootId===undefined&&row.state==='active')!.error=prior;this.issues=new IndexIssueLedger(rows);delete this.fileIndex.globalError;}
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
+    this.sourceRecords=store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.updateFileRootOwners();
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)),undefined,this.sourceRecords.filter(record=>this.readable(record)));
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -247,15 +254,16 @@ export class MemoryEngine {
     const base=rootId===undefined?this.fileIndex:this.rootScans[rootId??'primary']??{state:'not-started' as const,phase:null,discoveredFiles:null,completedFiles:null,failedFiles:null,error:null};
     const failures=this.indexer.failuresForStatus().filter(f=>rootId===undefined || f.rootId===rootId);
     const remaining=base.remainingFiles??(base.discoveredFiles===null?null:Math.max(0,base.discoveredFiles-(base.completedFiles??0)-(base.failedFiles??0)));
-    const error=failures[0]?.error??base.globalError??(base.phase==='enumerate'?base.error:null);
+    const issues=this.issues.list(rootId),active=issues.filter(issue=>issue.state==='active');
+    const error=failures[0]?.error??active[0]?.error??(base.phase==='enumerate'?base.error:null);
     const settled=base.state!=='not-started' && base.state!=='building';
     const hasSaved=(this.storedSummaries??=this.store.sourceSummaries()).some(row=>rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId);
-    return {...base,remainingFiles:remaining,failedFiles:failures.length,failureCount:failures.length,failures:failures.slice(0,100),error,
+    return {...base,issues,remainingFiles:remaining,failedFiles:failures.length,failureCount:failures.length,failures:failures.slice(0,100),error,
       completedFiles:settled&&base.discoveredFiles!==null?Math.max(0,base.discoveredFiles-(remaining??0)-failures.length):base.completedFiles,
       state:this.indexing?'building':failures.length || error || (remaining??0)>0?(hasSaved?'partial':'failed'):settled?'ready':base.state};
   }
   private persistDiagnostics():void {
-    this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:{...this.fileIndex},...this.rootScans}});
+    this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:{...this.fileIndex},...this.rootScans},issues:this.issues.list()});
   }
 
   ruleFilePaths(visiblePaths:string[]=[]):string[]{return this.indexer.ruleFilePaths(visiblePaths);}
@@ -283,8 +291,9 @@ export class MemoryEngine {
     this.invalidateView();
     this.updateFileRootOwners();
     this.snapshot=this.store.loadAll();
+    this.sourceRecords=this.store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)),undefined,this.sourceRecords.filter(record=>this.readable(record)));
   }
 
   indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
@@ -317,6 +326,7 @@ export class MemoryEngine {
     this.indexFinished = new Promise(resolve => { this.finishIndex = resolve; });
     this.fileIndex={state:'building',phase:'enumerate',discoveredFiles:null,completedFiles:0,failedFiles:0,remainingFiles:null,error:null};
     try {
+      if(this.watcher&&this.issues.list().some(issue=>issue.state==='active'&&(issue.stage==='watch'||issue.stage==='unknown')))await this.watcher.restartObservation();
       this.startWatching(true);
       await this.watcher?.ready();
       // Publish changed chunks during a long pass, but do not deserialize the
@@ -350,12 +360,13 @@ export class MemoryEngine {
         if(p.success===false)this.refreshSnapshot();
         onProgress?.(p);
       });
-      if(generation===this.policyGeneration)this.fileIndex.state='ready';
+      if(generation===this.policyGeneration){this.fileIndex.state='ready';for(const root of this.roots)this.issues.verify({stage:'discovery',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})});if((this.fileIndex.failedFiles??0)===0&&!this.issues.list().some(issue=>issue.state==='active'&&issue.stage==='watch'))this.issues.verify({stage:'unknown'});}
       this.embedderChanged = false;
       // Pruning and metadata-only changes are published in finally.
       return result;
     } catch (error) {
       passError=error;
+      const scope=(error as {memoryIndexContext?:IndexIssueScope})?.memoryIndexContext;if(scope&&generation===this.policyGeneration)this.issues.record(error,scope);
       this.fileIndex.error=safeIndexError(error);
       this.fileIndex.failedFiles=this.indexer.failuresForStatus().length;
       this.fileIndex.state=this.store.count()>0 ? 'partial' : 'failed';
@@ -394,6 +405,7 @@ export class MemoryEngine {
     if(!options?.paths)this.pendingDiscovery=true;
     this.config={...this.config,sources,workspaceExclude};
     this.roots=resolveRoots(this.config.root,sources);
+    this.issues.retainRoots(new Set(this.roots.map(root=>root.id)));
     this.indexer=new Indexer(this.config,this.store,this.embedder);
     this.indexer.inheritState(previous);
     const generation=++this.policyGeneration;
@@ -416,15 +428,16 @@ export class MemoryEngine {
 
   startWatching(seedOnly=false):void {
     if(this.watcher)return;
-    this.watcher=new IndexWatcher(this.config,this.indexer,()=>{this.refreshSnapshot();this.persistDiagnostics();},(error,sourcePath)=>{
+    this.watcher=new IndexWatcher(this.config,this.indexer,()=>{this.refreshSnapshot();this.persistDiagnostics();},(error,sourcePath,scope)=>{
+      if(this.closed)return;
       this.refreshSnapshot();
       if(this.operation){this.operation.error=safeIndexError(error);this.operation.state='failed';}
-      if(!sourcePath)this.fileIndex.globalError=safeIndexError(error);
+      if(!sourcePath){this.issues.record(error,scope??{stage:'watch'});this.persistDiagnostics();}
     },async()=>{},work=>this.fileWork.run(async()=>{
       if(this.closed)return;
       const op=this.beginOperation('watch');
       try{await work();if(op.state==='failed')this.finishOperation(op,op.error);else this.finishOperation(op);}catch(error){this.finishOperation(op,error);throw error;}finally{this.activeSourcePaths=undefined;}
-    }),p=>{if(this.operation?.kind==='watch'){if(p.sources)this.activeSourcePaths=p.sources.flatMap(source=>{try{return[resolveInRoots(this.roots,source.sourcePath).abs];}catch{return[];}});this.progressOperation(this.operation,p);}});
+    }),p=>{if(this.operation?.kind==='watch'){if(p.sources)this.activeSourcePaths=p.sources.flatMap(source=>{try{return[resolveInRoots(this.roots,source.sourcePath).abs];}catch{return[];}});this.progressOperation(this.operation,p);}},scope=>{if(!this.closed&&this.issues.verify(scope))this.persistDiagnostics();});
     this.watcher.start(seedOnly);
   }
 
@@ -649,7 +662,9 @@ export class MemoryEngine {
     const availableRows=this.snapshot.filter(row=>row.granularity!=='page'&&this.readable(row)&&(rootId===undefined||this.coverageRoot(row.sourcePath,row.sourceClass)===rootId));
     const availableClasses:Record<string,number>={};for(const row of availableRows)availableClasses[row.sourceClass]=(availableClasses[row.sourceClass]??0)+1;
     const available={chunks:availableRows.length,sourceFiles:new Set(availableRows.map(r=>r.sourcePath)).size,indexedFiles:new Set(availableRows.filter(r=>r.refType==='doc-file').map(r=>r.sourcePath)).size,sessions:new Set(availableRows.filter(r=>r.refType==='session').map(r=>r.sourcePath)).size,trackers:new Set(availableRows.filter(r=>r.refType==='tracker').map(r=>r.sourcePath)).size,bySourceClass:availableClasses,lastIndexedAt:availableRows.length?availableRows.reduce((latest,row)=>Math.max(latest,row.updatedAt),0):null};
-    counts={available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
+    const records=new Map(this.sourceRecords.map(record=>[record.sourcePath,record]));
+    const sourceProjection={version:SOURCE_SEARCH_VERSION,pendingFiles:summaries.filter(row=>row.refType==='doc-file'&&(records.get(row.sourcePath)?.version!==SOURCE_SEARCH_VERSION||this.embedder.info.dims>0&&!records.get(row.sourcePath)?.denseEmbedding?.length)).length,warnings:this.sourceRecords.filter(record=>record.warning&&this.readable(record)&&(rootId===undefined||this.coverageRoot(record.sourcePath,record.sourceClass)===rootId)).map(record=>({sourcePath:record.sourcePath,relativePath:record.relativePath,warning:record.warning!}))};
+    counts={sourceProjection,available,chunks,denseChunks:dense,bySourceClass,sourceFiles:new Set(summaries.map(row=>row.sourcePath)).size,lastIndexedAt:summaries.length?Math.max(...summaries.map(row=>row.updatedAt)):null,indexedFiles:new Set(summaries.filter(row=>row.refType==='doc-file').map(row=>row.sourcePath)).size,chunksWithoutVectors:chunks-dense};
     this.aggregateCache.set(rootId,counts);
     }
     return {

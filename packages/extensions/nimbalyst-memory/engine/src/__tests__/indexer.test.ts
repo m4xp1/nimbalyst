@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, rmSync as unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -236,7 +236,8 @@ describe('changed heading context',()=>{
   try{
    await indexer.indexAll();const before=sent.length;
    writeFileSync(file,'# UpdatedContext\n\n'+body);await indexer.indexAll();
-   expect(sent.length-before).toBe(store.chunksForSource('docs/context.md').length);
+   expect(sent.length-before).toBe(store.chunksForSource('docs/context.md').length+1);
+   expect(sent.slice(before).filter(input=>input.startsWith('File: '))).toHaveLength(1);
    expect(sent.slice(before).every(input=>input.includes('UpdatedContext'))).toBe(true);
   }finally{store.close();}
  });
@@ -250,7 +251,7 @@ describe('source projection migration and reuse',()=>{
   try{
    writeFileSync(file,'# A\nFirst\n# B\nSecond');await indexer.indexAll();sent.length=0;
    const raw='# New\nAdded\n# A\nFirst\n# B\nSecond';writeFileSync(file,raw);await indexer.indexAll();
-   expect(sent).toHaveLength(1);expect(sent[0]).toContain('Added');
+   expect(sent.filter(input=>!input.startsWith('File: '))).toHaveLength(1);expect(sent[0]).toContain('Added');expect(sent.filter(input=>input.startsWith('File: '))).toHaveLength(1);
    const chunks=store.chunksForSource('docs/shift.md');expect(chunks.every(c=>c.granularity!=='page')).toBe(true);
    for(const c of chunks){expect(c.embeddingInputHash).toMatch(/^[a-f0-9]{64}$/);expect(raw.slice(c.sourceRange!.start,c.sourceRange!.end)).toBe(c.text);}
   }finally{store.close();}
@@ -262,7 +263,57 @@ describe('source projection migration and reuse',()=>{
    await new Indexer(config,store,embedder).indexAll();
    store.upsertChunks(store.loadAll().map(c=>({...c,sourceRange:undefined,sectionId:undefined,context:undefined,embeddingInputHash:undefined,projectionVersion:undefined})));
    sent.length=0;await new Indexer({...config,pageVectors:false},store,embedder).indexAll();
-   expect(sent).toEqual([]);expect(store.loadAll()).toHaveLength(2);expect(store.loadAll().every(c=>c.projectionVersion===2&&c.sectionId&&c.sourceRange)).toBe(true);
+   expect(sent).toEqual([]);expect(store.loadAll()).toHaveLength(2);expect(store.loadAll().every(c=>c.projectionVersion===3&&c.sectionId&&c.sourceRange)).toBe(true);
   }finally{store.close();}
+ });
+});
+
+
+describe('document search metadata projection',()=>{
+ it('persists typed frontmatter and a bounded document context separately from quoteable chunks',async()=>{
+  const {root,config}=setup(),raw='---\ntitle: Точка продолжения\ndescription: Текущее состояние и следующий шаг проекта\naliases: [checkpoint, Возобновление]\ntags: [процесс]\ndoc_kind: checkpoint\nnested:\n  enabled: false\n  count: 0\n---\n# Продолжение работы\n## Следующий шаг\nНастроить искусственный сервер.\n';
+  writeFileSync(path.join(root,'docs/CHECKPOINT.md'),raw);const store=new SqliteStore(config.dbPath),embedder=new FakeEmbedder(),indexer=new Indexer(config,store,embedder);
+  try{await indexer.indexAll();const records=(store as any).sourceSearchRecords?.();expect(records).toHaveLength(1);expect(records[0]).toMatchObject({sourcePath:'docs/CHECKPOINT.md',fileName:'CHECKPOINT.md',fields:{title:['Точка продолжения'],doc_kind:['checkpoint'],'nested.enabled':['false'],'nested.count':['0'],aliases:['checkpoint','Возобновление']}});
+   expect(records[0].context).toContain('Следующий шаг');expect(records[0].context).not.toContain(root);expect(Buffer.byteLength(records[0].context)).toBeLessThanOrEqual(6000);expect(store.count()).toBe(store.loadAll().length);for(const chunk of store.loadAll())expect(raw.slice(chunk.sourceRange!.start,chunk.sourceRange!.end)).toBe(chunk.text);
+  }finally{store.close();}
+ });
+ it('refreshes keyword-only fields without embedding the body or the unchanged document context',async()=>{
+  const {root,config}=setup(),file=path.join(root,'docs/a.md');writeFileSync(file,'---\ntitle: Stable title\ncustom_id: OLD_FIELD\n---\n# Main\nStable body.');
+  const store=new SqliteStore(config.dbPath),embedder=new FakeEmbedder(),indexer=new Indexer(config,store,embedder);
+  try{await indexer.indexAll();const original=store.loadAll(),embed=vi.spyOn(embedder,'embed'),upsert=vi.spyOn(store,'upsertChunks');writeFileSync(file,'---\ntitle: Stable title\ncustom_id: NEW_FIELD\n---\n# Main\nStable body.');await indexer.indexAll();expect((store as any).sourceSearchRecords?.()[0].fields.custom_id).toEqual(['NEW_FIELD']);expect(embed).not.toHaveBeenCalled();expect(upsert).not.toHaveBeenCalled();expect(store.loadAll()).toEqual(original);
+  }finally{store.close();}
+ });
+ it('preserves malformed YAML as literal searchable text and supports metadata-only documents',async()=>{
+  const {root,config}=setup();writeFileSync(path.join(root,'docs/invalid.md'),'---\ntitle: [BROKEN_FRONTMATTER\n---\n# Body\nKept body.');writeFileSync(path.join(root,'docs/only.md'),'---\ntitle: METADATA_ONLY_MARKER\n---\n');const store=new SqliteStore(config.dbPath),indexer=new Indexer(config,store,new FakeEmbedder());
+  try{await indexer.indexAll();expect(store.chunksForSource('docs/invalid.md').map(c=>c.text).join('')).toContain('BROKEN_FRONTMATTER');expect(store.chunksForSource('docs/only.md').map(c=>c.text).join('')).toContain('METADATA_ONLY_MARKER');expect((store as any).sourceSearchRecords?.().find((r:any)=>r.sourcePath==='docs/invalid.md')).toMatchObject({warning:'invalid-frontmatter',fields:{}});
+  }finally{store.close();}
+ });
+});
+
+
+describe('document metadata lifecycle',()=>{
+ it('fills an old index with only the missing context vector, survives reopen, and prunes deleted metadata',async()=>{
+  const {root,config}=setup(),file=path.join(root,'docs/a.md'),fake=new FakeEmbedder(),inputs:string[]=[];writeFileSync(file,'# Main\nLIFECYCLE_BODY');
+  const embedder={info:fake.info,embed:async(texts:string[])=>{inputs.push(...texts);return fake.embed(texts);}};
+  let store=new SqliteStore(config.dbPath);try{await new Indexer(config,store,embedder).indexAll();store.writeSourceProjection(undefined,'docs/a.md');const body=store.loadAll();store.close();store=new SqliteStore(config.dbPath);inputs.length=0;
+   await new Indexer(config,store,embedder).indexAll();expect(inputs).toHaveLength(1);expect(inputs[0]).toMatch(/^File: a.md/);expect(store.loadAll()).toEqual(body);expect(store.sourceSearchRecords()).toHaveLength(1);
+   store.close();store=new SqliteStore(config.dbPath);inputs.length=0;await new Indexer(config,store,embedder).indexAll();expect(inputs).toEqual([]);
+   unlinkSync(file);await new Indexer(config,store,embedder).indexAll();expect(store.sourceSearchRecords()).toEqual([]);expect(store.count()).toBe(0);
+  }finally{store.close();}
+ });
+ it('never embeds root IDs or machine paths for attached sources',async()=>{
+  const {root,config}=setup(),other=mkdtempSync(path.join(tmpdir(),'metadata-attached-'));roots.push(other);writeFileSync(path.join(other,'Статус.md'),'---\ntitle: Состояние проекта\n---\n# Дальше\nСледующий шаг.');config.sources.push({sourceClass:'custom',include:['*.md'],root:{id:'opaque-id',path:other}});
+  const store=new SqliteStore(config.dbPath);try{await new Indexer(config,store,new FakeEmbedder()).indexAll();const record=store.sourceSearchRecords()[0];expect(record.sourcePath).toBe('@opaque-id/Статус.md');expect(record.context).not.toContain('opaque-id');expect(record.context).not.toContain(other);expect(record.relativePath).toBe('Статус.md');expect(record.refId).toBe(path.join(other,'Статус.md'));}finally{store.close();}
+ });
+ it('retains cyclic YAML literally instead of losing it or following aliases forever',async()=>{
+  const {root,config}=setup();writeFileSync(path.join(root,'docs/cycle.md'),'---\nself: &anchor\n  again: *anchor\nmarker: CYCLIC_YAML_MARKER\n---\n# Body\nBody.');const store=new SqliteStore(config.dbPath);try{await new Indexer(config,store,new FakeEmbedder()).indexAll();expect(store.sourceSearchRecords()[0].warning).toBe('invalid-frontmatter');expect(store.loadAll().map(c=>c.text).join('')).toContain('CYCLIC_YAML_MARKER');}finally{store.close();}
+ });
+});
+
+
+describe('unchanged source projections',()=>{
+ it('does not rewrite the auxiliary record or body during repeated unchanged scans',async()=>{
+  const {root,config}=setup();writeFileSync(path.join(root,'docs/a.md'),'---\ntitle: Stable\naliases: [One, Two]\n---\n# Main\nStable body.');const store=new SqliteStore(config.dbPath),fake=new FakeEmbedder(),indexer=new Indexer(config,store,fake);
+  try{await indexer.indexAll();const write=vi.spyOn(store,'writeSourceProjection'),embed=vi.spyOn(fake,'embed');for(let i=0;i<3;i++)await indexer.indexAll();expect(write).not.toHaveBeenCalled();expect(embed).not.toHaveBeenCalled();}finally{store.close();}
  });
 });

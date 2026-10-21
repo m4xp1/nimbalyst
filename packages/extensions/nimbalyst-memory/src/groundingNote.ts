@@ -45,6 +45,7 @@ export const BRAINSTORM_CHOREOGRAPHY =
   'flight, call search_project_knowledge for the relevant design docs/plans/' +
   'CLAUDE.md and recall for durable facts. Do these BEFORE ask_coding_agent -- ' +
   'they answer in under a second, whereas the coding agent can take minutes. ' +
+  " Search also matches filenames, relative paths and YAML values; title, description and aliases can provide strong field matches. Use an exact name or metadata phrase for an addressed lookup. Each result is an entity with an original citable fragment; optional matchedFields explains field evidence. Rank and filename are retrieval signals, not proof of freshness or authority: inspect the source and its current project context. " +
   'When listed, use list_sources for actual folder rootIds and pass rootIds to search_project_knowledge for one or several folders; omit it for All, use [null] for the main workspace. Never invent IDs or silently widen an invalid scope. Folder scope is separate from content types and indexing rules. Report unavailable sources. ' +
   'Memory session hits are indexed excerpts, not proof of complete current dialogue. ' +
   'For a full or current session discussion, ask_coding_agent to use Memory read_session ' +

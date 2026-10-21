@@ -13,11 +13,20 @@
  */
 
 import { store } from '@nimbalyst/runtime/store';
+import {commitPathKey,reconcileCommitStatus} from '@nimbalyst/runtime/ui/git/commitSelection';
+const dirtyRevisions=new Map<string,number>();
+const sessionStatusRevisions=new Map<string,number>();
+async function refreshWorkspaceDirty(workspacePath:string):Promise<void>{
+ const revision=(dirtyRevisions.get(workspacePath)??0)+1;dirtyRevisions.set(workspacePath,revision);
+ const result=await window.electronAPI.invoke('git:get-uncommitted-files',workspacePath);
+ if(dirtyRevisions.get(workspacePath)!==revision)return;
+ if(result.success&&result.files){store.set(workspaceUncommittedFilesAtom(workspacePath),result.files);store.set(workspaceUncommittedFilesReadyAtom(workspacePath),true);}
+}
 import {
   sessionFileEditsAtom,
   sessionGitStatusAtom,
   setSessionPendingReviewFilesAtom,
-  workspaceUncommittedFilesAtom,
+  workspaceUncommittedFilesAtom,workspaceUncommittedFilesReadyAtom,
   worktreeChangedFilesAtom,
   worktreeGitStatusAtom,
   type FileEditWithSession,
@@ -247,13 +256,39 @@ export function initFileStateListeners(workspacePath: string): () => void {
   const GIT_STATUS_DEBOUNCE_MS = 300;
   const PENDING_COUNT_DEBOUNCE_MS = 250;
 
+  const diskTimers=new Map<string,ReturnType<typeof setTimeout>>();
+  const diskPaths=new Map<string,Set<string>>(),diskGenerations=new Map<string,number>();
+  let live=true;
+  const within=(file:string,root:string)=>{const key=commitPathKey(file,root),base=commitPathKey(root,root);return key===base||key.startsWith(base+'/');};
+  cleanups.push(window.electronAPI.on('file-changed-on-disk',(event:{path?:string})=>{
+    if(!event?.path||!live)return;
+    const worktree=[...worktreePathRegistry.entries()].sort((a,b)=>b[1].length-a[1].length).find(([,root])=>within(event.path!,root));
+    const roots=store.get(workspaceRootPathsAtom);
+    if(!worktree&&!within(event.path,workspacePath)&&!roots.some(root=>within(event.path!,root)))return;
+    const target=worktree?.[1]??workspacePath,paths=diskPaths.get(target)??new Set<string>();paths.add(event.path);diskPaths.set(target,paths);
+    const generation=(diskGenerations.get(target)??0)+1;diskGenerations.set(target,generation);
+    const previous=diskTimers.get(target);if(previous)clearTimeout(previous);
+    diskTimers.set(target,setTimeout(()=>{diskTimers.delete(target);void(async()=>{
+      const files=[...paths];
+      await window.electronAPI.invoke('git:clear-status-cache',target);
+      const result=await window.electronAPI.invoke('git:get-file-status',target,files);
+      if(!live||diskGenerations.get(target)!==generation||!result.success||!result.status)return;
+      for(const file of files)paths.delete(file);
+      dirtyRevisions.set(target,(dirtyRevisions.get(target)??0)+1);
+      store.set(workspaceUncommittedFilesAtom(target),current=>reconcileCommitStatus(current,result.status,target));
+      store.set(workspaceUncommittedFilesReadyAtom(target),true);
+      for(const [sessionId,sessionRoot]of sessionWorkspaceRegistry)if(commitPathKey(sessionRoot,target)===commitPathKey(target,target)){
+        const edits=store.get(sessionFileEditsAtom(sessionId));
+        if(edits.some(edit=>files.some(file=>commitPathKey(edit.filePath,target)===commitPathKey(file,target))))void refreshSessionGitStatus(sessionId);
+      }
+      if(worktree)await refreshWorktreeChangedFiles(worktree[0],target);
+    })().catch(error=>console.error('[fileStateListeners] Failed to refresh external file status:',error));},GIT_STATUS_DEBOUNCE_MS));
+  }));
+
   // Load all uncommitted files for workspace immediately
   (async () => {
     try {
-      const result = await window.electronAPI.invoke('git:get-uncommitted-files', workspacePath);
-      if (result.success && result.files) {
-        store.set(workspaceUncommittedFilesAtom(workspacePath), result.files);
-      }
+      await refreshWorkspaceDirty(workspacePath);
     } catch (error) {
       console.error('[fileStateListeners] Failed to load initial uncommitted files:', error);
     }
@@ -371,13 +406,7 @@ export function initFileStateListeners(workspacePath: string): () => void {
 
         try {
           // 1. Refresh all uncommitted files for the workspace/worktree
-          const uncommittedResult = await window.electronAPI.invoke(
-            'git:get-uncommitted-files',
-            refreshPath
-          );
-          if (uncommittedResult.success && uncommittedResult.files) {
-            store.set(workspaceUncommittedFilesAtom(refreshPath), uncommittedResult.files);
-          }
+          await refreshWorkspaceDirty(refreshPath);
 
           // 2. Refresh git status for ALL sessions in this workspace
           const sessionsInWorkspace = Array.from(sessionWorkspaceRegistry.entries())
@@ -452,6 +481,7 @@ export function initFileStateListeners(workspacePath: string): () => void {
   );
 
   return () => {
+    live=false;for(const timer of diskTimers.values())clearTimeout(timer);diskTimers.clear();diskPaths.clear();
     cleanups.forEach(cleanup => cleanup?.());
     enrichDebounceTimers.forEach(timer => clearTimeout(timer));
     enrichDebounceTimers.clear();
@@ -553,6 +583,7 @@ async function refreshSessionGitStatus(sessionId: string): Promise<void> {
   const edits = store.get(sessionFileEditsAtom(sessionId));
   if (edits.length === 0) return;
 
+  const revision=(sessionStatusRevisions.get(sessionId)??0)+1;sessionStatusRevisions.set(sessionId,revision);
   try {
     // Get relative paths using proper path boundary checking
     const filePaths = edits.map(f => {
@@ -561,7 +592,12 @@ async function refreshSessionGitStatus(sessionId: string): Promise<void> {
     });
 
     const result = await window.electronAPI.invoke('git:get-file-status', workspacePath, filePaths);
-    if (result.success && result.status) {
+    if (result.success && result.status && sessionStatusRevisions.get(sessionId)===revision && sessionWorkspaceRegistry.get(sessionId)===workspacePath) {
+      // The session read is fresh even if the workspace-wide snapshot predates
+      // external edits. Reconcile only checked paths; keep other repositories.
+      dirtyRevisions.set(workspacePath,(dirtyRevisions.get(workspacePath)??0)+1);
+      store.set(workspaceUncommittedFilesAtom(workspacePath),current=>reconcileCommitStatus(current,result.status,workspacePath));
+      store.set(workspaceUncommittedFilesReadyAtom(workspacePath),true);
       store.set(sessionGitStatusAtom(sessionId), result.status);
     }
   } catch (error) {

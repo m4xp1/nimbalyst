@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.7] - 2026-10-22
+
+### Changed
+- Search Memory by YAML values, filenames and relative paths, with document context, complete Russian word matching and one result per entity.
+- Explain field matches separately from original quotations and reconcile document projections without regenerating unchanged vectors.
+
+### Fixed
+- Track Coverage errors by source and stage, and recover status only after checking the affected area.
+- Select only currently changed files for Manual Commit, keep counters and payloads consistent, and refresh external edits without losing unrelated staging.
+
 ## [0.81.7+m4xp1.6] - 2026-10-20
 
 ### Added

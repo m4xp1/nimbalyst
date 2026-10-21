@@ -3089,6 +3089,7 @@ const SearchPane: React.FC<SearchPaneProps> = memo(({
                   </span>
                 </div>
                 {result.rootLabel && <div className="text-xs text-nim-faint truncate" title={result.refId}>{result.rootLabel} — {result.relativePath}</div>}
+                {!!result.matchedFields?.length&&<div className="memory-matched-fields text-xs text-nim-muted truncate" title={result.matchedFields.map(match=>match.field+': '+match.value).join(' · ')}>Matched {result.matchedFields.slice(0,2).map(match=>match.field+': '+match.value).join(' · ')}</div>}
                 {result.snippet && (
                   <div className="text-xs text-nim-faint mt-0.5 truncate">{result.snippet}</div>
                 )}

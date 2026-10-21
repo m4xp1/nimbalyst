@@ -13,11 +13,13 @@ import { ShellTrackingNotice } from './ShellTrackingNotice';
  * Optionally allows filtering by a specific child session.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {commitPathKey,eligibleCommitPaths,selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
 import { getWorktreeNameFromPath } from '../../utils/pathUtils';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { FileEditsSidebar as FileEditsSidebarComponent, MaterialSymbol } from '@nimbalyst/runtime';
-import type { FileEditSummary } from '@nimbalyst/runtime';
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
+import { FileEditsSidebar as FileEditsSidebarComponent } from '@nimbalyst/runtime/ui/AgentTranscript/components/FileEditsSidebar';
+import {MaterialSymbol} from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
+import type { FileEditSummary } from '@nimbalyst/runtime/ui/AgentTranscript/types';
 import {
   diffTreeGroupByDirectoryAtom,
   setDiffTreeGroupByDirectoryAtom,
@@ -42,16 +44,14 @@ import {
   sessionFileEditsAtom,
   workstreamFileEditsAtom,
   sessionGitStatusAtom,
-  workstreamGitStatusAtom,
   sessionPendingReviewFilesAtom,
   workstreamPendingReviewFilesAtom,
-  workspaceUncommittedFilesAtom,
+  workspaceUncommittedFilesAtom,workspaceUncommittedFilesReadyAtom,
   worktreeChangedFilesAtom,
   type FileEditWithSession,
 } from '../../store/atoms/sessionFiles';
 import { registerSessionWorkspace, registerWorktreePath, loadInitialSessionFileState } from '../../store/listeners/fileStateListeners';
 import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
-import { isPathInWorkspace } from '../../../shared/pathUtils';
 import { FilesScopeDropdown } from './FilesScopeDropdown';
 import { GitOperationsPanel } from './GitOperationsPanel';
 import { TodoPanel } from './TodoPanel';
@@ -63,27 +63,11 @@ import { TrackerPanel } from './TrackerPanel';
 // must not retain previous callbacks and their session-message props.
 function useWorkspaceFileFilter(committableRoots: string[]) {
   return useCallback(
-    (filePath: string) => committableRoots.some(root => isPathInWorkspace(filePath, root)),
+    (filePath: string) => committableRoots.some(root => {const key=commitPathKey(filePath,committableRoots[0]??''),base=commitPathKey(root,root);return key===base||key.startsWith(base.replace(/\/+$/,'')+'/');}),
     [committableRoots]
   );
 }
 
-function useUncommittedFileFilter(
-  sessionFilesGitStatus: Record<string, { status: string }>,
-  workspacePath: string,
-  worktreePath?: string | null,
-) {
-  return useCallback((filePath: string): boolean => {
-    const effectiveWorkspacePath = worktreePath || workspacePath;
-    let relativePath = filePath;
-    if (filePath.startsWith(effectiveWorkspacePath)) {
-      relativePath = filePath.slice(effectiveWorkspacePath.length + 1);
-    }
-    const status = sessionFilesGitStatus[relativePath];
-    // File has uncommitted changes if it has a status and status is not 'unchanged'
-    return status !== undefined && status.status !== 'unchanged';
-  }, [sessionFilesGitStatus, workspacePath, worktreePath]);
-}
 
 interface FilesEditedSidebarProps {
   /** The workstream ID (parent session ID) - files from all child sessions will be shown */
@@ -119,15 +103,19 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   isGitRepo = false,
 }) => {
   const effectiveWorkspacePath = worktreePath || workspacePath;
+  const atomStore=useStore();
+  const stagingLane=useRef(Promise.resolve());
+  const stagingContext=useRef(effectiveWorkspacePath);stagingContext.current=effectiveWorkspacePath;
+  const [stagingError,setStagingError]=useState<string|null>(null);
   // Get all session IDs in this workstream (must be declared before useEffects that use it)
   const workstreamSessions = useAtomValue(workstreamSessionsAtom(workstreamId));
   const hasMultipleSessions = workstreamSessions.length > 1;
+  const [sessionStatusReady,setSessionStatusReady]=useState(false);
 
   // Read all file/git data from atoms (NO local state, NO IPC subscriptions)
   // Use workstream atoms which combine ALL data from all child sessions
   // The filtering logic will filter down to specific sessions based on user selection
   const allFileEdits = useAtomValue(workstreamFileEditsAtom(workstreamId));
-  const sessionFilesGitStatus = useAtomValue(workstreamGitStatusAtom(workstreamId));
   const pendingReviewFiles = useAtomValue(workstreamPendingReviewFilesAtom(workstreamId));
   // For worktrees, use worktreePath; otherwise use main workspacePath
   const uncommittedFilesPath = worktreePath || workspacePath;
@@ -135,7 +123,11 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   // Always call the hook unconditionally with a stable key, use empty array if no worktreeId
   const worktreeChangedFilesKey = worktreeId || '__no_worktree__';
   const worktreeChangedFilesRaw = useAtomValue(worktreeChangedFilesAtom(worktreeChangedFilesKey));
-  const worktreeChangedFiles = worktreeId ? worktreeChangedFilesRaw : [];
+  const worktreeChangedFiles = useMemo(()=>worktreeId?worktreeChangedFilesRaw:[],[worktreeId,worktreeChangedFilesRaw]);
+  const statusReady=useAtomValue(workspaceUncommittedFilesReadyAtom(uncommittedFilesPath));
+  const changedPaths=useMemo(()=>worktreeId?worktreeChangedFiles.map(file=>effectiveWorkspacePath+'/'+file.path):allUncommittedFiles,[worktreeId,worktreeChangedFiles,allUncommittedFiles,effectiveWorkspacePath]);
+  const dirtyKeys=useMemo(()=>new Set(changedPaths.map(file=>commitPathKey(file,effectiveWorkspacePath))),[changedPaths,effectiveWorkspacePath]);
+  const isFileUncommitted=useCallback((file:string)=>dirtyKeys.has(commitPathKey(file,effectiveWorkspacePath)),[dirtyKeys,effectiveWorkspacePath]);
 
   // UI state (keep in local state - this is fine)
   const [filterToCurrentSession, setFilterToCurrentSession] = useState(false);
@@ -173,18 +165,13 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
     }
   }, [workstreamId, effectiveWorkspacePath, worktreeId, worktreePath]);
 
-  // Lazy load file state for all child sessions in the workstream
-  useEffect(() => {
-    // Load file state for the workstream itself (parent)
-    loadInitialSessionFileState(workstreamId, effectiveWorkspacePath);
-
-    // Also load file state for all child sessions
-    workstreamSessions.forEach(sessionId => {
-      if (sessionId !== workstreamId) {
-        loadInitialSessionFileState(sessionId, effectiveWorkspacePath);
-      }
-    });
-  }, [workstreamId, effectiveWorkspacePath, workstreamSessions]);
+  // Preserve restored choices until the current sessions have published fresh Git status.
+  useEffect(()=>{
+    let live=true;setSessionStatusReady(false);
+    void Promise.all([...new Set([workstreamId,...workstreamSessions])].map(id=>loadInitialSessionFileState(id,effectiveWorkspacePath)))
+      .then(()=>{if(live)setSessionStatusReady(true);});
+    return()=>{live=false;};
+  },[workstreamId,effectiveWorkspacePath,workstreamSessions]);
 
   // Group by directory state from Jotai
   const [groupByDirectory] = useAtom(diffTreeGroupByDirectoryAtom);
@@ -193,10 +180,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   // Staged files - used for checkbox state (per-workstream)
   // Checkboxes are always shown in the new unified design
   const stagedFilesArr = useAtomValue(workstreamStagedFilesAtom(workstreamId));
-  const stagedFiles = useMemo(
-    () => new Set(stagedFilesArr.filter(isWorkspaceCommittableFile)),
-    [stagedFilesArr, isWorkspaceCommittableFile]
-  );
+
   const setStagedFilesAction = useSetAtom(setWorkstreamStagedFilesAtom);
 
   useEffect(() => {
@@ -271,7 +255,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   };
 
   // Helper to check if a file has uncommitted git changes
-  const isFileUncommitted = useUncommittedFileFilter(sessionFilesGitStatus, workspacePath, worktreePath);
+
 
   // Calculate total session files count (deduplicated by filepath)
   const totalSessionFilesCount = useMemo(() => {
@@ -359,22 +343,15 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
 
   // Memoize editedFiles array for GitOperationsPanel to prevent unnecessary re-renders
   const editedFilePaths = useMemo(() => {
-    if (worktreeId) {
-      // For worktrees, include worktree changed files
-      return [...fileEdits.map((f) => f.filePath), ...worktreeChangedFiles.map(f => f.path)];
-    }
     return fileEdits
       .map((f) => f.filePath)
       .filter((filePath) => isWorkspaceCommittableFile(filePath));
-  }, [fileEdits, isWorkspaceCommittableFile, worktreeId, worktreeChangedFiles]);
+  }, [fileEdits, isWorkspaceCommittableFile]);
 
-  // Helper to convert absolute path to relative path for worktree comparisons
-  const toRelativePath = (absolutePath: string) => {
-    if (worktreePath && absolutePath.startsWith(worktreePath)) {
-      return absolutePath.slice(worktreePath.length + 1);
-    }
-    return absolutePath;
-  };
+  const eligibleEditedFilePaths=useMemo(()=>eligibleCommitPaths(editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath),[editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath]);
+  const commitEligibleFiles=useMemo(()=>new Set(eligibleEditedFilePaths),[eligibleEditedFilePaths]);
+  const stagedFiles=useMemo(()=>new Set(selectedCommitPaths(stagedFilesArr,editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath)),[stagedFilesArr,editedFilePaths,changedPaths,committableRoots,effectiveWorkspacePath]);
+  useEffect(()=>{if(worktreeId||!rootsLoaded||!statusReady||!sessionStatusReady)return;const current=atomStore.get(workstreamStagedFilesAtom(workstreamId));const eligible=eligibleCommitPaths(current,changedPaths,committableRoots,effectiveWorkspacePath);if(eligible.length!==current.length)setStagedFilesAction({workstreamId,files:eligible});},[worktreeId,rootsLoaded,statusReady,sessionStatusReady,stagedFilesArr,changedPaths,committableRoots,effectiveWorkspacePath,atomStore,workstreamId,setStagedFilesAction]);
 
   // For worktrees: compute the set of staged files from worktreeChangedFiles
   // Convert relative paths to absolute for matching with fileEdits
@@ -385,99 +362,20 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   }, [worktreeId, worktreePath, worktreeChangedFiles]);
 
 
-  // Handle worktree file staging toggle
-  const handleWorktreeToggleStaged = async (filePath: string) => {
-    if (!worktreePath || !worktreeId) {
-      return;
-    }
-
-    try {
-      // Convert to relative path if absolute
-      const relativePath = toRelativePath(filePath);
-      const file = worktreeChangedFiles.find(f => f.path === relativePath);
-      if (!file) {
-        // File not in worktreeChangedFiles (e.g., from "All Uncommitted Files"), stage it directly
-        await window.electronAPI.invoke('worktree:stage-file', worktreePath, relativePath, true);
-        return;
-      }
-
-      const newStaged = !file.staged;
-      await window.electronAPI.invoke('worktree:stage-file', worktreePath, relativePath, newStaged);
-
-      // Refresh worktree state from backend - the atom will be updated by the IPC call
-      // which triggers a git:status-changed event, handled by central listener
-    } catch (error) {
-      console.error('[FilesEditedSidebar] Failed to toggle worktree file staging:', error);
+  // Explicit desired state and a serial lane avoid racing stage-all against a file toggle.
+  const handleBulkSelectionChange=(filePaths:string[],selected:boolean)=>{
+    const visible=new Set(eligibleEditedFilePaths.map(file=>commitPathKey(file,effectiveWorkspacePath)));
+    const allowed=eligibleCommitPaths(filePaths,changedPaths,committableRoots,effectiveWorkspacePath).filter(file=>visible.has(commitPathKey(file,effectiveWorkspacePath)));
+    if(worktreeId&&worktreePath){
+      stagingLane.current=stagingLane.current.catch(()=>{}).then(async()=>{if(stagingContext.current===effectiveWorkspacePath)setStagingError(null);for(const filePath of allowed)await window.electronAPI.invoke('worktree:stage-file',worktreePath,relativeCommitPath(filePath,worktreePath),selected);}).catch(error=>{if(stagingContext.current===effectiveWorkspacePath)setStagingError(error instanceof Error?error.message:String(error));});
+    }else{
+      const current=atomStore.get(workstreamStagedFilesAtom(workstreamId)),keys=new Set(allowed.map(file=>commitPathKey(file,effectiveWorkspacePath)));
+      const next=selected?[...current,...allowed]:current.filter(file=>!keys.has(commitPathKey(file,effectiveWorkspacePath)));
+      setStagedFilesAction({workstreamId,files:eligibleCommitPaths(next,changedPaths,committableRoots,effectiveWorkspacePath)});
     }
   };
-
-  // Handle worktree stage all / unstage all
-  const handleWorktreeToggleAllStaged = async (stage: boolean) => {
-    if (!worktreePath || !worktreeId) return;
-
-    try {
-      await window.electronAPI.invoke('worktree:stage-all', worktreePath, stage);
-
-      // Worktree state will be updated by the git:status-changed event from central listener
-    } catch (error) {
-      console.error('[FilesEditedSidebar] Failed to toggle all worktree file staging:', error);
-    }
-  };
-
-  // Handle file selection change (checkbox toggle)
-  // For worktrees, this stages/unstages the file in git
-  // For regular sessions, this updates the workstream staged files state
-  const handleSelectionChange = (filePath: string, selected: boolean) => {
-    if (worktreeId && worktreePath) {
-      // For worktrees, use git staging
-      handleWorktreeToggleStaged(filePath);
-    } else {
-      // For regular sessions, use workstream state
-      const newFiles = selected
-        ? [...stagedFilesArr, filePath]
-        : stagedFilesArr.filter(f => f !== filePath);
-      setStagedFilesAction({ workstreamId, files: newFiles });
-    }
-  };
-
-  // Handle select all files
-  const handleSelectAll = (selected: boolean) => {
-    if (worktreeId && worktreePath) {
-      // For worktrees, stage/unstage all files
-      handleWorktreeToggleAllStaged(selected);
-    } else {
-      // For regular sessions, use workstream state
-      if (selected) {
-        setStagedFilesAction({ workstreamId, files: editedFilePaths });
-      } else {
-        setStagedFilesAction({ workstreamId, files: [] });
-      }
-    }
-  };
-
-  // Handle bulk selection change (for folder checkboxes)
-  const handleBulkSelectionChange = async (filePaths: string[], selected: boolean) => {
-    if (worktreeId && worktreePath) {
-      // For worktrees, stage/unstage each file individually
-      for (const filePath of filePaths) {
-        const relativePath = toRelativePath(filePath);
-        const file = worktreeChangedFiles.find(f => f.path === relativePath);
-        if (file && file.staged !== selected) {
-          await window.electronAPI.invoke('worktree:stage-file', worktreePath, relativePath, selected);
-        }
-      }
-      // Worktree state will be updated by the git:status-changed event from central listener
-    } else {
-      // For regular sessions, use workstream state
-      const currentSet = new Set(stagedFilesArr);
-      if (selected) {
-        filePaths.forEach(fp => currentSet.add(fp));
-      } else {
-        filePaths.forEach(fp => currentSet.delete(fp));
-      }
-      setStagedFilesAction({ workstreamId, files: Array.from(currentSet) });
-    }
-  };
+  const handleSelectionChange=(filePath:string,selected:boolean)=>handleBulkSelectionChange([filePath],selected);
+  const handleSelectAll=(selected:boolean,filePaths?:string[])=>handleBulkSelectionChange(filePaths??eligibleEditedFilePaths,selected);
 
   // NOTE: Git status pruning of committed files is now handled by central listener in fileStateListeners.ts
 
@@ -646,6 +544,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
             externalEditorName={externalEditorName}
             showCheckboxes={true}
             selectedFiles={worktreeId ? worktreeStagedFiles : stagedFiles}
+            commitEligibleFiles={commitEligibleFiles}
             onSelectionChange={handleSelectionChange}
             isFileSelectable={isWorkspaceCommittableFile}
             onSelectAll={handleSelectAll}
@@ -663,6 +562,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
         </div>
       </div>
 
+      {stagingError&&<p className="commit-staging-error" role="alert">{stagingError}</p>}
       {/* Git Operations Panel */}
       <GitOperationsPanel
         workspacePath={workspacePath}

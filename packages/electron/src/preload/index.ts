@@ -1091,6 +1091,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       query: (workspacePath: string, query: string, k?: number, sourceClasses?: string[],rootIds?:Array<string|null>) =>
         ipcRenderer.invoke('semantic-search:query', workspacePath, query, k, sourceClasses,...(rootIds!==undefined?[rootIds]:[])) as Promise<
         Array<{
+            matchedFields?:Array<{field:string;value:string;match:'exact'|'stem';sourceRange?:{start:number;end:number}}>;
+          fieldPriority?:number;
           refType: string;
             rootId?:string|null;
           refId: string;

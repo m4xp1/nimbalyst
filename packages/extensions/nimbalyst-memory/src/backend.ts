@@ -115,6 +115,8 @@ function capForVoice(content: string): { content: string; truncated: boolean } {
 
 /** One entity-level result for the renderer (Quick Open), not a raw chunk. */
 interface GlobalSearchResult {
+  matchedFields?:SearchHit['matchedFields'];
+  fieldPriority?:number;
   refType: string;
   refId: string;
   sourceClass: string;
@@ -147,7 +149,7 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
   for (const h of hits) {
     const key = `${h.refType}\u0000${h.refId}`;
     const prev = best.get(key);
-    if (prev && h.score <= prev.score) continue;
+    if(prev&&((h.fieldPriority??0)<(prev.fieldPriority??0)||(h.fieldPriority??0)===(prev.fieldPriority??0)&&h.score<=prev.score))continue;
     best.set(key, {
       refType: h.refType,
       refId: h.refId,
@@ -156,6 +158,8 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
       title: h.headingPath[0] ?? '',
       snippet: h.text.slice(0, 240),
       score: h.score,
+      ...(h.matchedFields?{matchedFields:h.matchedFields}:{}),
+      ...(h.fieldPriority?{fieldPriority:h.fieldPriority}:{}),
       signals: h.signals ?? { dense: false, sparse: false },
       ...(h.similarity ? { similarity: h.similarity } : {}),
       ...(h.keywordMatch ? { keywordMatch: h.keywordMatch } : {}),
@@ -163,7 +167,7 @@ function collapseToEntities(hits: SearchHit[], limit: number): GlobalSearchResul
     });
   }
   return Array.from(best.values())
-    .sort((a, b) => b.score - a.score)
+    .sort((a,b)=>(b.fieldPriority??0)-(a.fieldPriority??0)||b.score-a.score)
     .slice(0, limit);
 }
 
@@ -223,7 +227,7 @@ const TOOL_DESCRIPTORS = [
       'Search the indexed project markdown with local keyword retrieval and ' +
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
-      'matching chunks with source + heading citations. Use this to ground ' +
+      "matching entities with source + heading citations. Search also matches filenames, relative paths and YAML values; title, description and aliases can provide strong field matches. Use an exact name or metadata phrase for an addressed lookup. Each result is an entity with an original citable fragment; optional matchedFields explains field evidence. Rank and filename are retrieval signals, not proof of freshness or authority: inspect the source and its current project context. Use this to ground " +
       'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope.  For a specific quotation or fact, ' +
       'use expand when needed and identify the result as indexed evidence. For current ' +
       'session discussions or decisions, use read_session with the hit refId if that ' +
@@ -766,8 +770,8 @@ export async function activate(ctx: ActivateCtx) {
       /**
        * Entity-level hybrid search for Quick Open: collapses chunk hits to one
        * result per tracker/doc/session. `k` is the number of ENTITIES wanted;
-       * we over-fetch chunks then collapse so multi-chunk entities don't crowd
-       * the list.
+       * the engine already ranks unique entities before its candidate cap.
+       * Collapse also tolerates results from older engines.
        */
       globalSearch: async (params: {
         query?: string;
@@ -793,7 +797,7 @@ export async function activate(ctx: ActivateCtx) {
           : undefined;
         const hits = await eng.search(
           query,
-          Math.max(k * 4, 40),
+          k,
           {sourceClasses:sourceClasses?.length?sourceClasses:undefined,rootIds:params.rootIds},
         );
         const searchResponse = buildProjectSearchResponse(hits, eng.retrievalCapabilities());

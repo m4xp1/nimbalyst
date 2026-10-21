@@ -81,6 +81,7 @@ function sections(raw: string, start: number, plain: boolean): Section[] {
     }
   }
   if (current.lines.length) result.push(current);
+  for(let i=0;i<result.length-1;){const section=result[i];if(section.lines.every(line=>!line.text.trim()||heading.test(line.text))){const next=result[i+1];next.start=section.start;next.lines=[...section.lines,...next.lines];result.splice(i,1);}else i++;}
   return result;
 }
 const delimiter = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;

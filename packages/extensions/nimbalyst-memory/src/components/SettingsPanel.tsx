@@ -23,6 +23,7 @@ import { coveragePalette } from './coveragePalette';
 import { MemorySourcePicker, useMemorySearchRoots } from '@nimbalyst/runtime';
 
 interface IndexStatus {
+  sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
   sourceUpdate?:{pending:boolean;error:SafeIndexError|null};
   rebuildOperation?:{id:number;state:string;error:SafeIndexError|null}|null;
@@ -93,6 +94,7 @@ interface FactCandidate {
 }
 
 interface SearchHit {
+  matchedFields?:Array<{field:string;value:string;match:'exact'|'stem'}>;
   sourcePath: string;
   sourceClass?: string;
   headingPath?: string[];
@@ -480,7 +482,12 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const lastScan=status?.lastFullScan??status?.fileIndex;
   const activeOperation=operation?.state==='queued'||operation?.state==='running';
   const problems=status?.fileIndex?.failures??[];
-  const needsAttention=Boolean(status?.rebuildOperation?.error||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||operation?.error||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const issues=status?.fileIndex?.issues;
+  const activeIssues=issues?.filter(issue=>issue.state==='active')??[];
+  const historicalOperationError=issues===undefined?operation?.error:null;
+  const legacyRebuildError=issues===undefined?status?.rebuildOperation?.error:null;
+  const issueScope=(issue:NonNullable<FileIndexStatus['issues']>[number])=>issue.rootId===undefined?'All sources (scope unknown)':coverageRoots.find(root=>root.id===issue.rootId)?.label??(issue.rootId===null?'Primary workspace':issue.rootId);
+  const needsAttention=Boolean(activeIssues.length||legacyRebuildError||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
 
@@ -776,13 +783,17 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               <strong>Updating index</strong>
               {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Finding affected files…</p>}
             </div>}
-            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {errorAction(f.error)}</li>)}
+            {!!status.sourceProjection?.pendingFiles&&<p>Search metadata update: {status.sourceProjection.pendingFiles} files pending. Available indexed content remains searchable.</p>}
+            {!!status.sourceProjection?.warnings.length&&<ul aria-label="Document metadata warnings">{status.sourceProjection.warnings.map(warning=><li key={warning.sourcePath}><code>{warning.relativePath}</code> — Invalid YAML frontmatter; searching the literal text without field priority.</li>)}</ul>}
+            {!!activeIssues.length&&<ul className="nimbalyst-memory-observer-errors" aria-label="Current source observation errors">{activeIssues.map(issue=><li key={issue.id} role="alert"><strong>{issueScope(issue)}</strong>{issue.relativePath&&<> / <code>{issue.relativePath}</code></>} — {issue.stage} · {issue.error.category}{issue.code? ' · '+issue.code:''} · Active error, last observed {new Date(issue.updatedAt).toLocaleString()}<p>{issue.stage==='discovery'||issue.stage==='watch'?'Check access and source settings. The error clears after this scope is successfully verified.':errorAction(issue.error)}</p></li>)}</ul>}
+            {!!issues?.some(issue=>issue.state==='recovered')&&<details><summary>Recovered source errors</summary><ul>{issues.filter(issue=>issue.state==='recovered').map(issue=><li key={issue.id}>{issueScope(issue)} — {issue.stage} · recovered {new Date(issue.resolvedAt??issue.updatedAt).toLocaleString()}</li>)}</ul></details>}
+            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
             {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
-            {status.rebuildOperation?.error&&<p role="alert" style={ERR}>{errorAction(status.rebuildOperation.error)}</p>}
-            {!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
-            {!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&operation?.error&&<p role="alert" style={ERR}>{errorAction(operation.error)}</p>}
+            {legacyRebuildError&&<p role="alert" style={ERR}>{errorAction(legacyRebuildError)}</p>}
+            {!activeIssues.length&&!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
+            {!activeIssues.length&&!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&historicalOperationError&&<p role="alert" style={ERR}>{errorAction(historicalOperationError)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
             {!status.indexing&&needsAttention&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}
             <details><summary>Index diagnostics</summary>
@@ -790,6 +801,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
                 <dt>Searchable chunks</dt><dd>{countLabel(available?.chunks??status.chunks)}</dd>
                 <dt>Searchable sources</dt><dd>{countLabel(available?.sourceFiles??status.sourceFiles)}</dd>
                 <dt>Last operation</dt><dd>{operation?operation.kind+' · '+operation.state:'None'}</dd>
+                {status.rebuildOperation&&<><dt>Last rebuild (history)</dt><dd>{status.rebuildOperation.state}</dd></>}
                 <dt>File observation</dt><dd>{status.watching===undefined?'Unknown':status.watching?'Active':'Inactive'}</dd>
                 <dt>Files discovered in last full scan</dt><dd>{countLabel(lastScan?.discoveredFiles)}</dd>
                 <dt>Files processed in last full scan</dt><dd>{countLabel(lastScan?.completedFiles)}</dd>
@@ -1108,7 +1120,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
         <h4 style={H4}>Try your memory</h4>
         <p style={{ margin: 0, color: 'var(--nim-text-muted)', fontSize: 12 }}>
           Ask what the agent would ask. See exactly what gets recalled, and which
-          signal — semantic (embeddings) or keyword — surfaced it. The score is an RRF ranking value, not relevance confidence.
+          signal — semantic (embeddings) or keyword — surfaced it. The score is an RRF ranking value, not relevance confidence. Strong filename or metadata matches can take priority.
         </p>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -1161,6 +1173,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
                     </span>
                     {sig && <span style={{ ...signalStyle(sig.tone), marginLeft: 'auto' }}>{sig.text}</span>}
                   </div>
+                  {!!h.matchedFields?.length&&<div className="memory-matched-fields" style={{fontSize:11,color:muted}}>Matched {h.matchedFields.slice(0,2).map(match=>match.field+': '+match.value).join(' · ')}</div>}
                   <div style={{ fontSize: 12, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
                     {h.text.length > 320 ? `${h.text.slice(0, 320)}…` : h.text}
                   </div>

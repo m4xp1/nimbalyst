@@ -14,7 +14,8 @@
 
 import type { SimpleGit } from 'simple-git';
 import { createGit } from './gitClient';
-import { simpleGitWithHookEnv } from './gitEnv';
+import { getGitSubprocessEnv, simpleGitWithHookEnv } from './gitEnv';
+import { executeGitCommit } from './GitCommitService';
 import { validateGitCwd, validateGitOperand } from './gitOperandValidation';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -1448,32 +1449,15 @@ ${newLines.map(line => '+' + line).join('\n')}`;
         logger.error('Cannot commit: repository is in a bad state', { gitState });
         throw new Error(`Cannot commit: repository is ${issues.join(', ')}. Please resolve the existing operation first.`);
       }
-      // Stage files
-      if (files && files.length > 0) {
-        // First unstage everything to ensure we only commit the specified files
-        await git.reset();
-        // Then stage only the specified files
-        await git.add(files);
-      } else {
-        // Stage all changes
-        await git.add('-A');
-      }
-
-      // Check if there are staged changes
-      const status = await git.status();
-      if (status.staged.length === 0) {
-        throw new Error('No changes to commit');
-      }
-
-      // Commit
-      const commitResult = await git.commit(message);
-
-      if (!commitResult.commit) {
-        throw new Error('Commit failed - no commit hash returned');
-      }
-
-      // Get commit details
-      const logResult = await git.log(['-1', commitResult.commit]);
+      // Selection commits use the same private index as the normal session route.
+      // The outer service lock remains held throughout validation and index refresh.
+      const selected = files?.length ? files : (await git.status()).files.flatMap(file =>
+        file.from ? [file.from, file.path] : [file.path]);
+      const result = await executeGitCommit(worktreePath, message, [...new Set(selected)], {
+        logContext: '[worktree:commit]', env: getGitSubprocessEnv(), lockAlreadyHeld: true,
+      });
+      if (!result.success || !result.commitHash) throw new Error(result.error || 'Commit failed - no commit hash returned');
+      const logResult = await git.log(['-1', result.commitHash]);
       const commit = logResult.latest;
 
       if (!commit) {

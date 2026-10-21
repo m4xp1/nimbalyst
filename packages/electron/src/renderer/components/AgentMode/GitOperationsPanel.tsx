@@ -27,7 +27,8 @@ import {
   settleWorkstreamCommitAtom,
   workstreamStateAtom,
 } from '../../store/atoms/workstreamState';
-import { worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
+import {selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
+import { workspaceUncommittedFilesAtom,worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
 import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
 import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
 import { RebaseConflictDialog } from './RebaseConflictDialog';
@@ -99,7 +100,7 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const isCommitting=useAtomValue(committingAtom);
     const setIsCommitting=useSetAtom(committingAtom);
     const commitFlight=useRef(false);
-    const contextKey=JSON.stringify([workspacePath,workstreamId]);
+    const contextKey=JSON.stringify([workspacePath,workstreamId,worktreePath??null]);
     const panelContext=useRef(contextKey);panelContext.current=contextKey;
     const [commitFeedback,setCommitFeedback]=useState<{context:string;error?:string;message?:string}|null>(null);
 
@@ -151,10 +152,8 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const defaultModel = useAtomValue(defaultAgentModelAtom);
     // Per-workstream git state (persisted)
     const stagedFilesArr = useAtomValue(workstreamStagedFilesAtom(workstreamId));
-    const stagedFiles = useMemo(
-      () => new Set(stagedFilesArr.filter((filePath) => isWorkspaceCommittablePath(filePath))),
-      [isWorkspaceCommittablePath, stagedFilesArr]
-    );
+    const currentUncommitted=useAtomValue(workspaceUncommittedFilesAtom(worktreePath||workspacePath));
+    const stagedFiles=useMemo(()=>new Set(selectedCommitPaths(stagedFilesArr,editedFiles,currentUncommitted,committableRoots,worktreePath||workspacePath)),[stagedFilesArr,editedFiles,currentUncommitted,committableRoots,worktreePath,workspacePath]);
     const setStagedFilesAction = useSetAtom(setWorkstreamStagedFilesAtom);
     const commitMessage = useAtomValue(workstreamCommitMessageAtom(workstreamId));
     const setCommitMessageAction = useSetAtom(setWorkstreamCommitMessageAtom);
@@ -199,7 +198,10 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     // Read worktree changed files from central atom (updated by fileStateListeners)
     const worktreeChangedFilesKey = worktreeId || '__no_worktree__';
     const worktreeChangedFilesRaw = useAtomValue(worktreeChangedFilesAtom(worktreeChangedFilesKey));
-    const worktreeChangedFiles = worktreeId ? worktreeChangedFilesRaw : [];
+    const worktreeChangedFiles=useMemo(()=>worktreeId?worktreeChangedFilesRaw:[],[worktreeId,worktreeChangedFilesRaw]);
+    const selectedWorktreePaths=useMemo(()=>selectedCommitPaths(worktreeChangedFiles.filter(file=>file.staged).map(file=>file.path),editedFiles,worktreeChangedFiles.map(file=>file.path),committableRoots,worktreePath||workspacePath).map(file=>relativeCommitPath(file,worktreePath||workspacePath)),[worktreeChangedFiles,editedFiles,committableRoots,worktreePath,workspacePath]);
+    const worktreeCommitFlight=useRef(false);
+    const [worktreeCommitError,setWorktreeCommitError]=useState<string|null>(null);
     const [worktreeCommits, setWorktreeCommits] = useState<WorktreeCommitInfo[]>([]);
     const [worktreeRepoRootBranch, setWorktreeRepoRootBranch] = useState<string | undefined>(undefined);
     const [worktreeCommitsBehind, setWorktreeCommitsBehind] = useState(0);
@@ -359,8 +361,9 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       if(commitFlight.current||atomStore.get(committingAtom))return;
       const draft=atomStore.get(workstreamStateAtom(workstreamId));
       const message=draft.commitMessage;
-      const files=draft.stagedFiles.filter(isWorkspaceCommittablePath);
-      if(!message?.trim()||!files.length)return;
+      const files=selectedCommitPaths(draft.stagedFiles,editedFiles,atomStore.get(workspaceUncommittedFilesAtom(worktreePath||workspacePath)),committableRoots,worktreePath||workspacePath);
+      if(!message?.trim())return;
+      if(!files.length){if(draft.stagedFiles.length)setCommitFeedback({context:contextKey,error:'The selected files no longer have changes in this view. Review the current selection.'});return;}
       commitFlight.current=true;setIsCommitting(true);
       setCommitFeedback({context:contextKey,message:'Committing…'});
       try{
@@ -375,7 +378,7 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
       }catch(error){
         if(panelContext.current===contextKey)setCommitFeedback({context:contextKey,error:error instanceof Error?error.message:String(error)});
       }finally{commitFlight.current=false;setIsCommitting(false);}
-    },[atomStore,committingAtom,workstreamId,isWorkspaceCommittablePath,contextKey,workspacePath,settleCommit,setIsCommitting,fetchGitStatus,fetchCommits]);
+    },[atomStore,committingAtom,workstreamId,editedFiles,committableRoots,worktreePath,contextKey,workspacePath,settleCommit,setIsCommitting,fetchGitStatus,fetchCommits]);
 
     // Handle smart commit (AI-assisted)
     const handleSmartCommit = useCallback(async () => {
@@ -668,27 +671,31 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
 
     // Commit worktree changes
     const handleWorktreeCommit = useCallback(async () => {
-      const stagedWorktreeFiles = worktreeChangedFiles.filter(f => f.staged).map(f => f.path);
+      if(!worktreePath||!worktreeId||worktreeCommitFlight.current)return;
+      const current=atomStore.get(worktreeChangedFilesAtom(worktreeId));
+      const stagedWorktreeFiles=selectedCommitPaths(current.filter(file=>file.staged).map(file=>file.path),editedFiles,current.map(file=>file.path),committableRoots,worktreePath).map(file=>relativeCommitPath(file,worktreePath));
+      const submittedMessage=worktreeCommitMessage;
       if (stagedWorktreeFiles.length === 0 || !worktreeCommitMessage.trim()) {
         return;
       }
 
+      worktreeCommitFlight.current=true;setWorktreeCommitError(null);
       setWorktreeIsCommitting(true);
       try {
         const result = await window.electronAPI.invoke('worktree:commit', worktreePath, worktreeCommitMessage, stagedWorktreeFiles);
         if (result?.success) {
-          setWorktreeCommitMessage('');
+          setWorktreeCommitMessage(current=>current===submittedMessage?'':current);
           // Reload files, commits, and status
           await Promise.all([loadWorktreeChangedFiles(), loadWorktreeCommits(), loadWorktreeStatus()]);
         } else {
-          console.error('[GitOperationsPanel] Worktree commit failed:', result?.error);
+          if(panelContext.current===contextKey)setWorktreeCommitError(result?.error??'No selected files were committed.');
         }
       } catch (err) {
-        console.error('[GitOperationsPanel] Failed to commit worktree:', err);
+        if(panelContext.current===contextKey)setWorktreeCommitError(err instanceof Error?err.message:String(err));
       } finally {
-        setWorktreeIsCommitting(false);
+        worktreeCommitFlight.current=false;setWorktreeIsCommitting(false);
       }
-    }, [worktreeChangedFiles, worktreeCommitMessage, worktreePath, loadWorktreeChangedFiles, loadWorktreeCommits, loadWorktreeStatus]);
+    }, [atomStore,worktreeId,editedFiles,committableRoots,contextKey,worktreeCommitMessage,worktreePath,loadWorktreeChangedFiles, loadWorktreeCommits, loadWorktreeStatus]);
 
     // Merge to main (actual merge operation)
     const performWorktreeMerge = useCallback(async () => {
@@ -1256,7 +1263,7 @@ Please proceed with this strategy.`;
     const selectableCommits = getSelectableCommits();
 
     // Derived state for worktree mode
-    const worktreeStagedFiles = worktreeChangedFiles.filter(f => f.staged);
+    const worktreeStagedFiles = selectedWorktreePaths;
     const worktreeStagedCount = worktreeStagedFiles.length;
     const worktreeHasCommits = worktreeCommits.length > 0;
     const worktreeHasUncommittedChanges = worktreeChangedFiles.length > 0;
@@ -1473,6 +1480,7 @@ Please proceed with this strategy.`;
                   </div>
                 )}
 
+                {worktreeCommitError&&<p role="alert" className="worktree-commit-error text-red-500 text-xs">{worktreeCommitError}</p>}
                 {/* Action Buttons */}
                 <div className="flex flex-col gap-2">
                   {worktreeCommitMode === 'manual' ? (

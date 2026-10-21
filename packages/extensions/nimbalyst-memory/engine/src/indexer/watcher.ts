@@ -22,7 +22,7 @@ import { resolveInRoots } from '../roots.js';
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import fg from 'fast-glob';
-import { isProviderIndexFailure } from '../indexStatus.js';
+import { type IndexIssueScope, isProviderIndexFailure } from '../indexStatus.js';
 import type { EngineConfig, SourceSet } from '../types.js';
 import { locateAbsolute, rootForSet, type ResolvedRoot } from '../roots.js';
 import type { Indexer, IndexProgress } from './indexer.js';
@@ -119,12 +119,16 @@ export class IndexWatcher {
     private config: EngineConfig,
     private indexer: Indexer,
     private onSettled: () => void,
-    private onError: (error:unknown,sourcePath?:string) => void = () => {},
+    private onError: (error:unknown,sourcePath?:string,scope?:IndexIssueScope) => void = () => {},
     private beforeBatch:()=>Promise<void> = async()=>{},
     private scheduleBatch?:(work:()=>Promise<void>)=>Promise<void>,
-    private onProgress?:(progress:IndexProgress)=>void
+    private onProgress?:(progress:IndexProgress)=>void,
+    private onVerified?:(scope:IndexIssueScope)=>void
   ) {}
 
+  private observationToken=0;
+  private reportError(error:unknown,scope:IndexIssueScope):void{if(!this.stopped)this.onError(error,undefined,scope);}
+  async restartObservation():Promise<void>{if(this.discoveryTimer)clearInterval(this.discoveryTimer);this.discoveryTimer=null;this.generation++;this.observationToken++;await this.watcher?.close();this.watcher=null;this.start(true);await this.ready();}
   configure(config:EngineConfig,indexer:Indexer):void {this.config=config;this.indexer=indexer;this.generation++;}
   async refreshConfiguration():Promise<void>{
     if(!this.watcher){this.start(true);return;}
@@ -157,12 +161,14 @@ export class IndexWatcher {
       !this.config.sources.some((s) => s.sourceClass === "custom")
     )
       return;
+    const token=++this.observationToken;let watchFailed=false;
     this.watcher = chokidar.watch(targets, {
       ignoreInitial: true,
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     });
     this.readyPromise=targets.length?new Promise(resolve=>{this.watcher!.once("ready",resolve);this.watcher!.once("error",()=>resolve());}):Promise.resolve();
+    this.watcher.once('ready',()=>{if(!this.stopped&&token===this.observationToken&&!watchFailed){this.onVerified?.({stage:'watch'});for(const root of this.indexer.sourceRoots())this.onVerified?.({stage:'watch',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})});}});
     void this.discover(seedOnly);
     if (this.config.sources.some((s) => s.sourceClass === "custom") || this.indexer.entityFilePaths().length) {
       this.discoveryTimer = setInterval(() => void this.discover(), 3000);
@@ -171,7 +177,12 @@ export class IndexWatcher {
       .on("add", (p) => this.queue(p, "upsert"))
       .on("change", (p) => this.queue(p, "upsert"))
       .on("unlink", (p) => this.queue(p, "remove"))
-      .on("error", error => this.onError(error));
+      .on("error", error => {
+        if(this.stopped||token!==this.observationToken)return;watchFailed=true;
+        const abs=(error as NodeJS.ErrnoException).path;const located=abs?locateAbsolute(this.indexer.sourceRoots(),path.resolve(abs)):null;
+        if(abs&&!located)return;
+        this.reportError(error,{stage:'watch',...(located?{rootId:located.root.id==='harness-memory'?null:located.root.id,...(located.root.id==='harness-memory'?{scopeId:located.root.id}:{}),relativePath:path.relative(located.root.dir,path.resolve(abs!)).split(path.sep).join('/')}:{})});
+      });
   }
 
   refreshEntityPaths(): void {
@@ -219,34 +230,27 @@ export class IndexWatcher {
     if (this.stopped || this.discovering) return;
     const indexer=this.indexer,generation=this.generation;
     this.discovering = (async () => {
-      const next = new Map<string, string>();
-      for (const hit of await indexer.enumerate()) {
-        if (this.stopped || generation!==this.generation) return;
-        const { abs } = resolveInRoots(indexer.sourceRoots(), hit.sourcePath);
-        let info;
-        try {
-          info = await stat(abs);
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw e;
-        }
-        const stamp = info.mtimeMs + ":" + info.size;
-        next.set(abs, stamp);
-        if (!seedOnly && this.discovered.get(abs) !== stamp) {
-          this.watcher?.add(abs);
-          this.queue(abs, "upsert");
+      const next=new Map<string,string>();
+      for(const root of indexer.sourceRoots()){
+        let sourcePath:string|undefined;const scope:IndexIssueScope={stage:'discovery',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})};
+        try{
+          for(const hit of await indexer.enumerate(root.id)){
+            if(this.stopped||generation!==this.generation)return;
+            sourcePath=hit.sourcePath;const {abs}=resolveInRoots(indexer.sourceRoots(),sourcePath);
+            let info;try{info=await stat(abs);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error;}
+            const stamp=info.mtimeMs+':'+info.size;next.set(abs,stamp);
+            if(!seedOnly&&this.discovered.get(abs)!==stamp){this.watcher?.add(abs);this.queue(abs,'upsert');}
+          }
+          if(!this.stopped&&generation===this.generation)this.onVerified?.(scope);
+        }catch(error){
+          if(this.stopped||generation!==this.generation)return;
+          this.reportError(error,{...scope,...(sourcePath?{relativePath:path.relative(root.dir,resolveInRoots(indexer.sourceRoots(),sourcePath).abs).split(path.sep).join('/')}:{})});
+          for(const [abs,stamp] of this.discovered)if(locateAbsolute(indexer.sourceRoots(),abs)?.root.id===root.id)next.set(abs,stamp);
+          this.config.onLog?.('warn','[watcher] source discovery failed; retained existing files');
         }
       }
-      if (!this.stopped && generation===this.generation) {
-        for (const abs of this.discovered.keys())
-          if (!next.has(abs)) this.queue(abs, "remove");
-        this.discovered = next;
-      }
-    })()
-      .catch(error => { this.onError(error); this.config.onLog?.('warn','[watcher] source discovery failed; retained existing files'); })
-      .finally(() => {
-        this.discovering = null;
-      });
+      if(!this.stopped&&generation===this.generation){for(const abs of this.discovered.keys())if(!next.has(abs))this.queue(abs,'remove');this.discovered=next;}
+    })().finally(()=>{this.discovering=null;});
     await this.discovering;
   }
 

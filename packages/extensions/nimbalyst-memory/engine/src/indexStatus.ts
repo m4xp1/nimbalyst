@@ -1,4 +1,4 @@
-export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number }
+export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number; stage?:IndexIssueStage; code?:string; projectionOnly?:boolean }
 export interface SafeIndexError { category: 'authentication'|'quota'|'rate-limit'|'network'|'access'|'input'|'other'; action:string }
 /** Classify locally; never forward provider responses, credentials or document text. */
 export function safeIndexError(error:unknown):SafeIndexError {
@@ -26,9 +26,34 @@ export interface FileOperation {
  error:SafeIndexError|null;rootId?:string|null;
 }
 export interface FileIndexStatus {
+ issues?:IndexIssue[];
  state:'not-started'|'building'|'ready'|'partial'|'failed';
  phase:string|null; discoveredFiles:number|null; completedFiles:number|null; failedFiles:number|null;
  error:SafeIndexError|null;
  globalError?:SafeIndexError|null;
  remainingFiles?:number|null; failures?:SourceIndexFailure[]; failureCount?:number;
+}
+
+
+export type IndexIssueStage='discovery'|'watch'|'read'|'embeddings'|'unknown';
+export interface IndexIssueScope {stage:IndexIssueStage;rootId?:string|null;relativePath?:string;scopeId?:string;}
+export interface IndexIssue extends IndexIssueScope {id:string;error:SafeIndexError;code?:string;updatedAt:number;state:'active'|'recovered';resolvedAt?:number;}
+/** The ledger stores sanitized facts, never exception messages or absolute paths. */
+export class IndexIssueLedger {
+ private rows:IndexIssue[];
+ constructor(saved:IndexIssue[]=[]){this.rows=saved.map(row=>({...row}));}
+ list(rootId?:string|null):IndexIssue[]{return this.rows.filter(row=>rootId===undefined||row.rootId===rootId).map(row=>({...row}));}
+ record(error:unknown,scope:IndexIssueScope):void{
+  const id=JSON.stringify([scope.stage,scope.rootId===undefined?'unknown':scope.rootId,scope.relativePath??'',scope.scopeId??'']);
+  const code=(error as {code?:unknown})?.code;
+  const row:IndexIssue={...scope,id,error:safeIndexError(error),...(typeof code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test(code)?{code}:{}),updatedAt:Date.now(),state:'active'};
+  this.rows=this.rows.filter(prior=>prior.id!==id);this.rows.push(row);this.trim();
+ }
+ verify(scope:IndexIssueScope):boolean{
+  let changed=false;
+  for(const row of this.rows)if(row.state==='active'&&row.stage===scope.stage&&row.rootId===scope.rootId&&row.scopeId===scope.scopeId&&(!scope.relativePath||row.relativePath===scope.relativePath)){row.state='recovered';row.resolvedAt=Date.now();changed=true;}
+  this.trim();return changed;
+ }
+ retainRoots(ids:Set<string|null>):void{this.rows=this.rows.filter(row=>row.rootId===undefined||ids.has(row.scopeId??row.rootId));}
+ private trim():void{const recovered=this.rows.filter(row=>row.state==='recovered').slice(-20);this.rows=this.rows.filter(row=>row.state==='active').concat(recovered);}
 }

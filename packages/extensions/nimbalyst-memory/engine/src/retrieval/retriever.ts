@@ -3,9 +3,10 @@
  * expand-to-section using the chunk heading breadcrumb. Operates over an
  * in-memory snapshot of stored chunks (rebuilt cheaply when the index changes).
  */
-import type { SearchHit, StoredChunk } from '../types.js';
-import { cosineSimilarity } from './cosine.js';
-import { Bm25Index } from './bm25.js';
+import type { SearchHit, StoredChunk, SourceSearchRecord, SearchFieldMatch } from '../types.js';
+import { cosineSimilarity,norm,dot } from './cosine.js';
+import {sourceKeywordText,sourceFieldMatcher,compareSearchResults,prepareSourceFields} from './sourceFields.js';
+import { Bm25Index,termFrequencies,queryConceptCount } from './bm25.js';
 import { assertRankSensitive, DEFAULT_K, reciprocalRankFusion } from './rrf.js';
 
 const DENSE_CANDIDATES = 50;
@@ -86,26 +87,31 @@ export class Retriever {
   private chunks: StoredChunk[];
   private byId = new Map<string, StoredChunk>();
   private bm25: Bm25Index;
+  private documents=new Map<string,SourceSearchRecord>();
+  private metadataIds=new Map<string,SourceSearchRecord>();
+  private denseNorms=new WeakMap<number[],number>();
   private fusion: FusionConfig;
   /** Page-level rows (A2), kept apart from `chunks`. Only embedded ones. */
   private pages: StoredChunk[] = [];
   /** Chunks grouped by source, for resolving a page hit to a citable section. */
   private chunksBySource = new Map<string, StoredChunk[]>();
 
-  constructor(chunks: StoredChunk[], fusion?: Partial<FusionConfig>) {
+  constructor(chunks: StoredChunk[], fusion?: Partial<FusionConfig>,documents:SourceSearchRecord[]=[]) {
     // Page rows are a separate retrieval arm, not extra chunks. They must stay
     // out of `chunks` (and therefore out of BM25, cosine, expandSection and the
     // returned hits) or every source would surface twice and the whole first
     // 8 KB of a document would compete with its own sections.
     this.chunks = chunks.filter((c) => c.granularity !== 'page');
     this.pages = chunks.filter((c) => c.granularity === 'page' && c.denseEmbedding?.length);
+    for(const c of chunks)if(c.denseEmbedding?.length)this.denseNorms.set(c.denseEmbedding,norm(c.denseEmbedding));
     for (const c of this.chunks) this.byId.set(c.id, c);
     for (const c of this.chunks) {
       const list = this.chunksBySource.get(c.sourcePath);
       if (list) list.push(c);
       else this.chunksBySource.set(c.sourcePath, [c]);
     }
-    this.bm25 = new Bm25Index(this.chunks.map((c) => ({ id: c.id, tf: c.sparseTerms })));
+    for(const record of documents)if(record.version===1&&this.chunksBySource.has(record.sourcePath)){prepareSourceFields(record);if(record.denseEmbedding?.length)this.denseNorms.set(record.denseEmbedding,norm(record.denseEmbedding));this.documents.set(record.sourcePath,record);this.metadataIds.set('\0metadata\0'+record.sourcePath,record);}
+    this.bm25 = new Bm25Index([...this.chunks.map(c=>({id:c.id,tf:c.sparseTerms})),...[...this.metadataIds].map(([id,record])=>({id,tf:termFrequencies(sourceKeywordText(record))}))]);
     this.fusion = { ...DEFAULT_FUSION, ...fusion };
     // Fail at construction, not silently at rank time: a pool-depth or k change
     // that makes fusion a consensus vote produces no error and no visible
@@ -190,79 +196,39 @@ export class Retriever {
       opts?.sourceClasses && opts.sourceClasses.length ? new Set(opts.sourceClasses) : null;
     const inScope = (c: StoredChunk): boolean => (!allowed || allowed.has(c.sourceClass)) && (!opts?.accepts || opts.accepts(c));
 
-    // Raw per-arm scores are kept alongside the ranks. RRF output is a rank
-    // reciprocal, not a similarity: it is not comparable across queries, so a
-    // caller that needs a threshold ("close enough to warn about a duplicate")
-    // cannot get one from `score`. `similarity` carries the raw numbers.
-    const denseScores = new Map<string, number>();
-    const denseRanked =
-      queryVector && queryVector.length
-        ? this.chunks
-            .filter((c) => inScope(c) && c.denseEmbedding && c.denseEmbedding.length)
-            .map((c) => ({ id: c.id, s: cosineSimilarity(queryVector, c.denseEmbedding!) }))
-            .sort((a, b) => b.s - a.s)
-            .slice(0, this.fusion.denseCandidates)
-            .map((x) => {
-              denseScores.set(x.id, x.s);
-              return x.id;
-            })
-        : [];
-
-    const keywordMatches = new Map<string, 'exact' | 'stem'>();
-    const sparseScores = new Map<string, number>();
-    const sparseRanked = this.bm25
-      .search(queryText)
-      .filter((x) => {
-        const c = this.byId.get(x.id);
-        return c ? inScope(c) : false;
-      })
-      .slice(0, this.fusion.sparseCandidates)
-      .map((x) => {
-        sparseScores.set(x.id, x.score);
-        if (x.keywordMatch) keywordMatches.set(x.id, x.keywordMatch);
-        return x.id;
-      });
-
-    // Membership sets for per-hit signal provenance (semantic vs keyword).
-    const denseSet = new Set(denseRanked);
-    const sparseSet = new Set(sparseRanked);
-
-    const pageRanked =
-      this.fusion.pageWeight > 0 && queryVector && queryVector.length
-        ? this.pageRanked(queryVector, inScope)
-        : [];
-
-    const fused = reciprocalRankFusion(
-      [
-        { ids: denseRanked, weight: this.fusion.denseWeight },
-        { ids: sparseRanked, weight: this.fusion.sparseWeight },
-        ...(pageRanked.length
-          ? [{ ids: pageRanked, weight: this.fusion.pageWeight }]
-          : []),
-      ],
-      this.fusion.rrfK
-    );
-
-    const hits: SearchHit[] = [];
-    for (const { id, score } of fused.slice(0, k)) {
-      const c = this.byId.get(id);
-      if (!c) continue;
-      hits.push({
-        chunkId:c.id,sectionId:c.sectionId,sourceRange:c.sourceRange,coordinateSpace:c.coordinateSpace,context:c.context,
-        sourcePath: c.sourcePath,
-        sourceClass: c.sourceClass,
-        refType: c.refType,
-        refId: c.refId,
-        headingPath: c.headingPath,
-        text: c.text,
-        score,
-        citation: citation(c),
-        signals: { dense: denseSet.has(id), sparse: sparseSet.has(id) },
-        ...(keywordMatches.has(id) ? { keywordMatch: keywordMatches.get(id)! } : {}),
-        similarity: {
-          ...(denseScores.has(id) ? { cosine: denseScores.get(id)! } : {}),
-          ...(sparseScores.has(id) ? { bm25: sparseScores.get(id)! } : {}),
-        },
+    const queryNorm=queryVector?norm(queryVector):0;
+    const similarity=(vector:number[])=>{const length=this.denseNorms.get(vector)??norm(vector);return queryVector&&queryNorm&&length?dot(queryVector,vector)/(queryNorm*length):0;};
+    // Entity caps precede fusion: one verbose source cannot consume the pool.
+    type Entity={first:StoredChunk;bestDense?:StoredChunk;bestSparse?:StoredChunk;complete?:StoredChunk;dense?:number;contextCosine?:number;sparse?:number;completeScore?:number;priority:number;matches:SearchFieldMatch[];keywordMatch?:'exact'|'stem'};
+    const entities=new Map<string,Entity>(),key=(c:StoredChunk)=>c.refType+'\0'+c.refId;
+    for(const chunk of this.chunks){if(!inScope(chunk))continue;const id=key(chunk),entity=entities.get(id)??{first:chunk,priority:0,matches:[]};entities.set(id,entity);
+      if(queryVector?.length&&chunk.denseEmbedding?.length){const score=similarity(chunk.denseEmbedding);if(entity.dense===undefined||score>entity.dense){entity.dense=score;entity.bestDense=chunk;}}
+    }
+    const matchFields=sourceFieldMatcher(queryText);
+    for(const record of this.documents.values()){
+      const chunk=this.chunksBySource.get(record.sourcePath)?.find(inScope);if(!chunk)continue;const entity=entities.get(key(chunk))!;
+      const match=matchFields(record);if(match.priority>=entity.priority){entity.priority=match.priority;entity.matches=match.matches;}
+      if(queryVector?.length&&record.denseEmbedding?.length===queryVector.length){const score=similarity(record.denseEmbedding);entity.contextCosine=Math.max(entity.contextCosine??-Infinity,score);entity.dense=Math.max(entity.dense??-Infinity,score);}
+    }
+    const concepts=queryConceptCount(queryText);
+    for(const hit of this.bm25.searchComplete(queryText)){
+      const metadata=this.metadataIds.get(hit.id),chunk=metadata?this.chunksBySource.get(metadata.sourcePath)?.find(inScope):this.byId.get(hit.id);if(!chunk||!inScope(chunk))continue;
+      const entity=entities.get(key(chunk))!;
+      if(!metadata&&(hit.matchedTerms??0)>=concepts&&concepts>0&&hit.score>(entity.completeScore??-Infinity)){entity.complete=chunk;entity.completeScore=hit.score;}
+      if(hit.score>(entity.sparse??-Infinity)){entity.sparse=hit.score;entity.keywordMatch=hit.keywordMatch;if(!metadata)entity.bestSparse=chunk;}
+    }
+    const denseRanked=[...entities].filter(([,entity])=>entity.dense!==undefined).sort((a,b)=>b[1].dense!-a[1].dense!).slice(0,this.fusion.denseCandidates).map(([id])=>id);
+    const sparseRanked=[...entities].filter(([,entity])=>entity.sparse!==undefined||entity.priority>0).sort((a,b)=>b[1].priority-a[1].priority||(b[1].sparse??0)-(a[1].sparse??0)).slice(0,this.fusion.sparseCandidates).map(([id])=>id);
+    const denseSet=new Set(denseRanked),sparseSet=new Set(sparseRanked);
+    const pageRanked=this.fusion.pageWeight>0&&queryVector?.length?[...new Set(this.pageRanked(queryVector,inScope).map(id=>key(this.byId.get(id)!)))]:[];
+    const fused=reciprocalRankFusion([{ids:denseRanked,weight:this.fusion.denseWeight},{ids:sparseRanked,weight:this.fusion.sparseWeight},...(pageRanked.length?[{ids:pageRanked,weight:this.fusion.pageWeight}]:[])].filter(arm=>arm.weight>0),this.fusion.rrfK);
+    const ranked=fused.map(hit=>({...hit,fieldPriority:this.fusion.sparseWeight>0?entities.get(hit.id)!.priority:0})).sort(compareSearchResults);
+    const hits:SearchHit[]=[];
+    for(const {id,score,fieldPriority}of ranked.slice(0,Math.max(0,k))){const entity=entities.get(id)!,c=entity.complete??entity.bestDense??entity.bestSparse??entity.first;
+      hits.push({chunkId:c.id,sectionId:c.sectionId,sourceRange:c.sourceRange,coordinateSpace:c.coordinateSpace,context:c.context,sourcePath:c.sourcePath,sourceClass:c.sourceClass,refType:c.refType,refId:c.refId,headingPath:c.headingPath,text:c.text,score,citation:citation(c),
+        signals:{dense:this.fusion.denseWeight>0&&denseSet.has(id),sparse:this.fusion.sparseWeight>0&&sparseSet.has(id)},
+        ...(entity.matches.length?{matchedFields:entity.matches}:{}),...(fieldPriority?{fieldPriority}:{}),...(entity.keywordMatch&&sparseSet.has(id)?{keywordMatch:entity.keywordMatch}:{}),
+        similarity:{...(queryVector?.length&&c.denseEmbedding?.length&&denseSet.has(id)?{cosine:similarity(c.denseEmbedding)}:{}),...(entity.contextCosine!==undefined?{contextCosine:entity.contextCosine}:{}),...(entity.sparse!==undefined&&sparseSet.has(id)?{bm25:entity.sparse}:{})},
       });
     }
     return hits;

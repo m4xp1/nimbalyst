@@ -201,6 +201,7 @@ export const workstreamPendingReviewFilesAtom = atomFamily((workstreamId: string
  *
  * Array of absolute file paths.
  */
+export const workspaceUncommittedFilesReadyAtom=atomFamily((_workspacePath:string)=>atom(false));
 export const workspaceUncommittedFilesAtom = atomFamily((workspacePath: string) =>
   atom<string[]>([])
 );

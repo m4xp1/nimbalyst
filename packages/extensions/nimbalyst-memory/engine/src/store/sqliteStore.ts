@@ -10,7 +10,7 @@
  */
 import Database from 'better-sqlite3';
 import { termFrequencies, LEXICAL_INDEX_VERSION } from '../retrieval/bm25.js';
-import type { EmbedderInfo, StoredChunk } from '../types.js';
+import type { EmbedderInfo, StoredChunk, SourceSearchRecord } from '../types.js';
 
 type DB = Database.Database;
 
@@ -94,6 +94,7 @@ export class SqliteStore {
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_path);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_search (source_path TEXT PRIMARY KEY, record TEXT NOT NULL, dense_embedding BLOB);
     `);
     this.migrate();
   }
@@ -120,6 +121,15 @@ export class SqliteStore {
       // Pre-A2 stores hold only chunk rows; the DEFAULT backfills them.
       this.db.exec(`ALTER TABLE chunks ADD COLUMN granularity TEXT NOT NULL DEFAULT 'chunk'`);
     }
+  }
+
+  sourceSearchRecords():SourceSearchRecord[]{return (this.db.prepare('SELECT record,dense_embedding FROM source_search').all() as Array<{record:string;dense_embedding:Buffer|null}>).map(row=>({...JSON.parse(row.record),denseEmbedding:decodeVector(row.dense_embedding)}));}
+  sourceSearchFor(sourcePath:string):SourceSearchRecord|null{const row=this.db.prepare('SELECT record,dense_embedding FROM source_search WHERE source_path=?').get(sourcePath) as {record:string;dense_embedding:Buffer|null}|undefined;return row?{...JSON.parse(row.record),denseEmbedding:decodeVector(row.dense_embedding)}:null;}
+  writeSourceProjection(chunks:StoredChunk[]|undefined,sourcePath:string,record?:SourceSearchRecord):void{
+    this.db.transaction(()=>{if(chunks){this.upsertChunks(chunks);this.pruneSource(sourcePath,chunks.map(chunk=>chunk.id));}
+      if(record){const {denseEmbedding,...data}=record;this.db.prepare('INSERT INTO source_search(source_path,record,dense_embedding) VALUES(?,?,?) ON CONFLICT(source_path) DO UPDATE SET record=excluded.record,dense_embedding=excluded.dense_embedding').run(sourcePath,JSON.stringify(data),encodeVector(denseEmbedding));}
+      else this.db.prepare('DELETE FROM source_search WHERE source_path=?').run(sourcePath);
+    })();
   }
 
   // --- Embedder identity ---------------------------------------------------
@@ -168,11 +178,11 @@ export class SqliteStore {
   }
 
   /** Sanitized derived diagnostics; never stores provider responses or file bodies. */
-  getIndexDiagnostics(): {failures:import('../indexStatus.js').SourceIndexFailure[];scans:Record<string,import('../indexStatus.js').FileIndexStatus>} {
+  getIndexDiagnostics(): {failures:import('../indexStatus.js').SourceIndexFailure[];scans:Record<string,import('../indexStatus.js').FileIndexStatus>;issues?:import('../indexStatus.js').IndexIssue[]} {
     const row=this.db.prepare("SELECT value FROM meta WHERE key='index_diagnostics'").get() as {value:string}|undefined;
     if(!row)return {failures:[],scans:{}};
     const value=JSON.parse(row.value);
-    return {failures:Array.isArray(value.failures)?value.failures:[],scans:value.scans??{}};
+    return {failures:Array.isArray(value.failures)?value.failures:[],scans:value.scans??{},issues:Array.isArray(value.issues)?value.issues:[]};
   }
   setIndexDiagnostics(value:ReturnType<SqliteStore['getIndexDiagnostics']>):void {
     this.db.prepare("INSERT INTO meta(key,value) VALUES('index_diagnostics',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value));
@@ -197,7 +207,7 @@ export class SqliteStore {
 
   /** Wipe all chunks (used when the embedder changes — vectors are non-comparable). */
   reset(): void {
-    this.db.exec(`DELETE FROM chunks;`);
+    this.db.exec(`DELETE FROM chunks; DELETE FROM source_search;`);
   }
 
   // --- Dirty-check helpers -------------------------------------------------
@@ -321,7 +331,7 @@ export class SqliteStore {
   }
 
   deleteSource(sourcePath: string): void {
-    this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`).run(sourcePath);
+    this.db.transaction(()=>{this.db.prepare('DELETE FROM source_search WHERE source_path=?').run(sourcePath);this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`).run(sourcePath);})();
   }
 
   // --- Reads ---------------------------------------------------------------

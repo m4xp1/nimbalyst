@@ -164,6 +164,9 @@ interface TeamManagementWindowTarget {
 }
 
 interface SemanticSearchResult {
+  matchedFields?:Array<{field:string;value:string;match:'exact'|'stem';sourceRange?:{start:number;end:number}}>;
+  fieldPriority?:number;
+
   rootId?: string | null;
   rootLabel?: string;
   rootPath?: string;
@@ -181,7 +184,7 @@ interface SemanticSearchResult {
    * comparable across queries; a caller that needs an absolute similarity
    * threshold reads `similarity.cosine`.
    */
-  similarity?: { cosine?: number; bm25?: number };
+  similarity?: { cosine?: number; bm25?: number; contextCosine?:number };
 }
 
 interface ElectronAPI {

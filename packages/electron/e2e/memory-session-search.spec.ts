@@ -23,6 +23,10 @@ test.describe.serial('Built Memory session search and current dialogue',()=>{
  test.beforeAll(async()=>{
   temp=await fs.mkdtemp(path.join(os.tmpdir(),'nimbalyst-session-search-'));workspace=path.join(temp,'Memory dialogue');await fs.mkdir(workspace);await fs.mkdir(path.join(temp,'user'));
   execFileSync('git',['init',workspace],{stdio:'ignore',windowsHide:true});
+  await fs.mkdir(path.join(workspace,'docs'));
+  await fs.writeFile(path.join(workspace,'docs','CHECKPOINT.md'),'---\ntitle: Состояние искусственного проекта\ndescription: Точка продолжения проверки\ndoc_kind: checkpoint\n---\n# Продолжение сценария\n## Следующий шаг\nОткрыть METADATA_OPEN_TARGET.');
+  await fs.writeFile(path.join(workspace,'docs','quote.md'),'# Отчёт\nПроверяли запрос: состояние искусственного проекта.');
+
   const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
   await fs.writeFile(isolate,`const {app}=require('electron');app.setPath('userData',${JSON.stringify(path.join(temp,'user'))});app.setPath('appData',${JSON.stringify(temp)});app.setAppPath(${JSON.stringify(path.dirname(mainPath))});require(${JSON.stringify(mainPath)});`);
   const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
@@ -74,4 +78,15 @@ test.describe.serial('Built Memory session search and current dialogue',()=>{
   await expect(call('read_session',{sessionId:sid,cursor:open.nextCursor})).rejects.toThrow(/disabled/);
   expect(await app.evaluate(()=>(globalThis as any).__sessionOpenAI)).toBe(0);
  });
+ test('uses the same metadata ranking in MCP and Memory, then opens the original file',async()=>{
+  const query='состояние искусственного проекта';
+  const result=await call('search_project_knowledge',{query,k:5});expect(result.chunks[0].sourcePath).toBe('docs/CHECKPOINT.md');expect(result.chunks[0].matchedFields).toEqual(expect.arrayContaining([expect.objectContaining({field:'title',value:'Состояние искусственного проекта'})]));
+  expect((await call('search_project_knowledge',{query:'checkpoint'})).chunks[0].sourcePath).toBe('docs/CHECKPOINT.md');
+  const doc=await call('read_doc',{path:'docs/CHECKPOINT.md'});expect(doc.content).toContain('doc_kind: checkpoint');
+  await page.keyboard.press('Control+o');await page.locator('.unified-quick-open-tab').getByText('Memory',{exact:true}).click();await page.getByTestId('unified-quick-open-search').fill(query);
+  const row=page.locator('.memory-search-pane .unified-quick-open-item').first();await expect(row).toContainText('Matched title: Состояние искусственного проекта');await page.mouse.move(1,1);await row.click();
+  await expect(page.locator('.file-tabs-container [contenteditable=true]').filter({visible:true}).first()).toContainText('METADATA_OPEN_TARGET');
+  expect(await app.evaluate(()=>(globalThis as any).__sessionOpenAI)).toBe(0);
+ });
+
 });

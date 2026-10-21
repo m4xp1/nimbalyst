@@ -60,3 +60,18 @@ describe('truthful live Coverage',()=>{
   expect(screen.getByText('Files available')).toBeDefined();await act(async()=>release(current));
  });
 });
+
+
+describe('scoped Coverage recovery UI',()=>{
+ it('shows the failing source and stage, then stops treating a recovered watch operation as a current error',async()=>{
+  const issue={id:'watch-primary',stage:'watch',rootId:null,relativePath:'docs/a.md',code:'EACCES',error:{category:'access',action:'Check access'},updatedAt:1,state:'active'};
+  let recovered=false;
+  const call=vi.fn(async(name:string)=>{
+   if(name==='memory.status')return{ready:true,available:{indexedFiles:1,sessions:0,trackers:0,chunks:1,sourceFiles:1,bySourceClass:{docs:1}},operation:{kind:'watch',state:'failed',error:issue.error},rebuildOperation:{id:1,state:'failed',error:issue.error},fileIndex:{state:recovered?'ready':'partial',phase:'done',discoveredFiles:1,completedFiles:1,failedFiles:0,error:recovered?null:issue.error,issues:[{...issue,state:recovered?'recovered':'active',resolvedAt:recovered?2:undefined}]}};
+   if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return{};
+  });
+  render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  await screen.findByText('Needs attention');expect(screen.getByRole('alert').textContent).toContain('docs/a.md');expect(screen.getByRole('alert').textContent).toContain('EACCES');
+  recovered=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('Ready');expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Recovered source errors')).toBeDefined();
+ });
+});

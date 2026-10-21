@@ -101,3 +101,13 @@ describe('GitStatusService executeGitStatus', () => {
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 });
+
+it('starts a new read after invalidation while an older status command is still pending',async()=>{
+ const callbacks:Array<(error:null,stdout:string)=>void>=[];
+ execFileMock.mockImplementation((_file,_args,_options,callback)=>{callbacks.push(callback);});
+ const service=new GitStatusService(),old=executeGitStatus(service,workspacePath);
+ service.clearCache(workspacePath);const current=executeGitStatus(service,workspacePath);
+ expect(execFileMock).toHaveBeenCalledTimes(2);
+ callbacks[0](null,'');await old;callbacks[1](null,' M changed.md\n');
+ await expect(current).resolves.toBe(' M changed.md\n');
+});

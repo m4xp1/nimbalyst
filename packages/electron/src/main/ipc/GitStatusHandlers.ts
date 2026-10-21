@@ -342,7 +342,8 @@ export function registerGitStatusHandlers(): void {
    */
   safeHandle('git:clear-status-cache', async (_event, workspacePath?: string) => {
     try {
-      gitStatusService.clearCache(workspacePath);
+      if(workspacePath)for(const repoPath of listRepoScanPaths(workspacePath))gitStatusService.clearCache(repoPath);
+      else gitStatusService.clearCache();
       return { success: true };
     } catch (error) {
       console.error('[GitStatusHandlers] Failed to clear cache:', error);

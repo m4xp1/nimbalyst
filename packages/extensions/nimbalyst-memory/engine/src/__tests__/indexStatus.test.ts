@@ -206,3 +206,80 @@ describe('available entity counts',()=>{
   expect(engine.status().available).toMatchObject({indexedFiles:1,sessions:1,trackers:1,sourceFiles:3});expect(engine.status().available!.chunks).toBeGreaterThan(3);
  });
 });
+
+
+describe('scoped observer failures',()=>{
+ it('attributes discovery failures to their root and clears only a verified matching scope',async()=>{
+  const {root,engine}=setup();const other=mkdtempSync(path.join(tmpdir(),'memory-status-other-'));roots.push(other);
+  writeFileSync(path.join(root,'docs/a.md'),'# A\nSCOPED_PRIMARY');writeFileSync(path.join(other,'b.md'),'# B\nSCOPED_OTHER');
+  await engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['**/*.md'],root:{id:'other',path:other}}],[]);
+  const watcher=(engine as any).watcher;
+  watcher.onError(Object.assign(Error('private path should not cross status'),{code:'EACCES'}),undefined,{stage:'discovery',rootId:'other'});
+  expect(engine.status(null).fileIndex?.state).toBe('ready');
+  expect(engine.status('other').fileIndex).toMatchObject({state:'partial',issues:[{stage:'discovery',rootId:'other',code:'EACCES',state:'active'}]});
+  watcher.onVerified?.({stage:'discovery',rootId:null});
+  expect(engine.status().fileIndex?.state).toBe('partial');
+  watcher.onVerified?.({stage:'discovery',rootId:'other'});
+  expect(engine.status().fileIndex?.state).toBe('ready');
+  expect(engine.status('other').fileIndex?.issues).toMatchObject([{state:'recovered'}]);
+  expect(JSON.stringify(engine.status())).not.toContain('private path');
+ });
+ it('ignores old watcher errors after its generation is stopped',async()=>{
+  const {root,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nGENERATION_PRIMARY');await engine.indexAll();
+  const watcher=(engine as any).watcher;await watcher.stop();
+  watcher.reportError?.(Object.assign(Error('late'),{code:'EACCES'}),{stage:'watch',rootId:null});
+  expect(engine.status().fileIndex?.state).toBe('ready');
+ });
+});
+
+
+describe('observer diagnostic persistence',()=>{
+ it('preserves scoped errors across reopen and does not clear them on Refresh',async()=>{
+  const {root,engine,embedder}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nPERSISTENT_ISSUE');await engine.indexAll();
+  (engine as any).watcher.onError(Object.assign(Error('private'),{code:'EPERM'}),undefined,{stage:'watch',rootId:null,relativePath:'docs/a.md'});
+  for(let n=0;n<3;n++)expect(engine.status().fileIndex?.issues).toMatchObject([{state:'active',relativePath:'docs/a.md'}]);
+  engines.splice(engines.indexOf(engine),1);await engine.close();
+  const reopened=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(reopened);
+  expect(reopened.status().fileIndex?.issues).toMatchObject([{state:'active',code:'EPERM'}]);
+  const spy=vi.spyOn(embedder,'embed');await reopened.indexAll();expect(reopened.status().fileIndex?.state).toBe('ready');expect(spy).not.toHaveBeenCalled();
+ });
+ it('requires a successful scan before recovering a legacy global error',async()=>{
+  const {root,engine,embedder}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nLEGACY_ISSUE');await engine.indexAll();
+  const store=(engine as any).store,diag=store.getIndexDiagnostics();diag.scans.all.globalError={category:'access',action:'old access'};store.setIndexDiagnostics(diag);
+  engines.splice(engines.indexOf(engine),1);await engine.close();
+  const reopened=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(reopened);
+  expect(reopened.status().fileIndex).toMatchObject({state:'partial',issues:[{stage:'unknown',state:'active'}]});
+  expect(reopened.status(null).fileIndex?.state).toBe('ready');await reopened.indexAll();expect(reopened.status().fileIndex).toMatchObject({state:'ready',issues:[{stage:'unknown',state:'recovered'}]});
+ });
+});
+
+
+describe('source discovery verifies actual scopes',()=>{
+ it('continues observing primary when another root fails and recovers without embeddings',async()=>{
+  const {root,engine,embedder}=setup(),other=mkdtempSync(path.join(tmpdir(),'memory-observer-root-'));roots.push(other);
+  writeFileSync(path.join(root,'docs/a.md'),'# A\nPRIMARY_SURVIVES');writeFileSync(path.join(other,'b.md'),'# B\nOTHER_SURVIVES');
+  await engine.updateSources([{sourceClass:'docs',include:['docs/**/*.md']},{sourceClass:'custom',include:['**/*.md'],root:{id:'other',path:other}}],[]);
+  const watcher=(engine as any).watcher,indexer=(engine as any).indexer;await watcher.discovering;
+  const original=indexer.enumerate.bind(indexer),spy=vi.spyOn(indexer,'enumerate').mockImplementation((id)=>id==='other'?Promise.reject(Object.assign(Error('private'),{code:'EACCES'})):original(id));
+  await watcher.discover(true);expect(engine.status('other').fileIndex?.issues).toMatchObject([{state:'active',stage:'discovery'}]);expect(engine.status(null).fileIndex?.state).toBe('ready');
+  spy.mockRestore();const embed=vi.spyOn(embedder,'embed');await watcher.discover(true);
+  expect(engine.status().fileIndex?.state).toBe('ready');expect(embed).not.toHaveBeenCalled();expect(engine.expand('docs/a.md',['A'])?.text).toContain('PRIMARY_SURVIVES');
+ });
+ it('drops discovery results from the previous policy generation',async()=>{
+  const {root,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nNO_GHOST_ISSUE');await engine.indexAll();
+  const watcher=(engine as any).watcher,indexer=(engine as any).indexer;await watcher.discovering;
+  let reject!:(error:unknown)=>void,entered!:()=>void;const start=new Promise<void>(resolve=>entered=resolve),held=new Promise<never>((_,r)=>reject=r);
+  const spy=vi.spyOn(indexer,'enumerate').mockImplementation(()=>{entered();return held;});const discovering=watcher.discover(true);await start;
+  watcher.configure((engine as any).config,indexer);reject(Object.assign(Error('late'),{code:'EPERM'}));await discovering;spy.mockRestore();
+  expect(engine.status().fileIndex?.issues?.filter(issue=>issue.state==='active')).toEqual([]);
+ });
+});
+
+
+describe('auxiliary document projection failures',()=>{
+ it('keeps a verified existing body searchable when only a new context vector fails',async()=>{
+  const {root,engine,embedder}=setup();writeFileSync(path.join(root,'docs/a.md'),'# A\nBODY_REMAINS_AVAILABLE');await engine.indexAll();
+  (engine as any).store.writeSourceProjection(undefined,'docs/a.md');const failure=vi.spyOn(embedder,'embed').mockRejectedValue(Object.assign(Error('private provider response'),{status:429}));
+  await expect(engine.indexAll()).rejects.toThrow();expect(engine.status().available?.indexedFiles).toBe(1);expect(engine.status().sourceProjection?.pendingFiles).toBe(1);expect(engine.status().fileIndex?.failures).toMatchObject([{projectionOnly:true,stage:'embeddings'}]);expect(engine.expand('docs/a.md',['A'])?.text).toContain('BODY_REMAINS_AVAILABLE');failure.mockRestore();await engine.indexAll();expect(engine.status().sourceProjection?.pendingFiles).toBe(0);expect(engine.status().fileIndex?.failures).toEqual([]);
+ });
+});

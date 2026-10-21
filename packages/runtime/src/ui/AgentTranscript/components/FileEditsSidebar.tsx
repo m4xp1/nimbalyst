@@ -60,7 +60,8 @@ interface FileEditsSidebarProps {
   /** Optional per-file gate for whether a file can be selected for commit */
   isFileSelectable?: (filePath: string) => boolean;
   /** Callback to select/deselect all files */
-  onSelectAll?: (selected: boolean) => void;
+  onSelectAll?: (selected: boolean,files?:string[]) => void;
+  commitEligibleFiles?:ReadonlySet<string>;
   /** Callback for bulk selection changes (add/remove multiple files at once) */
   onBulkSelectionChange?: (filePaths: string[], selected: boolean) => void;
   /** Whether to show a root-level "Select All" checkbox (defaults to true when showCheckboxes is true) */
@@ -130,6 +131,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
   selectedFiles,
   onSelectionChange,
   isFileSelectable,
+  commitEligibleFiles,
   onSelectAll,
   onBulkSelectionChange,
   showRootCheckbox,
@@ -349,9 +351,10 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
 
   // Check if file has uncommitted changes (is selectable for commit)
   const isFileCommitted = useCallback((filePath: string): boolean => {
+    if(commitEligibleFiles)return !commitEligibleFiles.has(filePath);
     const status = gitStatus[filePath];
     return !status || status.status === 'unchanged';
-  }, [gitStatus]);
+  }, [gitStatus,commitEligibleFiles]);
 
   const isSelectableForCommit = useCallback((filePath: string): boolean => {
     if (isFileCommitted(filePath)) {
@@ -810,7 +813,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
         {shouldShowRootCheckbox && editedFiles.length > 0 && rootSelectionInfo.uncommittedCount > 0 && (
           <div className="file-edits-sidebar__root-checkbox flex items-center gap-2 px-2 py-1.5 mb-1 border-b border-[var(--nim-border)]">
             <div
-              onClick={() => onSelectAll?.(rootSelectionInfo.state !== 'all')}
+              onClick={() => onSelectAll?.(rootSelectionInfo.state !== 'all',editedFiles.map(file=>file.filePath).filter(isSelectableForCommit))}
               className={`w-4 h-4 shrink-0 rounded-[3px] border-[1.5px] cursor-pointer flex items-center justify-center transition-all ${
                 rootSelectionInfo.state === 'all'
                   ? 'bg-[var(--nim-file-edited)] border-[var(--nim-file-edited)]'

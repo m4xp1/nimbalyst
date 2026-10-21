@@ -344,6 +344,8 @@ export async function executeGitCommit(
   filesToStage: string[],
   options?: {
     logContext?: string;
+    /** Internal service composition only: the caller already owns this repository lock. */
+    lockAlreadyHeld?: boolean;
     /** Tuning for index.lock contention backoff. Defaults to 5 retries from 100ms. */
     lockRetry?: { maxRetries?: number; baseDelayMs?: number };
     /**
@@ -378,7 +380,7 @@ export async function executeGitCommit(
     return { success: false, error: 'Not a git repository' };
   }
 
-  return gitOperationLock.withLock(workspacePath, 'git:commit', async () => {
+  const commitUnderLock = async (): Promise<GitCommitExecutionResult> => {
     let lastLockError: unknown;
     // Retry the whole commit body when git fails because another process holds
     // .git/index.lock. Each iteration re-reads status, so it is idempotent.
@@ -641,7 +643,10 @@ export async function executeGitCommit(
       success: false,
       error: getGitCommitErrorMessage(lastLockError),
     };
-  });
+  };
+  return options?.lockAlreadyHeld
+    ? commitUnderLock()
+    : gitOperationLock.withLock(workspacePath, 'git:commit', commitUnderLock);
 }
 
 export function createGitCommitProposalResponse(

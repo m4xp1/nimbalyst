@@ -1012,6 +1012,8 @@ export class GitStatusService {
    */
   clearCache(workspacePath?: string): void {
     this.cacheGeneration += 1;
+    // A read started before a filesystem/ref change must not service a new request.
+    if(workspacePath)this.inFlightGitStatus.delete(workspacePath);else this.inFlightGitStatus.clear();
     if (workspacePath) {
       // Clear cache entries for this workspace.
       //
