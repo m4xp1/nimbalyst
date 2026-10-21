@@ -94,6 +94,7 @@ interface FactCandidate {
 }
 
 interface SearchHit {
+  matchedFields?:Array<{field:string;value:string;match:'exact'|'stem'}>;
   sourcePath: string;
   sourceClass?: string;
   headingPath?: string[];
@@ -1117,7 +1118,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
         <h4 style={H4}>Try your memory</h4>
         <p style={{ margin: 0, color: 'var(--nim-text-muted)', fontSize: 12 }}>
           Ask what the agent would ask. See exactly what gets recalled, and which
-          signal — semantic (embeddings) or keyword — surfaced it. The score is an RRF ranking value, not relevance confidence.
+          signal — semantic (embeddings) or keyword — surfaced it. The score is an RRF ranking value, not relevance confidence. Strong filename or metadata matches can take priority.
         </p>
 
         <div style={{ display: 'flex', gap: 8 }}>
@@ -1170,6 +1171,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
                     </span>
                     {sig && <span style={{ ...signalStyle(sig.tone), marginLeft: 'auto' }}>{sig.text}</span>}
                   </div>
+                  {!!h.matchedFields?.length&&<div className="memory-matched-fields" style={{fontSize:11,color:muted}}>Matched {h.matchedFields.slice(0,2).map(match=>match.field+': '+match.value).join(' · ')}</div>}
                   <div style={{ fontSize: 12, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
                     {h.text.length > 320 ? `${h.text.slice(0, 320)}…` : h.text}
                   </div>

@@ -64,3 +64,30 @@ describe('semantic candidate relevance policy',()=>{
   expect(hits[1].score).toBeCloseTo(1/9);
  });
 });
+
+
+describe('source-level Memory ranking',()=>{
+ it('limits candidates by entity rather than allowing one long document to fill the dense pool',()=>{
+  const rows=Array.from({length:80},(_,i)=>({...chunk('long-'+i,'Long unrelated section '+i,.95),sourcePath:'long.md',refId:'long.md'}));const target=chunk('target','Current continuation document.',.8);
+  const hits=new Retriever([...rows,target]).search('unmatched query',[1,0],5);expect(hits.map(hit=>hit.sourcePath)).toEqual(['long.md','target.md']);
+ });
+ it('prioritizes complete title metadata over a body quotation and exposes the matched field',async()=>{
+  const {sourceSearchRecord}=await import('../sourceSearch.js');const target=chunk('canonical','Neutral body about the next concrete action.',.2),quote=chunk('quote','Как найти текущее состояние проекта?',.95);
+  const record=sourceSearchRecord(target.sourcePath,'docs','---\ntitle: Текущее состояние проекта\ndescription: Состояние и следующий шаг\n---\n# Main\nNeutral body.',[target],{id:'openai',model:'text-embedding-3-small',dims:2});
+  const retriever=new (Retriever as any)([quote,target],undefined,[record]);const hits=retriever.search('текущее состояние проекта',[1,0],5);expect(hits[0].sourcePath).toBe(target.sourcePath);expect(hits[0].matchedFields).toEqual(expect.arrayContaining([expect.objectContaining({field:'title',value:'Текущее состояние проекта'})]));expect(hits[0].text).toBe(target.text);
+ });
+ it('finds a filename without that name in the body, preserving technical path components',async()=>{
+  const {sourceSearchRecord}=await import('../sourceSearch.js'),target={...chunk('item','Neutral body.',.2),sourcePath:'docs/process/CHECKPOINT.md',refId:'docs/process/CHECKPOINT.md'};
+  const record=sourceSearchRecord(target.sourcePath,'docs','# Main\nNeutral body.',[target],{id:'openai',model:'text-embedding-3-small',dims:2});const retriever=new (Retriever as any)([target],undefined,[record]);
+  expect(retriever.search('checkpoint',null,5)[0]).toMatchObject({sourcePath:target.sourcePath,matchedFields:expect.arrayContaining([expect.objectContaining({field:'fileName'})])});expect(retriever.search('docs/process',null,5)).toHaveLength(1);
+ });
+});
+
+
+describe('field priority is evidence, not document authority',()=>{
+ it('does not treat a single generic word, active status, or a checkpoint filename as an authority signal',async()=>{
+  const {sourceSearchRecord}=await import('../sourceSearch.js'),target=chunk('CHECKPOINT','Neutral body.',.2),answer=chunk('answer','Текущее состояние системы.',.95);
+  const record=sourceSearchRecord(target.sourcePath,'docs','---\ntitle: Состояние другого проекта\nknowledge_status: active\n---\n# Main\nNeutral body.',[target],{id:'openai',model:'text-embedding-3-small',dims:2});
+  expect(new Retriever([target,answer],undefined,[record]).search('состояние',[1,0],5)[0].sourcePath).toBe('answer.md');
+ });
+});

@@ -61,6 +61,9 @@ interface FileRecord extends VirtualRecord {
 
 /** Mirror of the backend `globalSearch` result shape. */
 export interface SemanticSearchResult {
+  matchedFields?:Array<{field:string;value:string;match:'exact'|'stem';sourceRange?:{start:number;end:number}}>;
+  fieldPriority?:number;
+
   rootId?:string|null;
   refType: string;
   refId: string;
@@ -79,7 +82,7 @@ export interface SemanticSearchResult {
    * that needs an absolute threshold (duplicate detection) reads
    * `similarity.cosine`. Absent when the engine predates the passthrough.
    */
-  similarity?: { cosine?: number; bm25?: number };
+  similarity?: { cosine?: number; bm25?: number; contextCosine?:number };
   keywordMatch?: 'exact' | 'stem';
   parentSessionId?: string | null;
 }

@@ -346,3 +346,18 @@ describe('lightweight icon polling',()=>{
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
 });
+
+
+describe('metadata ranking shared by MCP and Quick Open',()=>{
+ it('returns the same first document and field evidence through both desktop routes',async()=>{
+  const root=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-field-routes-')));mkdirSync(path.join(root,'docs'));
+  writeFileSync(path.join(root,'docs/target.md'),'---\ntitle: Текущее состояние проекта\ndoc_kind: checkpoint\n---\n# Продолжение\nНастроить искусственный сервер.');writeFileSync(path.join(root,'docs/quote.md'),'# Отчёт\nВопрос: текущее состояние проекта.');
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]})}});
+  try{
+   await vi.waitFor(async()=>{const result=await runtime.methods.search_project_knowledge({query:'текущее состояние проекта'}) as any;expect(result.chunks[0]?.sourcePath).toBe('docs/target.md');});
+   const mcp=await runtime.methods.search_project_knowledge({query:'текущее состояние проекта',k:5}) as any,ui=await runtime.methods.globalSearch({query:'текущее состояние проекта',k:5}) as any;
+   expect(ui.results.map((r:any)=>r.sourcePath)).toEqual(mcp.chunks.map((r:any)=>r.sourcePath));expect(ui.results[0].matchedFields).toEqual(mcp.chunks[0].matchedFields);expect(ui.results[0].matchedFields[0].field).toBe('title');expect(ui.results[0].snippet).not.toContain('title:');
+   expect((await runtime.methods.search_project_knowledge({query:'checkpoint'}) as any).chunks.map((r:any)=>r.sourcePath)).toContain('docs/target.md');
+  }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
+ });
+});

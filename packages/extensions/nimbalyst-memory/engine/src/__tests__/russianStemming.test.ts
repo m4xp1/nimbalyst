@@ -103,3 +103,14 @@ describe('additive Russian Snowball projection', () => {
     } finally { await engine.close(); }
   });
 });
+
+
+describe('per-term complete Memory keyword retrieval',()=>{
+ it('adds inflected subject matches even when a common literal query word exists',()=>{
+  const index=new Bm25Index([doc('subject','как интерфейс'),doc('common-only','как прочее')]);
+  const hits=(index as any).searchComplete('как интерфейсами');expect(hits.map((h:any)=>h.id)).toEqual(['subject']);expect(hits[0].keywordMatch).toBe('stem');
+ });
+ it('keeps the legacy recall ordering and handles stopword-only queries',()=>{
+  const index=new Bm25Index([doc('subject','как интерфейс'),doc('literal','интерфейсами')]);expect(index.search('интерфейсами')[0].id).toBe('literal');expect((index as any).searchComplete('как').map((h:any)=>h.id)).toEqual(['subject']);
+ });
+});

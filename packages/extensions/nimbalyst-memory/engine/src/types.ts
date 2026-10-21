@@ -214,6 +214,8 @@ export interface EngineConfig {
 
 /** A retrieval hit returned to callers. */
 export interface SearchHit {
+  matchedFields?:SearchFieldMatch[];
+  fieldPriority?:number;
   coordinateSpace?:Chunk['coordinateSpace'];
   chunkId?:string;
   sectionId?:string;
@@ -244,7 +246,7 @@ export interface SearchHit {
    * Duplicate detection needs the dense cosine to decide "close enough to
    * warn". Absent for an arm that did not surface this hit.
    */
-  similarity?: { cosine?: number; bm25?: number };
+  similarity?: { cosine?: number; bm25?: number; contextCosine?:number };
   /** Lexical provenance; absent when only semantic retrieval surfaced a hit. */
   keywordMatch?: 'exact' | 'stem';
 }

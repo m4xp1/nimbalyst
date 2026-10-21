@@ -210,7 +210,7 @@ export class MemoryEngine {
     this.sourceRecords=store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.updateFileRootOwners();
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)),undefined,this.sourceRecords.filter(record=>this.readable(record)));
   }
 
   static create(config: EngineConfig, embedder: Embedder): MemoryEngine {
@@ -293,7 +293,7 @@ export class MemoryEngine {
     this.snapshot=this.store.loadAll();
     this.sourceRecords=this.store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
-    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)));
+    this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)),undefined,this.sourceRecords.filter(record=>this.readable(record)));
   }
 
   indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
