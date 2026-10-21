@@ -118,11 +118,28 @@ jobs:
         working-directory: packages/electron
         run: pnpm run build:win --publish never --config.publish.owner=m4xp1 --config.publish.repo=nimbalyst
 
-      - name: Verify packaged application search across all six panes
+      - name: Verify packaged application search and Git
         run: |
-          $env:NIMBALYST_E2E_APP_PATH = (Resolve-Path 'packages/electron/release/win-unpacked/Nimbalyst.exe').Path
+          # Keep CommonJS workers outside the monorepo's ESM package boundary.
+          $source = (Resolve-Path 'packages/electron/release/win-unpacked').Path
+          $target = Join-Path $env:RUNNER_TEMP ('nimbalyst-packaged-e2e-' + $env:GITHUB_RUN_ID)
+          Copy-Item -LiteralPath $source -Destination $target -Recurse
+          $hashes = @{}
+          foreach ($relative in @('Nimbalyst.exe', 'resources/app.asar')) {
+            $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $source $relative) -Algorithm SHA256).Hash
+            if ((Get-FileHash -LiteralPath (Join-Path $target $relative) -Algorithm SHA256).Hash -ne $hashes[$relative]) {
+              throw "Packaged E2E copy differs: $relative"
+            }
+          }
+          $env:NIMBALYST_E2E_APP_PATH = Join-Path $target 'Nimbalyst.exe'
+          $env:NIMBALYST_E2E_MAIN_PATH = Join-Path $target 'resources/app.asar/out/main/index.js'
           pnpm --dir packages/electron exec playwright test --config playwright.search.config.ts
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged application search gate failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged application search/Git gate failed' }
+          foreach ($relative in $hashes.Keys) {
+            if ((Get-FileHash -LiteralPath (Join-Path $target $relative) -Algorithm SHA256).Hash -ne $hashes[$relative]) {
+              throw "Packaged E2E changed payload: $relative"
+            }
+          }
 
       - name: Preserve packaged search failure evidence
         if: failure()
