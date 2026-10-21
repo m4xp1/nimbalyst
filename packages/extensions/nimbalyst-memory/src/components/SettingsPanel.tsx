@@ -485,8 +485,9 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const issues=status?.fileIndex?.issues;
   const activeIssues=issues?.filter(issue=>issue.state==='active')??[];
   const historicalOperationError=issues===undefined?operation?.error:null;
+  const legacyRebuildError=issues===undefined?status?.rebuildOperation?.error:null;
   const issueScope=(issue:NonNullable<FileIndexStatus['issues']>[number])=>issue.rootId===undefined?'All sources (scope unknown)':coverageRoots.find(root=>root.id===issue.rootId)?.label??(issue.rootId===null?'Primary workspace':issue.rootId);
-  const needsAttention=Boolean(activeIssues.length||status?.rebuildOperation?.error||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const needsAttention=Boolean(activeIssues.length||legacyRebuildError||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
 
@@ -790,7 +791,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
             {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
-            {status.rebuildOperation?.error&&<p role="alert" style={ERR}>{errorAction(status.rebuildOperation.error)}</p>}
+            {legacyRebuildError&&<p role="alert" style={ERR}>{errorAction(legacyRebuildError)}</p>}
             {!activeIssues.length&&!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
             {!activeIssues.length&&!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&historicalOperationError&&<p role="alert" style={ERR}>{errorAction(historicalOperationError)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
@@ -800,6 +801,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
                 <dt>Searchable chunks</dt><dd>{countLabel(available?.chunks??status.chunks)}</dd>
                 <dt>Searchable sources</dt><dd>{countLabel(available?.sourceFiles??status.sourceFiles)}</dd>
                 <dt>Last operation</dt><dd>{operation?operation.kind+' · '+operation.state:'None'}</dd>
+                {status.rebuildOperation&&<><dt>Last rebuild (history)</dt><dd>{status.rebuildOperation.state}</dd></>}
                 <dt>File observation</dt><dd>{status.watching===undefined?'Unknown':status.watching?'Active':'Inactive'}</dd>
                 <dt>Files discovered in last full scan</dt><dd>{countLabel(lastScan?.discoveredFiles)}</dd>
                 <dt>Files processed in last full scan</dt><dd>{countLabel(lastScan?.completedFiles)}</dd>

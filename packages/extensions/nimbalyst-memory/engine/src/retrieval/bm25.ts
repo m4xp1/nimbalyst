@@ -176,5 +176,6 @@ export class Bm25Index {
 
 const QUERY_STOP_WORDS=new Set('как где откуда куда когда чтобы что это этот эта эти для над под при или который которая которое какие какой понять найти покажи the a an to of in on at and or how where which what is are from with by find show'.split(' '));
 /** Only the scoring query is filtered; embedding input and persisted terms stay verbatim. */
+export function hasContentTerms(query:string):boolean{return tokenize(query).some(term=>!QUERY_STOP_WORDS.has(term));}
 export function informativeTerms(query:string):string[]{const all=[...new Set(tokenize(query))],content=all.filter(term=>!QUERY_STOP_WORDS.has(term));return content.length?content:all;}
 export function queryConceptCount(query:string):number{const stemmer=new RussianStemmer();return new Set(informativeTerms(query).map(term=>RUSSIAN_WORD.test(term)?stemmer.stem(term):term)).size;}

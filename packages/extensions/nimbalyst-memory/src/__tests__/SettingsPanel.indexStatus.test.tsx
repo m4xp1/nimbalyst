@@ -67,7 +67,7 @@ describe('scoped Coverage recovery UI',()=>{
   const issue={id:'watch-primary',stage:'watch',rootId:null,relativePath:'docs/a.md',code:'EACCES',error:{category:'access',action:'Check access'},updatedAt:1,state:'active'};
   let recovered=false;
   const call=vi.fn(async(name:string)=>{
-   if(name==='memory.status')return{ready:true,available:{indexedFiles:1,sessions:0,trackers:0,chunks:1,sourceFiles:1,bySourceClass:{docs:1}},operation:{kind:'watch',state:'failed',error:issue.error},fileIndex:{state:recovered?'ready':'partial',phase:'done',discoveredFiles:1,completedFiles:1,failedFiles:0,error:recovered?null:issue.error,issues:[{...issue,state:recovered?'recovered':'active',resolvedAt:recovered?2:undefined}]}};
+   if(name==='memory.status')return{ready:true,available:{indexedFiles:1,sessions:0,trackers:0,chunks:1,sourceFiles:1,bySourceClass:{docs:1}},operation:{kind:'watch',state:'failed',error:issue.error},rebuildOperation:{id:1,state:'failed',error:issue.error},fileIndex:{state:recovered?'ready':'partial',phase:'done',discoveredFiles:1,completedFiles:1,failedFiles:0,error:recovered?null:issue.error,issues:[{...issue,state:recovered?'recovered':'active',resolvedAt:recovered?2:undefined}]}};
    if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return{};
   });
   render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);

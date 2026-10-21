@@ -128,7 +128,7 @@ export class IndexWatcher {
 
   private observationToken=0;
   private reportError(error:unknown,scope:IndexIssueScope):void{if(!this.stopped)this.onError(error,undefined,scope);}
-  async restartObservation():Promise<void>{this.generation++;this.observationToken++;await this.watcher?.close();this.watcher=null;this.start(true);await this.ready();}
+  async restartObservation():Promise<void>{if(this.discoveryTimer)clearInterval(this.discoveryTimer);this.discoveryTimer=null;this.generation++;this.observationToken++;await this.watcher?.close();this.watcher=null;this.start(true);await this.ready();}
   configure(config:EngineConfig,indexer:Indexer):void {this.config=config;this.indexer=indexer;this.generation++;}
   async refreshConfiguration():Promise<void>{
     if(!this.watcher){this.start(true);return;}

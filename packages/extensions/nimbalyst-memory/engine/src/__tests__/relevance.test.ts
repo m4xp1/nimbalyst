@@ -91,3 +91,11 @@ describe('field priority is evidence, not document authority',()=>{
   expect(new Retriever([target,answer],undefined,[record]).search('состояние',[1,0],5)[0].sourcePath).toBe('answer.md');
  });
 });
+
+it.each(['project','состояние','the'])('does not turn an exact generic/stop-word title into a strong field boost: %s',async query=>{
+ const {sourceSearchRecord}=await import('../sourceSearch.js');const target=chunk('generic-title','Neutral body.',.2);
+ const record=sourceSearchRecord(target.sourcePath,'docs','---\ntitle: '+query+'\n---\n# Main\nNeutral body.',[target],{id:'openai',model:'text-embedding-3-small',dims:2});
+ const hits=new Retriever([target],undefined,[record]).search(query,null,5);
+ expect(hits).toHaveLength(1);expect(hits[0].fieldPriority).toBeUndefined();
+ expect(hits[0].matchedFields).toEqual(expect.arrayContaining([expect.objectContaining({field:'title',value:query})]));
+});

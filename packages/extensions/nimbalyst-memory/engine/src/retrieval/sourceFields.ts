@@ -1,5 +1,5 @@
 import {RussianStemmer,normalizeSearchText} from '@nimbalyst/search-text';
-import {informativeTerms,tokenize} from './bm25.js';
+import {hasContentTerms,informativeTerms,tokenize} from './bm25.js';
 import type {SourceSearchRecord,SearchFieldMatch} from '../types.js';
 function pathVariants(value:string):string[]{const parts=value.split('/');return [...new Set([...parts,...parts.map((_,i)=>parts.slice(0,i+1).join('/')),...parts.map((_,i)=>parts.slice(i).join('/'))])];}
 export function sourceKeywordText(record:SourceSearchRecord):string {
@@ -20,12 +20,13 @@ export function sourceFieldMatcher(query:string):(record:SourceSearchRecord)=>{p
  const terms=informativeTerms(query),stemmed=new Map(terms.map(term=>[term,stemWord(term)])),needle=normalized(query);
  const stem=(term:string)=>stemmed.get(term)??stemWord(term);
  const generic=new Set(['проект','работа','состояние','сессия','документ','project','work','state','session','document'].map(stem));
+ const meaningful=hasContentTerms(query)&&(terms.length>1||!generic.has(stem(terms[0]??'')));
  return record=>{
   let priority=0;const matches:SearchFieldMatch[]=[];
   for(const {field,value,normalized:normal,base,exact,forms}of prepareSourceFields(record)){
    const fullValue=!!needle&&(normal===needle||field==='fileName'&&base===needle),covered=terms.filter(term=>exact.has(term)||forms.has(stem(term))),complete=terms.length>0&&covered.length===terms.length;
    if(!fullValue&&!covered.length)continue;
-   const strong=['fileName','title','description','aliases'].includes(field)||field==='path'&&fullValue;
+   const strong=meaningful&&(['fileName','title','description','aliases'].includes(field)||field==='path'&&fullValue);
    const strongComplete=complete&&(terms.length>1||!generic.has(stem(terms[0])));
    if(strong&&(fullValue||strongComplete))priority=Math.max(priority,fullValue?2:1);
    const matched:SearchFieldMatch={field,value,match:covered.every(term=>exact.has(term))?'exact':'stem',...(!['fileName','path'].includes(field)&&record.metadataRange?{sourceRange:record.metadataRange}:{})};if(strong&&(fullValue||strongComplete))matches.unshift(matched);else matches.push(matched);
