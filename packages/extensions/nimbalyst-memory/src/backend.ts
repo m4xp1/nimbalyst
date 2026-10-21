@@ -227,7 +227,7 @@ const TOOL_DESCRIPTORS = [
       'Search the indexed project markdown with local keyword retrieval and ' +
       'semantic matching when available ' +
       '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
-      'matching chunks with source + heading citations. Use this to ground ' +
+      "matching entities with source + heading citations. Search also matches filenames, relative paths and YAML values; title, description and aliases can provide strong field matches. Use an exact name or metadata phrase for an addressed lookup. Each result is an entity with an original citable fragment; optional matchedFields explains field evidence. Rank and filename are retrieval signals, not proof of freshness or authority: inspect the source and its current project context. Use this to ground " +
       'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope.  For a specific quotation or fact, ' +
       'use expand when needed and identify the result as indexed evidence. For current ' +
       'session discussions or decisions, use read_session with the hit refId if that ' +

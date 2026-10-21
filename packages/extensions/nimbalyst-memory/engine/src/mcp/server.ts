@@ -19,12 +19,7 @@ const TOOLS = [
   {name:'list_sources',description:'List configured Memory source folders and their rootId values for scoped search. The primary workspace has rootId null.',inputSchema:{type:'object',properties:{}}},
   {
     name: 'search_project_knowledge',
-    description:
-      'Search the indexed project markdown with local keyword retrieval and ' +
-      'semantic matching when available ' +
-      '(design docs, plans, CLAUDE.md, trackers, voice-memory). Returns the top ' +
-      'matching chunks with source + heading citations. Use this to ground ' +
-      'answers in how the project actually works. Discover folder IDs with list_sources; optional rootIds selects one or several folders (null = main), omission = All. Never widen an invalid scope. ',
+    description: "Search indexed project documents with hybrid semantic and keyword retrieval. Discover and select roots with list_sources and rootIds; omit rootIds for All. Search also matches filenames, relative paths and YAML values; title, description and aliases can provide strong field matches. Use an exact name or metadata phrase for an addressed lookup. Each result is an entity with an original citable fragment; optional matchedFields explains field evidence. Rank and filename are retrieval signals, not proof of freshness or authority: inspect the source and its current project context. Use expand for the indexed section and read_doc for the source; session history requires the desktop read_session tool when available.",
     inputSchema: {
       type: 'object',
       properties: {
