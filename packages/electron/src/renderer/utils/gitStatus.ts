@@ -15,6 +15,7 @@ export function normalizeGitStatus(value: unknown): GitStatus | null {
 
   return {
     branch: candidate.branch.trim(),
+    ...(candidate.sync && typeof candidate.sync === 'object' ? { sync: candidate.sync } : {}),
     ahead: candidate.ahead,
     behind: candidate.behind,
     hasUncommitted: candidate.hasUncommitted,
@@ -30,21 +31,4 @@ export function sameGitRepository(a: string, b: string): boolean {
   return key(a)===key(b);
 }
 
-/** A revisioned snapshot wins over every older in-flight legacy status read. */
-export function watchGitStatus(api: Pick<Window['electronAPI'],'invoke'|'git'>, repoPath: string, onStatus: (status: GitStatus|null)=>void) {
-  let disposed=false,generation=0,revision=-1;
-  const refresh=async()=>{
-    const request=++generation;
-    try {const value=await api.invoke('git:status',repoPath);if(!disposed&&request===generation)onStatus(normalizeGitStatus(value));}
-    catch(error){if(!disposed&&request===generation)console.error('[GitStatus] Refresh failed:',error);}
-  };
-  const stop=api.git?.onStatusChanged?.(event=>{
-    if(!sameGitRepository(event.repoPath??event.workspacePath,repoPath))return;
-    if(event.status){
-      if(event.revision!==undefined){if(event.revision<=revision)return;revision=event.revision;}
-      generation++;if(!disposed)onStatus(normalizeGitStatus(event.status));
-    }else void refresh();
-  });
-  void refresh();
-  return {refresh,dispose:()=>{disposed=true;generation++;stop?.();}};
-}
+export { watchGitStatus } from '../services/GitStatusObserver';

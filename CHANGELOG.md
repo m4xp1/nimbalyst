@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.8] - 2026-10-22
+
+### Fixed
+- Resolve Push/Pull counters and commands from the repository Git configuration, including different remote aliases and upstream branch names.
+- Refresh counters after operations and discover incoming commits in the background without Pull; preserve newer commits and show unavailable/stale remote data explicitly.
+
 ## [0.81.7+m4xp1.7] - 2026-10-22
 
 ### Changed

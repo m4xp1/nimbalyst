@@ -1,3 +1,4 @@
+import { describeGitSync, type GitSyncStatus } from '../../../shared/gitSync';
 import React from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
@@ -14,6 +15,7 @@ import { DRAG_REGION, NO_DRAG_REGION } from './dragRegion';
 import { WindowMenuBar } from './WindowMenuBar';
 
 export interface WindowTopBarGitStatus {
+  sync?: GitSyncStatus;
   branch: string;
   ahead: number;
   behind: number;
@@ -368,6 +370,7 @@ function GitStatusMenu({
         gitStatus.hasUncommitted ? 'Modified' : null,
         gitStatus.ahead > 0 ? `${gitStatus.ahead} ahead` : null,
         gitStatus.behind > 0 ? `${gitStatus.behind} behind` : null,
+        describeGitSync(gitStatus.sync),
         activityDescription,
       ].filter(Boolean).join(' · ')
     : 'Git unavailable';
@@ -421,24 +424,24 @@ function GitStatusMenu({
                 Modified
               </span>
             )}
-            {gitStatus.ahead > 0 && (
+            {(gitStatus.ahead > 0 || gitStatus.sync?.push.available === false) && (
               <span
                 className={`window-top-bar__git-detail window-top-bar__git-count inline-flex items-center gap-px text-nim-faint ${GIT_DETAIL}`}
-                title={`${gitStatus.ahead} ahead`}
-                aria-label={`${gitStatus.ahead} ahead`}
+                title={gitStatus.sync ? describeGitSync(gitStatus.sync) : `${gitStatus.ahead} ahead`}
+                aria-label={gitStatus.sync?.push.available === false ? 'Push count unavailable' : `${gitStatus.ahead} ahead`}
               >
                 <MaterialSymbol icon="arrow_upward" size={14} />
-                {gitStatus.ahead}
+                {gitStatus.sync?.push.available === false ? '?' : gitStatus.ahead}
               </span>
             )}
-            {gitStatus.behind > 0 && (
+            {(gitStatus.behind > 0 || gitStatus.sync?.pull.available === false) && (
               <span
                 className={`window-top-bar__git-detail window-top-bar__git-count inline-flex items-center gap-px text-nim-faint ${GIT_DETAIL}`}
-                title={`${gitStatus.behind} behind`}
-                aria-label={`${gitStatus.behind} behind`}
+                title={gitStatus.sync ? describeGitSync(gitStatus.sync) : `${gitStatus.behind} behind`}
+                aria-label={gitStatus.sync?.pull.available === false ? 'Pull count unavailable' : `${gitStatus.behind} behind`}
               >
                 <MaterialSymbol icon="arrow_downward" size={14} />
-                {gitStatus.behind}
+                {gitStatus.sync?.pull.available === false ? '?' : gitStatus.behind}
               </span>
             )}
           </>
@@ -519,6 +522,11 @@ function GitStatusMenu({
                 ))}
                 <div className="window-top-bar__menu-separator h-px my-1 mx-0.5 bg-[var(--nim-border)]" />
               </>
+            )}
+            {gitStatus?.sync && (
+              <div role="status" className="px-3 py-2 text-[11px] text-nim-muted max-w-[340px]" data-testid="git-sync-details">
+                {describeGitSync(gitStatus.sync)}
+              </div>
             )}
             {runningActivity.length > 0 && (
               <>

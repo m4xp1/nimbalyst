@@ -63,6 +63,11 @@ jobs:
           packages/electron/src/main/services/__tests__/GitCommitService.test.ts
           packages/electron/src/main/services/__tests__/GitCommitService.multiRepo.test.ts
           packages/electron/src/main/ipc/__tests__/GitHandlers.operands.test.ts
+          packages/electron/src/main/services/__tests__/GitSyncService.test.ts
+          packages/electron/src/main/services/__tests__/GitStatusRefreshCoordinator.test.ts
+          packages/electron/src/renderer/services/__tests__/GitStatusObserver.test.ts
+          packages/electron/src/renderer/utils/__tests__/gitStatus.test.ts
+          packages/electron/src/renderer/components/WindowTopBar/__tests__/WindowTopBar.test.tsx
       - name: Build isolated Electron application
         run: pnpm --filter @nimbalyst/electron run build
       - name: Verify native runtime

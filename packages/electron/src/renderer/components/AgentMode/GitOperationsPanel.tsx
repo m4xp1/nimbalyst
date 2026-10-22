@@ -1,3 +1,4 @@
+import { describeGitSync } from '../../../shared/gitSync';
 /**
  * GitOperationsPanel - Context-aware git operations UI
  *
@@ -1299,10 +1300,10 @@ Please proceed with this strategy.`;
             <span className="git-operations-panel__branch font-semibold text-[var(--nim-text)]">
               {worktreeId && worktreeBranchName ? `worktree/${worktreeBranchName}` : gitStatus.branch}
             </span>
-            {!worktreeId && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
-              <span className="git-operations-panel__sync-status text-[11px] text-[var(--nim-text-faint)] font-[var(--nim-font-mono)]">
-                {gitStatus.ahead > 0 && `↑${gitStatus.ahead}`}
-                {gitStatus.behind > 0 && ` ↓${gitStatus.behind}`}
+            {!worktreeId && (gitStatus.ahead > 0 || gitStatus.behind > 0 || gitStatus.sync?.push.available === false || gitStatus.sync?.pull.available === false) && (
+              <span title={describeGitSync(gitStatus.sync)} className="git-operations-panel__sync-status text-[11px] text-[var(--nim-text-faint)] font-[var(--nim-font-mono)]">
+                {gitStatus.sync?.push.available === false ? '↑?' : gitStatus.ahead > 0 && `↑${gitStatus.ahead}`}
+                {gitStatus.sync?.pull.available === false ? ' ↓?' : gitStatus.behind > 0 && ` ↓${gitStatus.behind}`}
               </span>
             )}
           </div>

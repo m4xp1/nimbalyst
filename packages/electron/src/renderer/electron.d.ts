@@ -11,6 +11,7 @@ interface GitStatusChangedPayload {
   repoPath?: string;
   revision?: number;
   status?: {
+    sync?: import('../shared/gitSync').GitSyncStatus;
     branch: string;
     ahead: number;
     behind: number;
