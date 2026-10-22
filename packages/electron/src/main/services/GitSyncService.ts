@@ -121,7 +121,7 @@ export class GitRemoteRefresher {
     private readonly now: () => number = Date.now) {}
   private key(repo: string) { try { return realpathSync.native(repo); } catch { return repo; } }
   status(repo: string, targets: GitSyncTargets): Pick<GitSyncStatus, 'freshness' | 'checkedAt' | 'error'> {
-    const state = this.states.get(this.key(repo));
+    const state = this.states.get(this.key(repo) + '\0' + JSON.stringify(targets));
     if (!state || state.signature !== JSON.stringify(targets)) return { freshness: 'local' };
     return { freshness: state.checking ? 'checking' : state.error ? 'error' : 'fresh', checkedAt: state.checkedAt, error: state.error };
   }
@@ -140,10 +140,11 @@ export class GitRemoteRefresher {
     if (!branch) return;
     const targets = await resolveGitSyncTargets(git, branch), signature = JSON.stringify(targets);
     if (![targets.push, targets.pull].some(target => target.remote && target.remote !== '.' && target.branch && target.trackingRef)) return;
-    const previous = this.states.get(key);
+    const stateKey = key + '\0' + signature;
+    const previous = this.states.get(stateKey);
     if (previous?.signature === signature && this.now() - previous.attemptedAt < 60000) return;
     const state: Freshness = { signature, attemptedAt: this.now(), checkedAt: previous?.signature === signature ? previous.checkedAt : undefined, checking: true };
-    this.states.set(key, state); await this.changed(repo);
+    this.states.set(stateKey, state); await this.changed(repo);
     try { await this.fetchRefs(repo, targets); state.checkedAt = this.now(); }
     catch { state.error = 'Could not check configured remote branches. Check network, credentials and remote access.'; }
     finally { state.checking = false; await this.changed(repo); }

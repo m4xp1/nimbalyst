@@ -97,6 +97,7 @@ describe.sequential('real current-branch sync refs in artificial repositories',(
   void service.request(repo);release();await first;await vi.waitFor(()=>expect(changed).toHaveBeenCalledTimes(4));await new Promise(resolve=>setImmediate(resolve));
   expect(fetch).toHaveBeenCalledTimes(2);expect(fetch.mock.calls[1][1].push.branch).toBe('switched');expect(service.status(repo,switched).freshness).toBe('fresh');
   cli(repo,['checkout','main']);cli(repo,['config','--unset','push.default']);
+  await service.request(repo);expect(fetch).toHaveBeenCalledTimes(2); // Returning within TTL reuses this target's verified refs.
  },60000);
  it('coalesces checking, enforces TTL and retains verified time on a safe fetch error',async()=>{
   let now=100000, release!:()=>void;const changed=vi.fn(async()=>{});
