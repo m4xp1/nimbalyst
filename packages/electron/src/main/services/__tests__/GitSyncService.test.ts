@@ -22,6 +22,9 @@ beforeAll(() => {
  mkdirSync(repo); cli(root,['init','--bare',bare]);cli(repo,['init','-b','main']);commit(repo);
  cli(repo,['remote','add','origin',bare]);cli(repo,['remote','add','helper',bare]);cli(repo,['push','-u','helper','main']);cli(repo,['fetch','origin']);
  cli(root,['clone','-b','main',bare,external]);
+ // Real service reads inherit process.env, including when Vitest runs from a Git hook.
+ for (const key of Object.keys(process.env)) if (key.startsWith('GIT_')) vi.stubEnv(key,undefined);
+ vi.stubEnv('GIT_CEILING_DIRECTORIES',root);
  vi.stubEnv('GIT_CONFIG_GLOBAL',path.join(root,'absent-global'));vi.stubEnv('GIT_CONFIG_SYSTEM',path.join(root,'absent-system'));
 },60000);
 afterAll(() => { vi.unstubAllEnvs(); rmSync(root,{recursive:true,force:true}); });
@@ -32,7 +35,7 @@ describe.sequential('real current-branch sync refs in artificial repositories',(
   const push=await resolveGitPush(git(),'main');expect(push).toEqual({remote:'helper',refspec:'main'});
   cli(repo,['push','--',push.remote,push.refspec]);expect(await counts()).toMatchObject({ahead:0,behind:0});
   cli(external,['pull','--ff-only']);commit(external);cli(external,['push']);const head=cli(repo,['rev-parse','HEAD']);
-  await fetchGitSyncRefs(repo,await targets());expect(cli(repo,['rev-parse','HEAD'])).toBe(head);expect(await counts()).toMatchObject({ahead:0,behind:1});
+  assertGitSandbox(repo,root);await fetchGitSyncRefs(repo,await targets());expect(cli(repo,['rev-parse','HEAD'])).toBe(head);expect(await counts()).toMatchObject({ahead:0,behind:1});
   commit(repo);expect(await counts()).toMatchObject({ahead:1,behind:1});
  },60000);
  it('pushRemote and pushDefault select the outgoing alias independently of Pull',async()=>{
