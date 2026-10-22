@@ -15,7 +15,7 @@ function mapRef(source: string, spec: string): string | undefined {
   if (!from || !to || extra !== undefined || from.startsWith('^')) return;
   if (!from.includes('*')) return source === from ? to : undefined;
   const [prefix, suffix] = from.split('*');
-  if (!source.startsWith(prefix) || !source.endsWith(suffix)) return;
+  if (source.length < prefix.length + suffix.length || !source.startsWith(prefix) || !source.endsWith(suffix)) return;
   return to.replace('*', source.slice(prefix.length, source.length - suffix.length || undefined));
 }
 
@@ -43,7 +43,7 @@ export async function resolveGitSyncTargets(git: SimpleGit, branch: string): Pro
       const refs = [...new Set(specs.map(spec => mapRef(ref, spec)).filter((value): value is string => !!value && value.startsWith('refs/')))];
       return refs.length === 1 ? refs[0] : undefined;
     })();
-  const target = (remote: string, ref: string): GitSyncTarget => ({ remote, branch: ref.replace(/^refs\/heads\//, ''), trackingRef: tracking(remote, ref), available: false });
+  const target = (remote: string, ref: string): GitSyncTarget => ({ remote, remoteRef: ref, branch: ref.replace(/^refs\/heads\//, ''), trackingRef: tracking(remote, ref), available: false });
   const pull = pullRemote && pullRef ? target(pullRemote, pullRef) : unavailable('No single Pull upstream configured');
   const pushRemote = last('branch.' + branch + '.pushremote') ?? last('remote.pushdefault') ?? pullRemote
     ?? (remotes.length === 1 ? remotes[0] : remotes.includes('origin') ? 'origin' : undefined);
@@ -69,12 +69,15 @@ export async function resolveGitSyncTargets(git: SimpleGit, branch: string): Pro
     else if (['simple', 'current'].includes(mode)) pushRef = 'refs/heads/' + branch;
     else reason = 'Unsupported push.default';
   }
+  if (pushRef && !pushRef.startsWith('refs/')) pushRef = 'refs/heads/' + pushRef;
   if (!pushRef?.startsWith('refs/heads/')) return { pull, push: { ...unavailable(reason ?? 'Push target is not a branch'), remote: pushRemote } };
   validateGitOperand(pushRef, 'branch');
   const push = target(pushRemote, pushRef);
   const pushUrls = config.get('remote.' + pushRemote + '.pushurl');
   const fetchUrls = config.get('remote.' + pushRemote + '.url') ?? [];
-  if (pushUrls?.some(url => url !== fetchUrls[0])) {
+  if (fetchUrls.length > 1 || (pushUrls?.length ?? 0) > 1) {
+    push.trackingRef = undefined; push.reason = 'Remote has multiple Push URLs; one tracking ref cannot verify every destination';
+  } else if (pushUrls?.some(url => url !== fetchUrls[0])) {
     push.trackingRef = undefined; push.reason = 'Push URL differs from fetch URL; local tracking ref cannot verify destination';
   }
   if (last('remote.' + pushRemote + '.mirror') === 'true') {
@@ -157,7 +160,9 @@ export async function fetchGitSyncRefs(repo: string, targets: GitSyncTargets): P
     validateGitOperand(target.remote, 'remote'); validateGitOperand(target.trackingRef, 'ref');
     if (!target.trackingRef.startsWith('refs/remotes/')) throw new Error('Background fetch requires a remote-tracking namespace');
     const refs = remotes.get(target.remote) ?? new Set<string>();
-    refs.add('+refs/heads/' + target.branch + ':' + target.trackingRef); remotes.set(target.remote, refs);
+    const source = target.remoteRef ?? 'refs/heads/' + target.branch;
+    if (!source.startsWith('refs/')) throw new Error('Background fetch requires a fully qualified remote ref');
+    refs.add('+' + source + ':' + target.trackingRef); remotes.set(target.remote, refs);
   }
   let failed = false;
   for (const [remote, refs] of remotes) {

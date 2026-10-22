@@ -6,14 +6,15 @@ function fixture() {
  let event!:(value:any)=>void;const stop=vi.fn();
  const initial=deferred<unknown>();
  const invoke=vi.fn(async(channel:string)=>channel==='git:status'?initial.promise:undefined);
- const api={invoke,git:{onStatusChanged:vi.fn((listener:any)=>{event=listener;return stop;})}} as unknown as Window['electronAPI'];
- return {api,invoke,initial,stop,event:(value:any)=>event(value)};
+ const onStatusChanged=vi.fn((listener:any)=>{event=listener;return stop;});
+ const api={invoke,git:{onStatusChanged}} as unknown as Window['electronAPI'];
+ return {api,invoke,initial,stop,onStatusChanged,event:(value:any)=>event(value)};
 }
 describe('shared revisioned Git snapshot',()=>{
  it('shares one read/subscription and rejects an older response after a post-Push snapshot',async()=>{
   const f=fixture(),title=vi.fn(),panel=vi.fn();
   const a=watchGitStatus(f.api,'C:/workspace/repo',title),b=watchGitStatus(f.api,'c:\\workspace\\repo',panel);
-  expect(f.api.git.onStatusChanged).toHaveBeenCalledTimes(1);expect(f.invoke.mock.calls.filter(([c])=>c==='git:status')).toHaveLength(1);
+  expect(f.onStatusChanged).toHaveBeenCalledTimes(1);expect(f.invoke.mock.calls.filter(([c])=>c==='git:status')).toHaveLength(1);
   f.event({workspacePath:'C:/workspace/repo',revision:2,status:{...status,ahead:0}});
   f.initial.resolve(status);await a.refresh();
   expect(title).toHaveBeenLastCalledWith({...status,ahead:0});expect(panel).toHaveBeenLastCalledWith({...status,ahead:0});

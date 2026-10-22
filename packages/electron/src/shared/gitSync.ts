@@ -3,6 +3,7 @@ export interface GitSyncTarget {
   remote?: string;
   branch?: string;
   trackingRef?: string;
+  remoteRef?: string;
   available: boolean;
   reason?: string;
 }

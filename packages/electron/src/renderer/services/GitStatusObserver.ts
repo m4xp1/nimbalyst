@@ -56,7 +56,7 @@ export function watchGitStatus(api: Api, repoPath: string, listener: Listener) {
   checkRemote(selected);
   let disposed = false;
   return {
-    refresh: () => read(selected),
+    refresh: () => disposed ? Promise.resolve() : read(selected),
     dispose: () => {
       if (disposed) return; disposed = true; selected.listeners.delete(listener);
       if (!selected.listeners.size) { selected.generation++; owner.entries.delete(selected); }

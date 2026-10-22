@@ -61,6 +61,16 @@ describe.sequential('real current-branch sync refs in artificial repositories',(
   cli(repo,['config','--unset','remote.helper.pushurl']);cli(repo,['config','push.default','matching']);await expect(resolveGitPush(git(),'main')).rejects.toThrow(/Matching/);cli(repo,['config','--unset','push.default']);
   cli(repo,['config','remote.helper.push','HEAD:refs/heads/main']);expect(await resolveGitPush(git(),'main')).toMatchObject({refspec:'main'});cli(repo,['config','--unset','remote.helper.push']);
  });
+ it('does not claim one fetch URL verifies multiple Push URLs',async()=>{
+  cli(repo,['config','--add','remote.helper.url',path.join(root,'second-destination.git')]);
+  try { const result=await readGitSyncCounts(git(),await targets());expect(result.push.available).toBe(false);expect(result.push.reason).toMatch(/multiple/i);expect(result.pull.available).toBe(true); }
+  finally {cli(repo,['config','--unset-all','remote.helper.url']);cli(repo,['config','remote.helper.url',bare]);}
+ });
+ it('supports short configured branch destinations without changing the current-branch scope',async()=>{
+  cli(repo,['config','remote.helper.push','HEAD:renamed']);
+  try {expect(await resolveGitPush(git(),'main')).toEqual({remote:'helper',refspec:'refs/heads/main:refs/heads/renamed'});}
+  finally {cli(repo,['config','--unset','remote.helper.push']);}
+ });
  it('does not invent zero counts for a missing ref, missing upstream or detached HEAD',async()=>{
   const resolved=await resolveGitSyncTargets(git(),'unpublished');expect(resolved.pull.available).toBe(false);
   const result=await readGitSyncCounts(git(),resolved);expect(result.push.available).toBe(false);
@@ -73,6 +83,17 @@ describe.sequential('real current-branch sync refs in artificial repositories',(
   cli(repo,['config','--unset','push.default']);
   const nested=path.join(repo,'nested');mkdirSync(nested);cli(nested,['init','-b','inner']);commit(nested);
   const inner=await resolveGitSyncTargets(createGit(nested,{},gitSandboxEnv(root)),'inner');expect(inner.push.remote).toBeUndefined();expect(inner.pull.remote).toBeUndefined();expect((await targets()).pull.remote).toBe('helper');
+ },60000);
+ it('queues a changed branch during an old remote check and never marks the old target fresh for it',async()=>{
+  let release!:()=>void;const changed=vi.fn(async()=>{});
+  const fetch=vi.fn(async(_repo:string,_targets:Awaited<ReturnType<typeof targets>>)=>{}).mockImplementationOnce(async()=>{await new Promise<void>(resolve=>release=resolve);});
+  const service=new GitRemoteRefresher(changed,fetch);
+  const first=service.request(repo);await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));
+  cli(repo,['checkout','-b','switched']);cli(repo,['config','branch.switched.remote','helper']);cli(repo,['config','branch.switched.merge','refs/heads/main']);cli(repo,['config','push.default','current']);
+  const switched=await resolveGitSyncTargets(git(),'switched');expect(service.status(repo,switched).freshness).toBe('local');
+  void service.request(repo);release();await first;await vi.waitFor(()=>expect(changed).toHaveBeenCalledTimes(4));await new Promise(resolve=>setImmediate(resolve));
+  expect(fetch).toHaveBeenCalledTimes(2);expect(fetch.mock.calls[1][1].push.branch).toBe('switched');expect(service.status(repo,switched).freshness).toBe('fresh');
+  cli(repo,['checkout','main']);cli(repo,['config','--unset','push.default']);
  },60000);
  it('coalesces checking, enforces TTL and retains verified time on a safe fetch error',async()=>{
   let now=100000, release!:()=>void;const changed=vi.fn(async()=>{});
