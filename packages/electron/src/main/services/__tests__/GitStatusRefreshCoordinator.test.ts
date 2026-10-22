@@ -81,7 +81,8 @@ describe('GitStatusRefreshCoordinator', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(readStatus).toHaveBeenCalledTimes(2);
-    expect(broadcasts).toHaveLength(2);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0].status).toEqual(SNAPSHOT);
   });
 
   it('keeps the last confirmed counts when the status read fails', async () => {

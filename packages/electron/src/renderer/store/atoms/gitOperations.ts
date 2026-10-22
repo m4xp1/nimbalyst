@@ -1,3 +1,4 @@
+import type { GitSyncStatus } from '../../../shared/gitSync';
 /**
  * Git Operations Atoms
  *
@@ -14,6 +15,7 @@ import { atomFamily } from '../debug/atomFamilyRegistry';
 import { activeWorkspacePathAtom } from './openProjects';
 
 export interface GitStatus {
+  sync?: GitSyncStatus;
   branch: string;
   ahead: number;
   behind: number;

@@ -24,6 +24,8 @@ import { resolveGitCommitProposalPromptId } from '../services/ai/gitCommitPropos
 import { ipcMain } from 'electron';
 import type { SimpleGit } from 'simple-git';
 import { createGit } from '../services/gitClient';
+import { GitRemoteRefresher, resolveGitPush, resolveGitSyncTargets, readGitSyncCounts } from '../services/GitSyncService';
+import type { GitSyncStatus } from '../../shared/gitSync';
 import log from 'electron-log/main';
 import { existsSync } from 'fs';
 import { dirname, join, relative, isAbsolute, resolve } from 'path';
@@ -170,6 +172,7 @@ export function resolveGitDiffTarget(
 }
 
 interface GitStatusResult {
+  sync?: GitSyncStatus;
   branch: string;
   ahead: number;
   behind: number;
@@ -338,14 +341,19 @@ export async function discardGitChanges(
  * create `.git/index.lock`, so this read can run concurrently with writes
  * (commit/rebase/etc.) without queueing behind them on `gitOperationLock`.
  */
+let remoteRefresher: GitRemoteRefresher | undefined;
+
 export async function readBranchStatus(repoPath: string): Promise<GitStatusResult> {
   const git: SimpleGit = simpleGitReadOnly(repoPath);
   const status = await git.status();
+  const branch = normalizeCurrentBranch(status.current) || 'HEAD';
+  const targets = await resolveGitSyncTargets(git, branch);
+  const counts = await readGitSyncCounts(git, targets);
+  const current = (await git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')).trim() || 'HEAD';
+  if (current !== branch) throw new Error('Branch changed during Git status read');
   return {
-    branch: normalizeCurrentBranch(status.current) || 'HEAD',
-    ahead: status.ahead || 0,
-    behind: status.behind || 0,
-    hasUncommitted: !status.isClean(),
+    branch, ahead: counts.ahead, behind: counts.behind, hasUncommitted: !status.isClean(),
+    sync: { push: counts.push, pull: counts.pull, ...(remoteRefresher?.status(repoPath, targets) ?? { freshness: 'local' as const }) },
   };
 }
 
@@ -364,6 +372,13 @@ export function registerGitHandlers(): void {
       isGitRepository(repoPath) ? readBranchStatus(repoPath) : null,
   });
   setGitStatusRefreshCoordinator(statusRefresh);
+  remoteRefresher = new GitRemoteRefresher(repo => statusRefresh.request(repo));
+  safeHandle('git:sync-refresh', async (_event, repoPath: string) => {
+    validateGitCwd(repoPath, 'repoPath');
+    if (!isGitRepository(repoPath)) return;
+    // The caller awaits no network work. A coalesced snapshot arrives via the coordinator.
+    void remoteRefresher?.request(repoPath).catch(error => log.warn('[GitSync] Remote check failed', error));
+  });
   operationLog.onOperationTerminal((repoPath, entry) => {
     // An observed read-only command (an agent's `git status`, `git log`) cannot
     // have moved refs, the index, or the worktree. Refreshing after each one
@@ -548,7 +563,7 @@ export function registerGitHandlers(): void {
 
           validateGitOperand(branch, 'branch');
           const pushArgs: string[] = ['push'];
-          const remote = options?.remote === undefined ? 'origin' : options.remote;
+          const { remote, refspec } = await resolveGitPush(git, branch, options?.remote, options?.setUpstream);
 
           if (options?.setUpstream) {
             pushArgs.push('--set-upstream');
@@ -556,11 +571,11 @@ export function registerGitHandlers(): void {
             pushArgs.push('--force-with-lease');
           }
 
-          pushArgs.push('--', remote, branch);
+          pushArgs.push('--', remote, refspec);
           const result = await runGitCommandStreaming(operationLog, repoPath, pushArgs);
           return result.success
             ? { success: true }
-            : { success: false, error: explainGitPushFailure(result.error, { remote, branch }) };
+            : { success: false, error: explainGitPushFailure(result.error, { remote, branch: refspec.includes(':') ? refspec.split(':')[1].replace(/^refs\/heads\//, '') : branch }) };
         } catch (error) {
           log.error('[git:push] Failed:', error);
           return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -631,10 +646,15 @@ export function registerGitHandlers(): void {
       if (!isGitRepository(repoPath)) return { success: false, error: 'Not a git repository' };
 
       try {
+        const git = simpleGitReadOnly(repoPath);
+        const branch = normalizeCurrentBranch((await git.status()).current);
+        const targets = options?.remote === undefined ? await resolveGitSyncTargets(git, branch) : undefined;
+        const remote = options?.remote ?? targets?.pull.remote ?? targets?.push.remote;
+        if (!remote) return { success: false, error: 'No fetch remote configured' };
         const result = await runGitCommandStreaming(
           operationLog,
           repoPath,
-          ['fetch', '--', options?.remote === undefined ? 'origin' : options.remote],
+          ['fetch', '--', remote],
         );
         return result.success ? { success: true } : { success: false, error: result.error };
       } catch (error) {

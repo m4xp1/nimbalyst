@@ -611,3 +611,12 @@ describe('WindowTopBar', () => {
     expect(pullItem.hasAttribute('disabled')).toBe(false);
   });
 });
+
+// Optional sync metadata must not turn an unknown count into an in-sync claim.
+describe('directional Git target details',()=>{
+ it('shows unavailable Push separately from a known Pull count and retains check errors',()=>{
+  render(<WindowTopBar workspaceName="Repo" activeModeLabel="Files" gitStatus={{branch:'main',ahead:0,behind:2,hasUncommitted:false,sync:{push:{available:false,remote:'fork',branch:'main',reason:'Tracking branch unavailable locally'},pull:{available:true,remote:'helper',branch:'upstream'},freshness:'error',checkedAt:1000,error:'Remote check failed'}}} gitActions={{onPull:()=>{},onPush:()=>{},onOpenLog:()=>{}}}/>);
+  expect(screen.getByLabelText('Push count unavailable').textContent).toContain('?');expect(screen.getByLabelText('2 behind')).toBeTruthy();
+  fireEvent.click(screen.getByTestId('window-top-bar-git-status'));const details=screen.getByTestId('git-sync-details');expect(details.textContent).toContain('Push: fork/main');expect(details.textContent).toContain('Pull: helper/upstream');expect(details.textContent).toContain('Remote check failed; showing local refs');
+ });
+});

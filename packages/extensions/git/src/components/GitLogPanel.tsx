@@ -32,6 +32,7 @@ interface GitCommit {
 }
 
 interface GitStatusResult {
+  sync?: {push:{available:boolean;remote?:string;branch?:string;reason?:string};pull:{available:boolean;remote?:string;branch?:string;reason?:string};freshness:string;checkedAt?:number;error?:string};
   branch: string;
   ahead: number;
   behind: number;
@@ -491,7 +492,8 @@ export function GitLogPanel({ host }: PanelHostProps) {
   useEffect(() => {
     loadStatus();
     loadBranches();
-  }, [loadStatus, loadBranches]);
+    void ipc.invoke('git:sync-refresh', repoPath).catch(() => undefined);
+  }, [loadStatus, loadBranches, ipc, repoPath]);
 
   // Reload commits when filters change
   useEffect(() => {
@@ -573,7 +575,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
     setActionLoading('push');
     try {
       const result = await withLog(
-        'git push origin',
+        'git push (configured target)',
         () => ipc.invoke('git:push', repoPath) as Promise<PushResult>,
         {
           isError: (r) => !r.success,
@@ -587,10 +589,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
         loadStatus();
         loadCommits();
       } else {
-        showMessage(result.error || 'Push failed', true, 'git push origin');
+        showMessage(result.error || 'Push failed', true, 'git push (configured target)');
       }
     } catch (err) {
-      showMessage(err instanceof Error ? err.message : 'Push failed', true, 'git push origin');
+      showMessage(err instanceof Error ? err.message : 'Push failed', true, 'git push (configured target)');
     } finally {
       setActionLoading(null);
     }
@@ -635,7 +637,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
     setActionLoading('fetch');
     try {
       const result = await withLog(
-        'git fetch origin',
+        'git fetch (configured target)',
         () => ipc.invoke('git:fetch', repoPath) as Promise<FetchResult>,
         {
           isError: (r) => !r.success,
@@ -648,10 +650,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
         showMessage('Fetched successfully');
         loadStatus();
       } else {
-        showMessage(result.error || 'Fetch failed', true, 'git fetch origin');
+        showMessage(result.error || 'Fetch failed', true, 'git fetch (configured target)');
       }
     } catch (err) {
-      showMessage(err instanceof Error ? err.message : 'Fetch failed', true, 'git fetch origin');
+      showMessage(err instanceof Error ? err.message : 'Fetch failed', true, 'git fetch (configured target)');
     } finally {
       setActionLoading(null);
     }
@@ -761,9 +763,10 @@ export function GitLogPanel({ host }: PanelHostProps) {
   }, [setSelectedIndex]);
 
   const remoteStatus = status ? (
-    status.ahead > 0 || status.behind > 0
-      ? `↑${status.ahead} ↓${status.behind}`
-      : 'up to date'
+    status.sync?.push.available === false || status.sync?.pull.available === false
+      ? `↑${status.sync?.push.available === false ? '?' : status.ahead} ↓${status.sync?.pull.available === false ? '?' : status.behind}`
+      : status.ahead > 0 || status.behind > 0
+        ? `↑${status.ahead} ↓${status.behind}` : 'up to date'
   ) : '';
 
   const hasChanges = status?.hasUncommitted ?? false;
@@ -827,7 +830,7 @@ export function GitLogPanel({ host }: PanelHostProps) {
 
           {/* Remote status */}
           {remoteStatus && (
-            <span className={`git-log-remote-status ${remoteStatus === 'up to date' ? 'up-to-date' : 'diverged'}`}>
+            <span title={status?.sync ? `Push: ${status.sync.push.remote ?? "unavailable"}/${status.sync.push.branch ?? "?"} · Pull: ${status.sync.pull.remote ?? "unavailable"}/${status.sync.pull.branch ?? "?"} · ${status.sync.error ?? (status.sync.checkedAt ? new Date(status.sync.checkedAt).toLocaleString() : "Local refs; remote not checked")}` : undefined} className={`git-log-remote-status ${remoteStatus === 'up to date' ? 'up-to-date' : 'diverged'}`}>
               {remoteStatus}
             </span>
           )}

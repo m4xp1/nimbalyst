@@ -1,9 +1,11 @@
 import { BrowserWindow } from 'electron';
+import type { GitSyncStatus } from '../../shared/gitSync';
 import { realpathSync } from 'fs';
 import log from 'electron-log/main';
 
 /** The branch/ahead/behind snapshot the title bar and Git panel both render. */
 export interface GitBranchStatusSnapshot {
+  sync?: GitSyncStatus;
   branch: string;
   ahead: number;
   behind: number;
@@ -106,7 +108,7 @@ export class GitStatusRefreshCoordinator {
       log.warn('[GitStatusRefresh] Failed to refresh status for', canonical, error);
       return;
     }
-    if (!status) return;
+    if (!status || this.requeued.has(canonical)) return;
 
     // Every caller asks for a refresh of the path a git command ran in, which
     // is the repository -- so the two fields carry the same value here and

@@ -22,6 +22,7 @@ vi.mock('../../utils/ipcRegistry', () => ({
   safeHandle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => boundary.handlers.set(channel, handler),
 }));
 vi.mock('fs', async (importOriginal) => ({ ...await importOriginal<typeof import('fs')>(), existsSync: vi.fn(() => true) }));
+vi.mock('../../services/gitReadOnly', () => ({ simpleGitReadOnly: boundary.git }));
 vi.mock('simple-git', () => ({ simpleGit: boundary.git }));
 vi.mock('../../services/gitEnv', () => ({ simpleGitWithHookEnv: boundary.git, getGitSubprocessEnv: vi.fn() }));
 vi.mock('../../services/GitOperationLock', () => ({ gitOperationLock: { withLock: boundary.lock } }));
@@ -30,6 +31,12 @@ vi.mock('../../services/GitOperationLogService', () => ({
   runGitCommandStreaming: boundary.streaming,
   withGitOperationLog: vi.fn(),
 }));
+vi.mock('../../services/GitSyncService', async importOriginal => {
+  const original = await importOriginal<typeof import('../../services/GitSyncService')>();
+  return { ...original, resolveGitPush: vi.fn(async (_git, branch, remote) => ({remote: remote ?? 'origin', refspec: branch})),
+    resolveGitSyncTargets: vi.fn(async () => ({pull:{remote:'origin'},push:{remote:'origin'}})) };
+});
+import { resolveGitPush } from '../../services/GitSyncService';
 import { registerGitHandlers } from '../GitHandlers';
 
 beforeEach(() => {
@@ -241,5 +248,14 @@ describe('exact argv and preserved behavior', () => {
     for (const [channel, args] of [['git:rebase', [{ action: 'continue' }]], ['git:cherry-pick', ['HEAD^']]] as const) {
       await expect(invoke(channel, '/fixture', ...args)).resolves.toEqual({ success: false, error: 'CONFLICT', conflicts: ['file.txt'] });
     }
+  });
+});
+
+// The owner has two aliases for the same server, with helper as upstream.
+describe('configured default remote regression', () => {
+  it('pushes to the branch configured destination rather than a hardcoded origin', async () => {
+    vi.mocked(resolveGitPush).mockResolvedValueOnce({remote:'helper',refspec:'topic/日本語'});
+    await expect(invoke('git:push', '/fixture')).resolves.toEqual({success:true});
+    expect(boundary.streaming).toHaveBeenCalledWith(boundary.journal, '/fixture', ['push','--','helper','topic/日本語']);
   });
 });
