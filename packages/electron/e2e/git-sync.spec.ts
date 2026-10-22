@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { gitSandboxEnv, assertGitSandbox } from '../src/main/services/testSupport/gitTestSandbox';
 const root=path.resolve(__dirname,'../../..');
-let app:ElectronApplication|undefined,page:Page,temp:string,repo:string,bare:string,external:string;
+let app:ElectronApplication|undefined,page:Page,temp:string,repo:string,bare:string,external:string,releaseMarker:string|undefined;
 const git=(args:string[],cwd=repo)=>{if(!['init','clone'].includes(args[0])&&cwd!==temp&&cwd!==bare)assertGitSandbox(cwd,temp);return execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,env:gitSandboxEnv(temp)}).trim();};
 const invoke=(channel:string,...args:unknown[])=>page.evaluate(({channel,args})=>(window as any).electronAPI.invoke(channel,...args),{channel,args});
 async function commit(content:string,cwd=repo){await fs.writeFile(path.join(cwd,'fixture.txt'),content);git(['add','fixture.txt'],cwd);git(['-c','user.name=Test User','-c','user.email=test@example.com','-c','commit.gpgsign=false','commit','-qm',content],cwd);}
@@ -21,14 +21,14 @@ async function launch(){
  if(process.env.NIMBALYST_E2E_APP_PATH)expect(await app.evaluate(({app})=>app.getVersion())).toBe(JSON.parse(await fs.readFile(path.join(root,'packages/electron/package.json'),'utf8')).version);
  page=await app.firstWindow();await page.getByTestId('tracker-mode-button').waitFor();expect(realpathSync.native(await app.evaluate(({app})=>app.getPath('userData')))).toBe(realpathSync.native(user));await invoke('permissions:trustWorkspace',repo);await page.getByTestId('files-mode-button').click();
 }
-test.afterAll(close);
+test.afterAll(async()=>{if(releaseMarker)await fs.writeFile(releaseMarker,'release on teardown').catch(()=>undefined);await close();});
 test('two aliases: Push clears ahead, concurrent new commit remains ahead, startup fetch discovers behind without Pull',async()=>{
  test.setTimeout(180000);temp=realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(),'nim-git-sync-e2e-')));repo=path.join(temp,'repo');bare=path.join(temp,'remote.git');external=path.join(temp,'external');await fs.mkdir(repo);await fs.mkdir(path.join(temp,'extensions'));
  git(['init','--bare',bare],temp);git(['init','-b','main']);await commit('baseline');git(['remote','add','origin',bare]);git(['remote','add','helper',bare]);git(['push','-u','helper','main']);git(['fetch','origin']);git(['clone','-b','main',bare,external],temp);await commit('first local');
  await launch();const top=()=>page.getByTestId('window-top-bar-git-status');await expect(top().getByLabel('1 ahead',{exact:true})).toBeVisible();
  await top().click();await expect(page.getByTestId('git-sync-details')).toContainText('Push: helper/main');await page.getByRole('menuitem',{name:/Push$/}).click();
  await expect(page.getByRole('menuitem',{name:/Push$/})).toBeEnabled();await expect(top().getByLabel('1 ahead',{exact:true})).toHaveCount(0);expect((await invoke('git:status',repo)).ahead).toBe(0);expect(git(['rev-parse','HEAD'])).toBe(git(['rev-parse','refs/heads/main'],bare));await page.keyboard.press('Escape');
- const hooks=path.join(temp,'hooks'),marker=path.join(temp,'push-started').replace(/\\/g,'/'),release=path.join(temp,'push-release').replace(/\\/g,'/');await fs.mkdir(hooks);await fs.writeFile(path.join(hooks,'pre-push'),'#!/bin/sh\necho started > "'+marker+'"\nwhile [ ! -f "'+release+'" ]; do sleep 0.1; done\n',{mode:0o755});git(['config','core.hooksPath',hooks]);await commit('sent during push');
+ const hooks=path.join(temp,'hooks'),marker=path.join(temp,'push-started').replace(/\\/g,'/'),release=path.join(temp,'push-release').replace(/\\/g,'/');releaseMarker=release;await fs.mkdir(hooks);await fs.writeFile(path.join(hooks,'pre-push'),'#!/bin/sh\necho started > "'+marker+'"\nwhile [ ! -f "'+release+'" ]; do sleep 0.1; done\n',{mode:0o755});git(['config','core.hooksPath',hooks]);await commit('sent during push');
  await expect(top().getByLabel('1 ahead',{exact:true})).toBeVisible();await top().click();await page.getByRole('menuitem',{name:/Push$/}).click();await expect.poll(()=>existsSync(marker)).toBe(true);const sent=git(['rev-parse','HEAD']);await commit('new during push');await fs.writeFile(release,'release');
  await expect(page.getByRole('menuitem',{name:/Push$/})).toBeEnabled();await expect(top().getByLabel('1 ahead',{exact:true})).toBeVisible();expect(git(['rev-parse','refs/heads/main'],bare)).toBe(sent);expect((await invoke('git:status',repo)).ahead).toBe(1);
  git(['config','--unset','core.hooksPath']);await page.getByRole('menuitem',{name:/Push$/}).click();await expect(top().getByLabel('1 ahead',{exact:true})).toHaveCount(0);await close();
