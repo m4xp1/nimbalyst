@@ -4,7 +4,20 @@ This document explains how Nimbalyst integrates with git to provide real-time st
 
 ## Overview
 
-Nimbalyst uses an **event-driven architecture** for git integration. All git status updates are triggered by file system events, not polling. This provides immediate updates while minimizing system resource usage.
+Nimbalyst uses an **event-driven architecture** for git integration. Local git status updates are driven by file-system and operation-terminal events. Remote refs are checked on repository activation/switch and window focus, without a polling timer. This provides immediate updates while minimizing system resource usage.
+
+## Push/Pull counters (fork .8)
+
+The toolbar and session Git panel share one renderer observer and a revisioned main-process snapshot. A completed Git operation triggers a fresh read; an older in-flight response cannot overwrite it. Worktree comparisons with a base branch remain separate.
+
+- **↑** counts commits in HEAD absent from the configured current-branch Push destination.
+- **↓** counts commits in the Pull upstream absent from HEAD. Different Push and Pull destinations are shown in the menu and tooltips.
+- Resolve Push remote in Git order: branch pushRemote, remote.pushDefault, branch remote, then the ordinary single-remote/origin fallback. Respect current/upstream/simple and a single current-branch push refspec. The toolbar stays scoped to one branch; matching/mirror/ambiguous configurations require an explicit branch configuration instead of silently pushing other branches.
+- Missing targets or tracking refs show **?**, not a claim of zero. Distinct or multiple push URLs cannot be verified from a fetch-URL tracking ref and show an unavailable Push count.
+- On activation/switch/focus, request a coalesced background fetch of just the relevant remote-tracking refs, at most once per target configuration per 60 seconds. Each remote has a 30-second Git timeout. No merge, HEAD/index/config rewrite, recursive submodule fetch, tags or credential prompts. Foreground Push/Pull retain hooks and interactive credentials.
+- Local counts remain usable during a remote check. The menu shows checking/failure/last verified time; a network failure retains local-ref counts rather than fabricating an in-sync result. A later eligible focus retries. Explicit Fetch uses the configured Pull remote, falling back to the Push remote.
+
+The optional `sync` field extends the existing `git:status`/snapshot contract. `git:sync-refresh` schedules the remote check and returns before network completion. Reading `git:status` itself performs no network operation. Git configuration and user documents are unchanged.
 
 ## Core Components
 
@@ -43,7 +56,7 @@ Two events propagate git changes to the renderer:
 
 | Event | Trigger | Payload |
 |-------|---------|---------|
-| `git:status-changed` | Any git state change (staging, commits, etc.) | `{ workspacePath }` |
+| `git:status-changed` | Git state change or remote-check completion | `{ workspacePath, repoPath?, revision?, status? }` |
 | `git:commit-detected` | New commit detected | `{ workspacePath, commitHash, commitMessage, committedFiles }` |
 
 ## Data Flow
@@ -133,24 +146,13 @@ The 5-second cache TTL in GitStatusService is NOT a polling mechanism. It:
 
 ### Event-Driven Updates
 
-All git UI updates should follow this pattern:
+Components use the disposable shared observer; IPC subscriptions live in the renderer service (see [IPC listeners](IPC_LISTENERS.md)).
 
 ```typescript
-// Initial fetch on mount
 useEffect(() => {
-  fetchGitStatus();
-
-  // Listen for changes
-  const unsubscribe = window.electronAPI?.git?.onStatusChanged?.(
-    (data) => {
-      if (data.workspacePath === workspacePath) {
-        fetchGitStatus();
-      }
-    }
-  );
-
-  return () => unsubscribe?.();
-}, [workspacePath]);
+  const observer = watchGitStatus(window.electronAPI, repoPath, setStatus);
+  return observer.dispose;
+}, [repoPath, setStatus]);
 ```
 
 ## Lifecycle

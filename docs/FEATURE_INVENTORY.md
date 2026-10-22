@@ -186,6 +186,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Git operations panel with a Changes list where users select files and commit directly or ask AI to write the message
 - AI-assisted commit message generation
 - Interactive git commit proposal widget with individual-hunk selection to commit only the intended lines of a shared file
+- Configured Push/Pull targets with directional commit counts, bounded background remote checks on activation/focus, shared snapshots and explicit freshness/unavailable states
 - Commit history view with ahead/behind tracking and links to the AI sessions that produced commits
 - Per-repository status, branches, file lists, and commit controls for multi-folder projects; Commit with AI proposes separate commits per repository; the title-bar branch, Git panel and new-worktree dialog follow the file open in the editor
 - Auto-commit mode (toggle)
