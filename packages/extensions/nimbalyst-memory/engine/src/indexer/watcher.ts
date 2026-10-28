@@ -15,7 +15,7 @@
  * configured source set. After a batch settles it invokes `onSettled` so the
  * engine can rebuild its in-memory retrieval snapshot.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { expandSourcePatterns } from '../sourceRules.js';
 import { resolveInRoots } from '../roots.js';
@@ -73,12 +73,10 @@ export function computeWatchScope(sources: SourceSet[]): {
  * not one, and the shorter-prefix check would otherwise collapse them.
  *
  * Root-anchored globs are handled differently per root, deliberately. On the
- * PRIMARY root they stay file-enumerated: that root is a monorepo, and watching
- * it recursively is the EMFILE bug in this file's header. A non-primary root is
- * a purpose-scoped tree the caller declared precisely because it is small (the
- * harness memory directory is ~90 files), so it is watched recursively — which
- * is what lets a newly-added page index without a restart. A caller must not
- * declare a huge tree as a source root.
+ * primary and attached roots they stay file-enumerated: attached roots can also
+ * contain large repositories and unrelated files. Only the host-owned, bounded
+ * harness-memory tree uses a recursive root watch. New root-anchored matches
+ * elsewhere are found by discovery without observing unrelated files.
  */
 export function computeWatchScopes(
   sources: SourceSet[],
@@ -93,7 +91,7 @@ export function computeWatchScopes(
   }
   return Array.from(byRoot.values()).map(({ root, sets }) => {
     const scope = computeWatchScope(sets);
-    if (root.id !== null && scope.rootAnchoredGlobs.length) {
+    if (root.id === 'harness-memory' && scope.rootAnchoredGlobs.length) {
       // '' is the root itself; it subsumes every other base dir under it.
       return { root, dirs: [''], rootAnchoredGlobs: [] };
     }
@@ -136,7 +134,7 @@ export class IndexWatcher {
     const removed=this.targetPaths.filter(target=>!targets.includes(target));
     if(removed.length)await this.watcher.unwatch(removed);
     this.watcher.add(targets);this.targetPaths=targets;
-    if(!this.discoveryTimer&&(this.config.sources.some(s=>s.sourceClass==='custom')||this.indexer.entityFilePaths().length))this.discoveryTimer=setInterval(()=>void this.discover(),3000);
+    if(!this.discoveryTimer&&(this.config.sources.length||this.indexer.entityFilePaths().length))this.discoveryTimer=setInterval(()=>void this.discover(),3000);
   }
   async acknowledge(paths:string[]):Promise<void>{
     const generation=this.generation;
@@ -163,6 +161,8 @@ export class IndexWatcher {
       return;
     const token=++this.observationToken;let watchFailed=false;
     this.watcher = chokidar.watch(targets, {
+      ignored:(file,info)=>{const rel=path.relative(this.config.root,file).split(path.sep).join('/');if(rel.split('/').some(part=>process.platform==='win32'?part.toLowerCase()==='.git':part==='.git'))return true;return info?.isFile()===true&&!this.indexer.classify(file);},
+      followSymlinks:false,
       ignoreInitial: true,
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
@@ -170,7 +170,7 @@ export class IndexWatcher {
     this.readyPromise=targets.length?new Promise(resolve=>{this.watcher!.once("ready",resolve);this.watcher!.once("error",()=>resolve());}):Promise.resolve();
     this.watcher.once('ready',()=>{if(!this.stopped&&token===this.observationToken&&!watchFailed){this.onVerified?.({stage:'watch'});for(const root of this.indexer.sourceRoots())this.onVerified?.({stage:'watch',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})});}});
     void this.discover(seedOnly);
-    if (this.config.sources.some((s) => s.sourceClass === "custom") || this.indexer.entityFilePaths().length) {
+    if (this.config.sources.length || this.indexer.entityFilePaths().length) {
       this.discoveryTimer = setInterval(() => void this.discover(), 3000);
     }
     this.watcher
@@ -178,10 +178,11 @@ export class IndexWatcher {
       .on("change", (p) => this.queue(p, "upsert"))
       .on("unlink", (p) => this.queue(p, "remove"))
       .on("error", error => {
-        if(this.stopped||token!==this.observationToken)return;watchFailed=true;
+        if(this.stopped||token!==this.observationToken)return;
         const abs=(error as NodeJS.ErrnoException).path;const located=abs?locateAbsolute(this.indexer.sourceRoots(),path.resolve(abs)):null;
         if(abs&&!located)return;
-        this.reportError(error,{stage:'watch',...(located?{rootId:located.root.id==='harness-memory'?null:located.root.id,...(located.root.id==='harness-memory'?{scopeId:located.root.id}:{}),relativePath:path.relative(located.root.dir,path.resolve(abs!)).split(path.sep).join('/')}:{})});
+        if(abs){if(path.resolve(abs).split(path.sep).some(part=>process.platform==='win32'?part.toLowerCase()==='.git':part==='.git'))return;if(!this.indexer.classify(abs)){let directory=false;try{directory=statSync(abs).isDirectory();}catch{directory=this.indexer.ruleFilePaths().some(file=>file.startsWith(path.resolve(abs)+path.sep));}if(!directory)return;}}
+        watchFailed=true;this.reportError(error,{stage:'watch',...(located?{rootId:located.root.id==='harness-memory'?null:located.root.id,...(located.root.id==='harness-memory'?{scopeId:located.root.id}:{}),relativePath:path.relative(located.root.dir,path.resolve(abs!)).split(path.sep).join('/')}:{})});
       });
   }
 
@@ -217,7 +218,7 @@ export class IndexWatcher {
           onlyFiles: true,
           followSymbolicLinks: false,
           suppressErrors: true,
-          ignore: [...(this.config.exclude ?? []), ...(scope.root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : [])],
+          ignore: ['**/.git/**',...(this.config.exclude ?? []), ...(scope.root.id === null ? expandSourcePatterns(this.config.workspaceExclude ?? [], this.config.root) : [])],
         });
         targets.push(...files);
       }
