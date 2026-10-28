@@ -58,6 +58,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 };
 
 function skipReason(provider: ProviderId): string {
+  if (provider === 'openai' && process.env.NIMBALYST_ALLOW_OPENAI_API !== '1') return 'OpenAI API access disabled; explicit NIMBALYST_ALLOW_OPENAI_API=1 required';
   if (provider === 'openai' && !OPENAI_KEY) return 'OPENAI_API_KEY missing';
   if (provider === 'anthropic' && !ANTHROPIC_KEY) return 'ANTHROPIC_API_KEY missing';
   if (provider === 'lmstudio' && !LMSTUDIO_BASE_URL) return 'LMSTUDIO_BASE_URL missing';

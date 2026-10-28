@@ -73,6 +73,7 @@ function buildEmbedderConfig(): EmbedderConfig {
     return { kind: 'local', model: process.env.NIMBALYST_MEMORY_LOCAL_MODEL };
   }
   if (kind === 'openai') {
+    if(process.env.NIMBALYST_ALLOW_OPENAI_API!=='1'){log('OpenAI API is disabled for this standalone launch; keyword retrieval active');return{kind:'sparse'};}
     const apiKey = process.env.NIMBALYST_MEMORY_OPENAI_KEY;
     if (!apiKey) {
       log('optional semantic matching is unavailable; using local keyword retrieval');

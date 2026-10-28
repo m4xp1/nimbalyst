@@ -12,6 +12,7 @@ jobs:
         shell: pwsh
     env:
       NODE_OPTIONS: --max-old-space-size=8192
+      NIMBALYST_ALLOW_OPENAI_API: '0'
       OPENAI_API_KEY: ''
       ANTHROPIC_API_KEY: ''
       OFFICIAL_BUILD: 'false'

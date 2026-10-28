@@ -9,7 +9,7 @@ import type { DocumentContext } from '../../server/types';
 
 describe('OpenAI Provider - Tool Usage', () => {
   const apiKey = process.env.OPENAI_API_KEY;
-  const runOpenAiIntegration = process.env.RUN_OPENAI_INTEGRATION === '1';
+  const runOpenAiIntegration = process.env.RUN_OPENAI_INTEGRATION === '1' && process.env.NIMBALYST_ALLOW_OPENAI_API === '1';
   
   afterEach(() => {
     ProviderFactory.destroyAll();

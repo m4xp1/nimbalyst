@@ -1,3 +1,5 @@
+// Paid API access is off unless this launch explicitly opts in.
+process.env.NIMBALYST_ALLOW_OPENAI_API ??= '0';
 import { defineConfig } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

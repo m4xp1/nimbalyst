@@ -110,7 +110,8 @@ export class ProviderCredentialVault {
   constructor(
     private readonly directory: string,
     private readonly encryption: CredentialEncryption,
-    private readonly changed: () => void = () => {}
+    private readonly changed: () => void = () => {},
+    private readonly readAllowed: (name:string)=>boolean = ()=>true
   ) {
     this.file = path.join(directory, "provider-credentials", "vault.bin");
   }
@@ -345,6 +346,7 @@ export class ProviderCredentialVault {
     }
   }
   get(name: string, scope: CredentialScope = {}): string | undefined {
+    if (!this.readAllowed(name)) return undefined;
     this.validateName(name);
     const normalized = this.scope(scope);
     try {
@@ -367,6 +369,7 @@ export class ProviderCredentialVault {
   }
   /** Missing means no desktop opinion; empty means a durable deletion to sync. */
   mobileOpenAIKey(): string | undefined {
+    if (!this.readAllowed("openai")) return undefined;
     try {
       const record = this.read().records.find(
         (r) => r.name === "openai" && !r.workspacePath
@@ -385,7 +388,7 @@ export class ProviderCredentialVault {
         this.read()
           .records.filter(
             (r) =>
-              r.workspacePath === normalized.workspacePath && r.value !== null
+              r.workspacePath === normalized.workspacePath && r.value !== null && this.readAllowed(r.name)
           )
           .map((r) => [r.name, r.value as string])
       );

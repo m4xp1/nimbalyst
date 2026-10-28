@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import {assertOpenAIRequestAllowed} from '../openaiAccessPolicy';
 import type { ProviderStream, ProviderStreamParams } from './types';
 import { toolRegistry, ToolExecutor } from '../tools';
 
@@ -13,6 +14,7 @@ export const streamOpenAI: ProviderStream = async function* (
   { model, apiKey, baseUrl, system, user, history }: ProviderStreamParams,
   signal?: AbortSignal
 ) {
+  assertOpenAIRequestAllowed();
   const client = new OpenAI({
     apiKey,
     baseURL: normalizeBaseUrl(baseUrl),

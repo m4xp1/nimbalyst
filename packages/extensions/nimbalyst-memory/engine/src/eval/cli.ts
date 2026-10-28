@@ -107,6 +107,7 @@ function slotRequests(flags: Flags, log: (m: string) => void): SlotRequest[] {
       return { key: 'sparse', label: 'keyword-only (BM25)', config: { kind: 'sparse' } };
     }
     if (name === 'openai') {
+      if(process.env.NIMBALYST_ALLOW_OPENAI_API!=='1')return{key:'openai',label:'openai embeddings',config:null,unavailableReason:'Paid OpenAI evaluation is disabled. Explicitly set NIMBALYST_ALLOW_OPENAI_API=1 for this run.'};
       const lookup = resolveApiKey(flags.keyFile, flags.keyField);
       if (!lookup.key) {
         return {

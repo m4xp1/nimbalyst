@@ -3,6 +3,7 @@
  */
 
 import OpenAI from 'openai';
+import {assertOpenAIRequestAllowed} from '../../openaiAccessPolicy';
 import { BaseAIProvider } from '../AIProvider';
 import { AgentCapabilities, BUILTIN_AGENT_CAPABILITIES } from '../agentCapabilities';
 import fs from 'fs/promises';
@@ -305,6 +306,7 @@ export class OpenAIProvider extends BaseAIProvider {
 
       let response;
       try {
+        assertOpenAIRequestAllowed();
         response = await this.openai.chat.completions.create(completionParams, {
           signal: this.abortController.signal
         });
@@ -630,6 +632,7 @@ export class OpenAIProvider extends BaseAIProvider {
     try {
       // console.log('[OpenAIProvider] Fetching available models from OpenAI API');
       const modelFetchStart = Date.now();
+      assertOpenAIRequestAllowed();
       const openai = new OpenAI({ apiKey });
       const response = await openai.models.list();
       // console.log(`[OpenAIProvider] Fetched ${response.data.length} models in ${Date.now() - modelFetchStart}ms`);
