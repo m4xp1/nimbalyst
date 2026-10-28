@@ -307,3 +307,9 @@ describe('Memory search-root broker boundary', () => {
     await expect(dispatchBrokerMethod('memorySourceRoots',{}, {...ctx,grantedPermissions:[...ctx.grantedPermissions],moduleId:'other'})).rejects.toThrow(/denied/);
   });
 });
+
+it('does not grant embedding diagnostic control to another extension',async()=>{
+ const {dispatchBrokerMethod}=await import('../extensionBrokerDispatch');
+ await expect(dispatchBrokerMethod('embeddingDiagnostics',{op:'get'},{...ctx,extensionId:'com.other'} as any)).rejects.toThrow(/denied/);
+ await expect(dispatchBrokerMethod('embeddingDiagnostics',{op:'set',enabled:true},ctx as any)).rejects.toThrow(/Developer mode/);
+});

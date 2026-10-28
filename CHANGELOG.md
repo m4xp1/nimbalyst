@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.9] - 2026-10-28
+
+### Added
+- Memory Embedding usage: persistent UTC request/input/token counters, operation breakdown and optional rotating developer log without text or credentials. Counts include successful HTTP batches inside failed indexing operations.
+
+### Fixed
+- Withhold saved OpenAI credentials and block paid requests in ordinary automated launches; an explicit per-run flag remains available for requested provider checks.
+- Keep attached-folder watchers scoped to configured text sources, skip Git metadata and unrelated file errors, and continue discovering new nested instruction files.
+- Coverage distinguishes source-file checks from embedding generation. Usage reads do not start indexing or provider requests.
+
 ## [0.81.7+m4xp1.8] - 2026-10-22
 
 ### Fixed

@@ -2,6 +2,7 @@ import { codexSessionConfigurationKey } from '../protocols/codexAppServer/window
 import path from 'path';
 import crypto from 'crypto';
 import OpenAI from 'openai';
+import {assertOpenAIRequestAllowed} from '../../openaiAccessPolicy';
 import { BaseAgentProvider } from './BaseAgentProvider';
 import { buildUserMessageAddition } from './documentContextUtils';
 import { describeUnusableWorkspacePath } from './workspacePreconditions';
@@ -711,6 +712,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       return cached.ids;
     }
 
+    assertOpenAIRequestAllowed();
     const openai = new OpenAI({ apiKey });
     const response = await openai.models.list();
     const ids = new Set(response.data.map((model) => model.id));

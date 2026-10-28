@@ -164,13 +164,13 @@ export class MemoryEngine {
       try{const owner=locateAbsolute(folders,resolveInRoots(this.roots,record.file.path).abs)?.root;this.fileRootOwners.set(record.id,owner?.id==='harness-memory'?null:owner?.id??null);}catch{/* An invalid projection remains unreadable in the indexer. */}
     }
   }
-  private queryVector(query:string):Promise<number[]>{
+  private queryVector(query:string,context?:import("./embeddingUsage.js").EmbeddingCallContext):Promise<number[]>{
     const key=JSON.stringify([this.embedder.info,query]),now=Date.now(),saved=this.queryVectors.get(key);
     if(saved&&saved.expires>now){this.queryVectors.delete(key);this.queryVectors.set(key,saved);return Promise.resolve(saved.vector);}
     if(saved)this.queryVectors.delete(key);
     const pending=this.queryRequests.get(key);if(pending)return pending;
     const request=(async()=>{
-      const vectors=await this.embedder.embed([query]);validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
+      const vectors=await this.embedder.embed([query],{reason:"search",origin:context?.origin??"unknown",...context});validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
       const vector=vectors[0];
       if(!this.closed){this.queryVectors.set(key,{vector,expires:Date.now()+300000});while(this.queryVectors.size>32)this.queryVectors.delete(this.queryVectors.keys().next().value!);}
       return vector;
@@ -198,6 +198,7 @@ export class MemoryEngine {
     store: SqliteStore
   ) {
     this.store = store;
+    config.embeddingContext=()=>({operationId:this.operation?String(this.operation.id):undefined,reason:this.operation?.kind==='scan'?'startup-or-scan':this.operation?.kind??'background',origin:'background'});
     this.roots = resolveRoots(config.root, config.sources);
     this.indexer = new Indexer(config, store, embedder);
     const saved=store.getIndexDiagnostics().scans;
@@ -452,8 +453,8 @@ export class MemoryEngine {
    * Each record's `id` must be globally unique (the host namespaces it); it is
    * the synthetic source path and the `removeRecords` key.
    */
-  async ingestRecords(records: VirtualRecord[]): Promise<{ ingested: number }> {
-    const { embedded, changed } = await this.indexer.indexRecords(records);
+  async ingestRecords(records: VirtualRecord[], context?:import("./embeddingUsage.js").EmbeddingCallContext): Promise<{ ingested: number }> {
+    const { embedded, changed } = await this.indexer.indexRecords(records,context);
     const projection=this.store.getSessionProjection();
     for(const record of records) if(record.refType==='session') projection.parents[record.id]=record.parentSessionId??null;
     this.store.setSessionProjection(projection);
@@ -507,7 +508,7 @@ export class MemoryEngine {
   async search(
     query: string,
     k = 5,
-    opts?: MemorySearchOptions,
+    opts?: MemorySearchOptions & {embeddingContext?:import("./embeddingUsage.js").EmbeddingCallContext},
   ): Promise<SearchHit[]> {
     if(this.closed)throw Error('Memory workspace was closed.');
     const scope=this.searchScope(opts?.rootIds);
@@ -516,7 +517,7 @@ export class MemoryEngine {
     if(!this.listSources().some(root=>root.available&&(!selected||selected.has(root.id))))return[];
     let vec: number[] | null = null;
     try {
-      const embedded=await this.queryVector(query);
+      const embedded=await this.queryVector(query,opts?.embeddingContext);
       vec = embedded ?? null;
       if (this.lastEmbedError) {
         this.log('info', '[engine] query embedding recovered; dense retrieval re-enabled');

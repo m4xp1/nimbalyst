@@ -1,4 +1,5 @@
 import { app, safeStorage, BrowserWindow } from "electron";
+import { openAIAccessAllowed } from "../../../shared/openaiAccessPolicy";
 import { ProviderCredentialVault } from "./ProviderCredentialVault";
 
 let vault: ProviderCredentialVault | undefined;
@@ -44,6 +45,7 @@ export function getProviderCredentials(): ProviderCredentialVault {
       encrypt: (value) => safeStorage.encryptString(value),
       decrypt: (value) => safeStorage.decryptString(value),
     },
-    credentialsChanged
+    credentialsChanged,
+    name => !["openai", "openai-codex"].includes(name) || openAIAccessAllowed({packaged:app.isPackaged===true,env:process.env})
   ));
 }

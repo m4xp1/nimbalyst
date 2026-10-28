@@ -107,3 +107,9 @@ One bounded semantic context per file contains its name, relative path, selected
 The versioned file projection is reconciled incrementally. Metadata-only keyword edits do not regenerate body embeddings. Unchanged document-context inputs reuse their vectors; completed projections survive restart. Context rows are auxiliary and do not inflate Coverage file or ordinary chunk counts. Pending contexts and malformed metadata are visible in Coverage.
 
 Coverage separates active issues from operation history. Issues name the source scope, discovery/watch/read/embeddings stage, safe category/code and time. A successful check recovers only the matching area; a different file or root cannot clear it. An active observer does not imply an error-free index. Legacy unknown-scope errors require a successful complete source check and observation readiness; Refresh only reads status. Recovery requires no automatic Rebuild or re-embedding. Detached-root generations cannot restore their old errors.
+
+### Memory HTTP diagnostics
+
+`OpenAIEmbedder` is the single built-in embedding HTTP sender, independent of the OpenAI chat provider. `EmbeddingUsage` persists small derived counters in the host's private workspace data directory, not in project sources or a synced database. The optional `EmbeddingCallContext` does not change embedding inputs. HTTP results and usage are recorded before an outer operation can discard its in-memory vectors; the vector persistence/retry algorithm is unchanged. No scheduled full re-embedding or new embedding cache is introduced.
+
+CLI `serve` and `memory:eval` require `NIMBALYST_ALLOW_OPENAI_API=1` to use OpenAI. API keys remain explicitly configured; the permission flag is never a key source. Use fake embedders or substituted fetch responses for automated checks. Read-only diagnostics never call the provider.

@@ -176,6 +176,7 @@ export type BrokerMethodName =
   | 'getApiKey'
   | 'memorySessions'
   | 'memorySourceRoots'
+  | 'embeddingDiagnostics'
   | 'readWorkspaceFile'
   | 'writeWorkspaceFile'
   | 'registerMcpTools'
@@ -186,6 +187,7 @@ export type BrokerMethodName =
 
 /** Payload shapes for each broker method. Kept here so both sides share one truth. */
 export interface BrokerPayloads {
+  embeddingDiagnostics: {op:"get"|"set";enabled?:boolean};
   memorySourceRoots: Record<string, never>;
   memorySessions: {op:'rebuild'} | {op:'read';sessionId:string;cursor?:string;maxChars?:number};
   logRaw: {
@@ -253,6 +255,7 @@ export interface BrokerPayloads {
 
 /** Result shapes returned over broker-response for each method. */
 export interface BrokerResults {
+  embeddingDiagnostics: {developerMode:boolean;loggingEnabled:boolean;openaiAllowed:boolean};
   memorySourceRoots: import('../utils/workspaceSearchRoots').WorkspaceSearchRoot[];
   memorySessions: {ok:true} | import('../services/MemorySessionReader').MemorySessionReadResult;
   logRaw: { id: number };

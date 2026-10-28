@@ -123,7 +123,7 @@ root.render(<App />);`
     clearFileSystemService();
   });
 
-  it.skipIf(!runProviderTests || !openAIKey)('should use file tools through OpenAI function calling', async () => {
+  it.skipIf(!runProviderTests || !openAIKey || process.env.NIMBALYST_ALLOW_OPENAI_API !== '1')('should use file tools through OpenAI function calling', async () => {
     const provider = ProviderFactory.createProvider('openai', 'test-file-tools-openai');
     await provider.initialize({
       apiKey: openAIKey!,

@@ -1,3 +1,5 @@
+// Paid API access is off unless this launch explicitly opts in.
+process.env.NIMBALYST_ALLOW_OPENAI_API ??= '0';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'path';

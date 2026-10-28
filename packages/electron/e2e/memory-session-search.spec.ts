@@ -37,6 +37,9 @@ test.describe.serial('Built Memory session search and current dialogue',()=>{
   await app.evaluate(({session})=>{(globalThis as any).__sessionOpenAI=0;session.defaultSession.webRequest.onBeforeRequest({urls:['*://*.openai.com/*','*://openai.com/*']},(_d,cb)=>{(globalThis as any).__sessionOpenAI++;cb({cancel:true});});});
   expect((await invoke('test:insert-session',{id:sid,workspaceId:workspace,provider:'openai-codex',title:'Родительский диалог'})).success).toBe(true);
   expect((await invoke('test:insert-session',{id:child,workspaceId:workspace,provider:'openai-codex',title:'Дочерний диалог',parentSessionId:sid})).success).toBe(true);
+  // Synthetic persisted credential exercises the real host broker denial in built and packaged apps.
+  const savedKey=await invoke('provider-credentials:set','openai','synthetic-not-an-openai-key');
+  expect(savedKey.credentials.some((key:any)=>key.name==='openai'&&key.configured)).toBe(true);
   await invoke('permissions:trustWorkspace',workspace);
   await invoke('extensions:set-enabled','com.nimbalyst.memory',true);await invoke('semantic-search:set-index-sessions',true);
   const {port}=await invoke('mcp:get-server-port'),{token}=await invoke('mcp:get-auth-token');
@@ -48,6 +51,11 @@ test.describe.serial('Built Memory session search and current dialogue',()=>{
  },60000);
  test.afterEach(async({},info)=>{if(page&&info.status!==info.expectedStatus)await page.screenshot({path:info.outputPath('session-search-failure.png')});});
  test.afterAll(async()=>{await client?.close();if(app){const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);}}});
+ test('withholds a saved OpenAI key from the real Memory utility process',async()=>{
+  const status=await call('local_embeddings_status',{});expect(status.activeMode).toBe('sparse');
+  expect(tools.some((tool:any)=>tool.name.includes('get_embedding_usage')||tool.name.includes('set_embedding_logging'))).toBe(false);
+  const snapshot=await invoke('provider-credentials:list');expect(snapshot.credentials.some((key:any)=>key.name==='openai'&&key.configured)).toBe(true);
+ });
  test('finds persisted user and assistant markers, reads pages, and opens the actual child',async()=>{
   await append(sid,'РусскийПользовательМаркер '+('Текст😀 '.repeat(4000)),'input');await append(sid,'РусскийАссистентМаркер','output');await append(child,'МаркерДочернегоДиалога','input');
   await expect.poll(async()=>{const hits=await call('search_project_knowledge',{query:'РусскийАссистентМаркер',k:10});return hits.chunks.some((h:any)=>h.refId===sid&&h.text.includes('РусскийАссистентМаркер'));},{timeout:10000}).toBe(true);

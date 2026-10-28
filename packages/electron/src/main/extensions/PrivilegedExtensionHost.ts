@@ -99,6 +99,7 @@ const BROKER_METHOD_PERMISSIONS: {
   // Memory's opt-in session history only; dispatch checks exact module and bound workspace.
   memorySessions: null,
   memorySourceRoots: null,
+  embeddingDiagnostics: null,
   readWorkspaceFile: 'workspace-files',
   writeWorkspaceFile: 'workspace-files',
   registerMcpTools: 'mcp-server-register',

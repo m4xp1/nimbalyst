@@ -128,3 +128,13 @@ describe('Memory embedding settings', () => {
     });
   });
 });
+
+it('shows actual packet totals, unknown usage, and a developer-only logging toggle',async()=>{
+ const {EmbeddingUsageCard}=await import('../components/EmbeddingUsageCard');
+ const call=vi.fn(async(name:string)=>name==='memory.get_embedding_usage'?{since:1700000000000,totals:{attempts:2,succeeded:1,failed:1,unfinished:0,inputs:130,tokens:500,unknownUsage:1},developerMode:true,logging:{enabled:false,dropped:0}}:{enabled:true});
+ render(<EmbeddingUsageCard callBackendTool={call} workspacePath="synthetic"/>);
+ await screen.findByText('500');expect(screen.getByText('130')).toBeDefined();
+ fireEvent.click(screen.getByRole('checkbox',{name:/Embedding request logging/}));
+ await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.set_embedding_logging',{enabled:true}));
+ expect(call.mock.calls.every(([name])=>['memory.get_embedding_usage','memory.set_embedding_logging'].includes(name))).toBe(true);
+});

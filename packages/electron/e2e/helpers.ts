@@ -178,6 +178,8 @@ export function buildTestEnv(
     // `options.env` so a spec can still pick its own directory.
     NIMBALYST_USER_DATA_DIR: TEST_USER_DATA_DIR,
     ...options?.env,
+    // Real provider runs use a separate explicit runner, never inherited approval.
+    NIMBALYST_ALLOW_OPENAI_API: '0',
   };
 
   const permissionMode = options?.permissionMode ?? 'allow-all';

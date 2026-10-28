@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import {assertOpenAIRequestAllowed} from './openaiAccessPolicy';
 import Anthropic from '@anthropic-ai/sdk';
 
 export interface AIModelInfo { id: string; name: string }
@@ -6,6 +7,7 @@ export interface AIModelInfo { id: string; name: string }
 export async function getOpenAIModels(apiKey?: string, baseUrl?: string): Promise<AIModelInfo[]> {
   try {
     if (!apiKey) throw new Error('no key');
+    assertOpenAIRequestAllowed();
     const client = new OpenAI({ apiKey, baseURL: baseUrl, dangerouslyAllowBrowser: true });
     const list = await client.models.list();
     return list.data.map((m: any) => ({ id: m.id, name: m.id }));

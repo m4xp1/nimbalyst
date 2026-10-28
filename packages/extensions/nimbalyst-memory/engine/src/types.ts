@@ -153,7 +153,7 @@ export interface EmbedderInfo {
 export interface Embedder {
   readonly info: EmbedderInfo;
   /** Embed a batch of texts; result[i] corresponds to texts[i]. */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], context?: import("./embeddingUsage.js").EmbeddingCallContext): Promise<number[][]>;
 }
 
 /** One indexable source set: a class tag plus the globs that feed it. */
@@ -178,6 +178,7 @@ export interface SourceSet {
 }
 
 export interface EngineConfig {
+  embeddingContext?:()=>import("./embeddingUsage.js").EmbeddingCallContext;
   /**
    * Absolute PRIMARY root. Bare relative `sourcePath`s resolve against it, and
    * it is the root for every source set that does not declare its own.

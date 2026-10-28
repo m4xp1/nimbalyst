@@ -25,6 +25,7 @@ export interface DeveloperFeatureDefinition {
  * ALL developer features must be registered here.
  */
 export const DEVELOPER_FEATURES: readonly DeveloperFeatureDefinition[] = [
+  {tag:"embeddingDiagnostics",name:"Embedding diagnostics",description:"Allow the optional local Memory request journal. Recording is off until explicitly enabled.",icon:"receipt_long"},
   {
     tag: 'worktrees',
     name: 'Git Worktrees',
