@@ -309,6 +309,7 @@ interface AppStoreSchema {
   // Developer feature flags - features only available in developer mode
   // Each feature can be individually toggled when developer mode is enabled
   developerFeatures?: Record<DeveloperFeatureTag, boolean>;
+  memoryEmbeddingRequestLogging?: boolean;
   // Document history settings
   historyMaxAgeDays?: number; // Max age in days before snapshots are cleaned up (default: 30)
   historyMaxSnapshots?: number; // Max snapshots per file (default: 250)

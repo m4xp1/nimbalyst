@@ -141,6 +141,9 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await app.evaluate(({BrowserWindow})=>{BrowserWindow.getAllWindows().find(window=>!window.isDestroyed())!.webContents.send('open-settings-command',{category:'ext:com.nimbalyst.memory:memory',scope:'project',timestamp:Date.now()});});
   await page.getByTestId('settings-route-ext:com.nimbalyst.memory:memory').click();
   const coverage=page.locator('.nimbalyst-memory-coverage');await expect(coverage).toBeVisible();
+  const usage=page.locator('.memory-embedding-usage');await expect(usage).toBeVisible();await expect(usage.getByRole('combobox',{name:'Embedding usage period'})).toHaveValue('today');
+  const usageBefore=await panel('get_embedding_usage',{period:'all'});await usage.getByRole('combobox',{name:'Embedding usage period'}).selectOption('all');await expect(usage.getByText('Requests',{exact:true})).toBeVisible();const usageAfter=await panel('get_embedding_usage',{period:'all'});expect(usageAfter.totals.attempts).toBe(usageBefore.totals.attempts);
+  await expect(usage.getByRole('checkbox',{name:/Embedding request logging/})).toHaveCount(0);
   const select=coverage.getByRole('combobox',{name:'Coverage source folder'});await expect(select).toHaveValue('__all__');
   await select.selectOption(link.id);const linked=await panel('status',{rootId:link.id});
   await expect(coverage.getByText('Files available',{exact:true}).locator('..')).toContainText(String(linked.available.indexedFiles));

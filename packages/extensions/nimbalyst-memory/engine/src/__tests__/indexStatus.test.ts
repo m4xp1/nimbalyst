@@ -121,7 +121,7 @@ describe('responsive source policy updates',()=>{
    expect(engine.ruleFilePaths()).toContain(path.join(root,'extra.md'));
    expect((engine.status() as any).operation).toMatchObject({state:'running',totalFiles:1,completedFiles:0});
    expect(files.mock.calls.map(([file])=>file)).toEqual(['extra.md']);
-   expect(calls.mock.calls.flat(2).every(t=>!t.includes('UNCHANGED_TARGET_A'))).toBe(true);
+   expect(calls.mock.calls.flatMap(([texts])=>texts).every(t=>!t.includes('UNCHANGED_TARGET_A'))).toBe(true);
   }finally{release();await update;files.mockRestore();calls.mockRestore();}
  });
  it('separates available chunks from stored page rows and quarantined sources',async()=>{

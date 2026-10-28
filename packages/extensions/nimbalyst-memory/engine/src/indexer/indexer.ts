@@ -169,7 +169,7 @@ export class Indexer {
       const patterns = config.sources.filter(set => rootForSet(this.roots, set).dir === root.dir).flatMap(set => set.exclude ?? []);
       this.rootExcluded.set(root.dir, patterns.length ? picomatch(expandSourcePatterns(patterns, root.dir), {dot:true,nocase:true}) : () => false);
     }
-    const exclude = config.exclude ?? [];
+    const exclude = [...(config.exclude ?? []),'**/.git/**'];
     this.isWorkspaceExcluded = config.workspaceExclude?.length ? picomatch(expandSourcePatterns(config.workspaceExclude, config.root),{dot:true,nocase:true}) : () => false;
     this.isExcluded = exclude.length ? picomatch(exclude, { dot: true, nocase: true }) : () => false;
     this.ignoreGlobs = exclude;
@@ -525,7 +525,7 @@ export class Indexer {
    * embedder round-trip, not one per record. Returns the number of chunks
    * (re)embedded.
    */
-  async indexRecords(records: VirtualRecord[]): Promise<{ embedded: number; changed: number }> {
+  async indexRecords(records: VirtualRecord[], context:import("../embeddingUsage.js").EmbeddingCallContext={}): Promise<{ embedded: number; changed: number }> {
     if (records.length === 0) return { embedded: 0, changed: 0 };
 
     const prepared: PreparedSource[] = [];
@@ -545,7 +545,7 @@ export class Indexer {
     }
 
     if (inputs.length) {
-      const vectors = await this.embedder.embed(inputs);
+      const vectors = await this.embedder.embed(inputs,{reason:records.every(record=>record.refType==='session')?'session-change':'tracker-change',origin:'background',...context,sources:backref.map(item=>({sourcePath:prepared[item.p].sourcePath,kind:records[item.p].refType}))});
       validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);
       backref.forEach((b, i) => {
         prepared[b.p].stored[b.idx].denseEmbedding = vectors[i] ?? null;
@@ -582,7 +582,7 @@ export class Indexer {
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
     if (p.unchanged) return 0;
     const inputs=p.pending.map(t=>t.input);if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
-    if(inputs.length){try{const vectors=await this.embedder.embed(inputs);validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
+    if(inputs.length){try{const vectors=await this.embedder.embed(inputs,{...this.config.embeddingContext?.(),sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'}))});validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
       // A failed auxiliary migration must not quarantine an unchanged, verified body.
       if(!p.pending.length&&p.sourceRecord&&!this.cancelled){this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);const prior=error as {message?:string;code?:string;status?:number};throw Object.assign(new Error(prior?.message??String(error),{cause:error}),{projectionOnly:true,code:prior?.code,status:prior?.status});}
       throw error;

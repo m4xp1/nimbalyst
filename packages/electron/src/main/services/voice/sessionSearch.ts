@@ -78,7 +78,7 @@ export async function searchSessionsForVoice(
     if (trimmed) {
       // Session-scoped semantic search first (conceptual recall).
       if (semanticSearchAvailable) {
-        const outcome = await semanticCatalog.query(workspacePath, trimmed, 20, ['sessions']);
+        const outcome = await semanticCatalog.query(workspacePath, trimmed, 20, ['sessions'],undefined,'agent');
         semanticSearchAvailable = outcome.available;
         if (outcome.available) {
           for (const hit of outcome.results) {

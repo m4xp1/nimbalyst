@@ -373,6 +373,7 @@ export class SemanticCatalogService {
     k = 20,
     sourceClasses?: string[],
     rootIds?:Array<string|null>,
+    origin:"interface"|"agent"|"unknown"="unknown",
   ): Promise<SemanticQueryOutcome> {
     if (!this.isAvailable(workspacePath)) {
       // The index may have gained its first chunks since our last check (from
@@ -389,7 +390,7 @@ export class SemanticCatalogService {
         moduleId: MODULE_ID,
         workspacePath,
         method: 'globalSearch',
-        params: { query, k, ...(sourceClasses?.length ? { sourceClasses } : {}),...(rootIds!==undefined?{rootIds}:{}) },
+        params: { query, k, origin, ...(sourceClasses?.length ? { sourceClasses } : {}),...(rootIds!==undefined?{rootIds}:{}) },
         requiredPermission: null,
       });
       return { available: true, results: res?.results ?? [] };
@@ -559,7 +560,7 @@ export class SemanticCatalogService {
       }
       for (let i = 0; i < records.length; i += INGEST_BATCH) {
         const batch = records.slice(i, i + INGEST_BATCH);
-        await this.ingest(workspacePath, batch);
+        await this.ingest(workspacePath, batch, 'startup-tracker');
       }
       console.log(
         `[SemanticCatalog] backfilled ${records.length} tracker(s) for ${workspacePath}`,
@@ -637,14 +638,14 @@ export class SemanticCatalogService {
     }
   }
 
-  private async ingest(workspacePath: string, records: VirtualRecord[]): Promise<void> {
+  private async ingest(workspacePath: string, records: VirtualRecord[],reason?:string): Promise<void> {
     if (!records.length) return;
     await getPrivilegedExtensionHost().request({
       extensionId: EXT_ID,
       moduleId: MODULE_ID,
       workspacePath,
       method: 'ingestRecords',
-      params: { records },
+      params: { records, ...(reason?{reason}:{}) },
       requiredPermission: null,
     });
     // Our tracker/session records can be the first content in an otherwise
@@ -754,12 +755,12 @@ export class SemanticCatalogService {
       parents[rec.id]=rec.parentSessionId??null;
       count++;
       if (batch.length >= 10) {
-        await this.ingest(workspacePath, batch);
+        await this.ingest(workspacePath, batch, 'startup-session');
         batch = [];
       }
     }
     if (!this.sessionPassCurrent(workspacePath, generation)) return;
-    if (batch.length) await this.ingest(workspacePath, batch);
+    if (batch.length) await this.ingest(workspacePath, batch, 'startup-session');
     if(!this.sessionPassCurrent(workspacePath,generation)) return;
     await getPrivilegedExtensionHost().request({extensionId:EXT_ID,moduleId:MODULE_ID,workspacePath,
       method:'completeSessionProjection',params:{version:failures.length?0:2,parents},requiredPermission:null});

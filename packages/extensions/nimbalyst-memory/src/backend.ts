@@ -21,7 +21,7 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { buildTreeIndexState, buildTreePolicyState, describeTreePolicy, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
-import {createHash} from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { MemoryEngine,MEMORY_ROOT_IDS_SCHEMA } from '../engine/dist/index.js';
 import {
   buildProjectSearchResponse,
@@ -68,6 +68,8 @@ import {
   retrievalKindForOptionalProvider,
 } from './capabilityResults';
 
+import {EmbeddingUsage} from '../engine/dist/embeddingUsage.js';
+
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /** Subset of the host's BackendActivateContext we rely on. */
@@ -82,6 +84,7 @@ interface ActivateCtx {
     dataDir: string;
     log: (level: LogLevel, message: string, data?: unknown) => void;
     getApiKey: (providerId: string) => Promise<{ key: string | null }>;
+    embeddingDiagnostics?:(payload:{op:"get"|"set";enabled?:boolean})=>Promise<{developerMode:boolean;loggingEnabled:boolean;openaiAllowed:boolean}>;
     memorySourceRoots?: () => Promise<MemorySourceRoot[]>;
     memorySessions?: (payload:{op:'rebuild'}|{op:'read';sessionId:string;cursor?:string;maxChars?:number})=>Promise<unknown>;
     registerMcpTools: (
@@ -474,6 +477,8 @@ export async function activate(ctx: ActivateCtx) {
   };
 
   let engine: MemoryEngine | null = null;
+  let usage:EmbeddingUsage|undefined;
+  const diagnosticsPolicy=async()=>{const policy=await ctx.services.embeddingDiagnostics?.({op:"get"})??{developerMode:false,loggingEnabled:false,openaiAllowed:false};usage?.setLogging(policy.developerMode&&policy.loggingEnabled);return policy;};
 
   // App-level, workspace-independent, outside the project tree. `dataDir` is
   // <userData>/extension-data/<ext>/<sha(workspace)>, so its parent is this
@@ -521,9 +526,12 @@ export async function activate(ctx: ActivateCtx) {
    * which is why this is a restart of the engine and not a field assignment.
    */
   async function startEngine(want: typeof selection): Promise<void> {
-    let embedder;
+    let embedder:Awaited<ReturnType<typeof createEmbedder>>;
     try {
-      embedder = await createEmbedder(want.config);
+      if(want.config.kind==='openai'){
+        usage??=new EmbeddingUsage(dataDir,JSON.stringify(['openai',want.config.model??'text-embedding-3-small',want.config.dims??1536]));
+        embedder=await createEmbedder({...want.config,usageLedger:usage,refreshUsagePolicy:async()=>{await diagnosticsPolicy();},requestAllowed:async()=>{const policy=await diagnosticsPolicy();return policy.openaiAllowed;}});
+      }else embedder = await createEmbedder(want.config);
     } catch (err) {
       // Any construction failure — missing optional dependency, corrupt model
       // cache, revoked key — degrades to BM25. Retrieval never goes dark.
@@ -531,6 +539,9 @@ export async function activate(ctx: ActivateCtx) {
       log('warn', `[memory] ${want.reason}: ${safeIndexError(err).category}`);
       embedder = await createEmbedder(want.config);
     }
+    const identity=JSON.stringify([embedder.info.id,embedder.info.model,embedder.info.dims]);
+    usage??=new EmbeddingUsage(dataDir,identity);usage.reset(identity);
+    if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;embedder={info:original.info,embed:async(texts,context)=>{try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
     selection = want;
     log('info', `[memory] ${want.reason}`);
 
@@ -653,9 +664,9 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
+    })), ...['get_embedding_usage','set_embedding_logging','get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: {type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: name==='get_embedding_usage'?{type:'object',properties:{period:{type:'string',enum:['today','7d','all']}},additionalProperties:false}:name==='set_embedding_logging'?{type:'object',properties:{enabled:{type:'boolean'}},required:['enabled'],additionalProperties:false}:{type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
@@ -695,6 +706,8 @@ export async function activate(ctx: ActivateCtx) {
         };
         return queueRuleChange(apply);
       },
+      get_embedding_usage:async(params?:{period?:'today'|'7d'|'all'})=>{const policy=await diagnosticsPolicy();const period=['today','7d','all'].includes(params?.period??'today')?params?.period??'today':'today';return{...usage?.summary(period),developerMode:policy.developerMode};},
+      set_embedding_logging:async(params:{enabled:boolean})=>{if(typeof params?.enabled!=='boolean')throw Error('enabled must be boolean');const policy=await ctx.services.embeddingDiagnostics?.({op:'set',enabled:params.enabled});usage?.setLogging(policy?.developerMode===true&&policy.loggingEnabled);return{enabled:policy?.loggingEnabled===true};},
       get_sources: async (params?: {rootId?: string | null}) => {
         const id=params?.rootId;
         if (!id) return {...sourceRules,revision:revision(sourceRules)};
@@ -719,13 +732,13 @@ export async function activate(ctx: ActivateCtx) {
       },
       list_sources: async () => ({sources:sourceRoots.filter(root=>root.id!=='harness-memory').map(root=>({rootId:root.id,label:root.label,path:root.path,available:root.available}))}),
       filterTrackerIds: async (params:{ids:string[];rootIds?:Array<string|null>})=>requireEngine().filterTrackerIds(params.ids,params.rootIds),
-      search_project_knowledge: async (params: { query?: string; k?: number;rootIds?:Array<string|null> }) => {
+      search_project_knowledge: async (params: { query?: string; k?: number;rootIds?:Array<string|null> },callContext?:{call?:{caller?:string}}) => {
         const query = String(params?.query ?? '');
         if (!query) throw new Error('query is required');
         const k = typeof params?.k === 'number' ? params.k : 5;
         const eng = requireEngine();
         const sourceScope=eng.searchScope(params.rootIds);
-        const chunks = (await eng.search(query, k,{rootIds:params.rootIds})).map(annotateRoot);
+        const chunks = (await eng.search(query, k,{rootIds:params.rootIds,embeddingContext:{reason:"search",operationId:randomUUID(),origin:callContext?.call?.caller==='panel'?'interface':callContext?.call?.caller==='agent'||callContext?.call?.caller==='voice'?'agent':'unknown'}})).map(annotateRoot);
         return {
           sourceScope,
           sourceErrors:sourceRoots.filter(root=>!root.available&&sourceScope.rootIds.includes(root.id)).map(root=>({rootId:root.id,error:'Source folder is unavailable.'})),
@@ -742,10 +755,10 @@ export async function activate(ctx: ActivateCtx) {
       // registerMcpTools, so no agent sees them.
 
       /** Upsert virtual records (trackers/sessions) into the hybrid index. */
-      ingestRecords: async (params: { records?: VirtualRecord[] }) => {
+      ingestRecords: async (params: { records?: VirtualRecord[];reason?:string }) => {
         const records = Array.isArray(params?.records) ? params.records : [];
         if (!records.length) return { ingested: 0 };
-        return requireEngine().ingestRecords(records);
+        return requireEngine().ingestRecords(records,{operationId:randomUUID(),reason:params.reason??(records.every(record=>record.refType==='session')?'session-change':'tracker-change'),origin:'background'});
       },
 
       /** Host-only: canonical file entities; ordinary document clones are removed by path. */
@@ -777,6 +790,7 @@ export async function activate(ctx: ActivateCtx) {
         query?: string;
         k?: number;
         sourceClasses?: string[];
+        origin?:"interface"|"agent"|"unknown";
         rootIds?:Array<string|null>;
       }) => {
         const eng = requireEngine();
@@ -798,7 +812,7 @@ export async function activate(ctx: ActivateCtx) {
         const hits = await eng.search(
           query,
           k,
-          {sourceClasses:sourceClasses?.length?sourceClasses:undefined,rootIds:params.rootIds},
+          {sourceClasses:sourceClasses?.length?sourceClasses:undefined,rootIds:params.rootIds,embeddingContext:{reason:"search",origin:params.origin??"unknown",operationId:randomUUID()}},
         );
         const searchResponse = buildProjectSearchResponse(hits, eng.retrievalCapabilities());
         return {
@@ -1119,6 +1133,7 @@ export async function activate(ctx: ActivateCtx) {
       await rebuildTask?.catch(()=>{});
       await engine?.waitForIndexing();
       await engine?.close();
+      await usage?.close();
     },
   };
   for (const name of ['list_sources','filterTrackerIds','search_project_knowledge','globalSearch','expand','read_doc','set_path_override'] as const) {

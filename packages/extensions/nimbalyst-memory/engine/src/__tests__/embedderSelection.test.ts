@@ -243,7 +243,7 @@ describe('embedding request budgets', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     try {
-      const embedder = new OpenAIEmbedder({apiKey: 'fake-not-a-key',dims:1});
+      const embedder = new OpenAIEmbedder({requestAllowed:()=>true,apiKey: 'fake-not-a-key',dims:1});
       const texts = Array.from({length: 129}, (_, i) => String(i).padStart(3, '0') + 'x'.repeat(5997));
       const vectors = await embedder.embed(texts);
       expect(vectors).toEqual(texts.map((_, i) => [i]));
@@ -260,8 +260,8 @@ describe('sanitized embedding errors',()=>{
  it('retains a safe HTTP classification without forwarding private provider data',async()=>{
   vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,status:400,text:async()=>JSON.stringify({error:{message:"Invalid input[121]: maximum input length is 8192 tokens. PRIVATE_SOURCE"}})})));
   try {
-   await expect(new OpenAIEmbedder({apiKey:'fake'}).embed(['safe'])).rejects.toMatchObject({status:400,code:'EMBEDDING_INPUT_TOO_LARGE'});
-   try {await new OpenAIEmbedder({apiKey:'fake'}).embed(['safe']);}catch(error){expect(String(error)).not.toContain('PRIVATE_SOURCE');}
+   await expect(new OpenAIEmbedder({requestAllowed:()=>true,apiKey:'fake'}).embed(['safe'])).rejects.toMatchObject({status:400,code:'EMBEDDING_INPUT_TOO_LARGE'});
+   try {await new OpenAIEmbedder({requestAllowed:()=>true,apiKey:'fake'}).embed(['safe']);}catch(error){expect(String(error)).not.toContain('PRIVATE_SOURCE');}
   }finally{vi.unstubAllGlobals();}
  });
 });
@@ -269,7 +269,7 @@ describe('sanitized embedding errors',()=>{
 
 describe('embedding response integrity',()=>{
  it('rejects partial, duplicate, non-finite and wrong-dimensional results without remapping inputs',async()=>{
-  const embedder=new OpenAIEmbedder({apiKey:'fake-not-a-key',dims:2});
+  const embedder=new OpenAIEmbedder({requestAllowed:()=>true,apiKey:'fake-not-a-key',dims:2});
   for(const data of [[{index:1,embedding:[1,2]}],[{index:0,embedding:[1,2]},{index:0,embedding:[3,4]}],[{index:0,embedding:[1]},{index:1,embedding:[3,4]}],[{index:0,embedding:[NaN,2]},{index:1,embedding:[3,4]}],[{index:0,embedding:[1e100,2]},{index:1,embedding:[3,4]}]]){
    vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({data})})));
    await expect(embedder.embed(['ARTIFICIAL_A','ARTIFICIAL_B'])).rejects.toThrow(/response/i);
@@ -277,3 +277,5 @@ describe('embedding response integrity',()=>{
   vi.unstubAllGlobals();
  });
 });
+
+describe('network denial with a previously supplied key',()=>{it('never calls fetch when launch policy denies OpenAI',async()=>{const request=vi.fn();vi.stubGlobal('fetch',request);try{await expect(new OpenAIEmbedder({apiKey:'synthetic-stored-key',requestAllowed:()=>false}).embed(['safe'])).rejects.toMatchObject({code:'OPENAI_ACCESS_DISABLED'});expect(request).not.toHaveBeenCalled();}finally{vi.unstubAllGlobals();}});});

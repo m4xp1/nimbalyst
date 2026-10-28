@@ -12,6 +12,7 @@
  *                   surfaced each hit.
  * When the bridge is absent (older host) it degrades to informational copy.
  */
+import { EmbeddingUsageCard } from './EmbeddingUsageCard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
 import type { ReactNode } from 'react';
@@ -711,8 +712,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
             Changing the source rebuilds the Memory index in the background.
           </span>
         </div>
+      <EmbeddingUsageCard callBackendTool={callBackendTool} workspacePath={workspacePath}/>
       </section>
-
       {/* ---------------- 1. COVERAGE ---------------- */}
       <section className="nimbalyst-memory-coverage" style={SECTION}>
         <div style={HEAD}>
@@ -781,7 +782,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
             <p style={{margin:0,color:muted}}>Available to search now. Changes to source rules are processed in the background.</p>
             {(activeOperation||status.sourceUpdate?.pending) && <div role="status">
               <strong>Updating index</strong>
-              {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Finding affected files…</p>}
+              {activeOperation && operation.totalFiles!==null ? <p style={{margin:'6px 0 0'}}>{operation.completedFiles} processed · {operation.remainingFiles??'—'} remaining · {operation.failedFiles} failed</p> : <p style={{margin:'6px 0 0'}}>Checking source files; saved embeddings are reused...</p>}
             </div>}
             {!!status.sourceProjection?.pendingFiles&&<p>Search metadata update: {status.sourceProjection.pendingFiles} files pending. Available indexed content remains searchable.</p>}
             {!!status.sourceProjection?.warnings.length&&<ul aria-label="Document metadata warnings">{status.sourceProjection.warnings.map(warning=><li key={warning.sourcePath}><code>{warning.relativePath}</code> — Invalid YAML frontmatter; searching the literal text without field priority.</li>)}</ul>}

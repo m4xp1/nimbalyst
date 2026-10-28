@@ -43,6 +43,7 @@ export function registerSemanticSearchHandlers() {
         k ?? 20,
         Array.isArray(sourceClasses) && sourceClasses.length ? sourceClasses : undefined,
         rootIds,
+        "interface",
       );
       if (!outcome.available) {
         throw new Error(`${SEMANTIC_SEARCH_UNAVAILABLE}: memory index is not ready`);

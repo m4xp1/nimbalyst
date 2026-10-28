@@ -67,7 +67,7 @@ describe('application file catalogue → actual Memory search', () => {
     host.request.mockImplementation(async({method}:any)=>{if(method==='globalSearch')throw Error('MEMORY_SOURCE_SCOPE_INVALID: detached');return {ready:true,...engine.status()};});
     const before=catalog.isAvailable(root);
     await expect(catalog.query(root,'marker',20,['docs'],['link'])).rejects.toThrow('MEMORY_SOURCE_SCOPE_INVALID');
-    expect(host.request).toHaveBeenCalledWith(expect.objectContaining({method:'globalSearch',params:{query:'marker',k:20,sourceClasses:['docs'],rootIds:['link']}}));
+    expect(host.request).toHaveBeenCalledWith(expect.objectContaining({method:'globalSearch',params:{query:'marker',k:20,origin:'unknown',sourceClasses:['docs'],rootIds:['link']}}));
     expect(catalog.isAvailable(root)).toBe(before);expect(invalidate).not.toHaveBeenCalled();
   });
   it('keeps one searchable card for legacy Windows separator aliases with different metadata', async () => {

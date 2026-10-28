@@ -12,10 +12,12 @@
  * anything that escapes it (absolute paths outside the workspace, `..`
  * traversal).
  */
+import {app} from 'electron';
+import {openAIAccessAllowed} from '../../shared/openaiAccessPolicy';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { AgentMessagesRepository } from '@nimbalyst/runtime/storage/repositories/AgentMessagesRepository';
-import { getProviderApiKeyFromSettings, getWorkspaceRoots } from '../utils/store';
+import { getProviderApiKeyFromSettings, getWorkspaceRoots, getAppSetting, setAppSetting, isDeveloperFeatureAvailable } from '../utils/store';
 import { memorySourceRoots } from '../utils/memorySourceRoots';
 import { logger } from '../utils/logger';
 import { dispatchMetaAgentTool } from '../mcp/metaAgentServer';
@@ -76,6 +78,12 @@ export async function dispatchBrokerMethod(
       // is added.
       const result: BrokerResults['logRaw'] = { id: 0 };
       return result;
+    }
+    case 'embeddingDiagnostics': {
+      if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine')throw new Error('Embedding diagnostics capability denied');
+      const payload=rawPayload as BrokerPayloads['embeddingDiagnostics'];const developerMode=isDeveloperFeatureAvailable("embeddingDiagnostics");
+      if(payload.op==='set'){if(!developerMode||typeof payload.enabled!=='boolean')throw Error('Developer mode is required for embedding request logging');setAppSetting('memoryEmbeddingRequestLogging',payload.enabled);}
+      return {developerMode,loggingEnabled:developerMode&&getAppSetting('memoryEmbeddingRequestLogging')===true,openaiAllowed:openAIAccessAllowed({packaged:app.isPackaged===true,env:process.env})};
     }
     case 'getApiKey': {
       const payload = rawPayload as BrokerPayloads['getApiKey'];
