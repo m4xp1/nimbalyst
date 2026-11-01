@@ -1,3 +1,4 @@
+import {getPrivilegedExtensionHost} from '../extensions/PrivilegedExtensionHost';
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
 import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey, scanSearchRoots } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
@@ -785,6 +786,9 @@ export function registerWorkspaceHandlers() {
             // Move to system trash (Recycle Bin on Windows, Trash on macOS/Linux)
             // so the user can recover accidentally deleted files
             await shell.trashItem(filePath);
+            const owner=BrowserWindow.fromWebContents(event.sender),ownerId=owner?getWindowId(owner):null;
+            const workspacePath=ownerId!==null?windowStates.get(ownerId)?.workspacePath:undefined;
+            if(workspacePath)void getPrivilegedExtensionHost().request({extensionId:'com.nimbalyst.memory',moduleId:'memory-engine',workspacePath,method:'notifyFileDeleted',params:{path:filePath},requiredPermission:null}).catch(error=>console.warn('[memory] explicit file deletion cleanup unavailable',error instanceof Error?error.name:'unknown'));
 
             if (!isDirectory) {
                 // Prevent autosave from recreating the file. Lifecycle-bound:

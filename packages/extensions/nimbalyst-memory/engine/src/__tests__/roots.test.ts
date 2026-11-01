@@ -289,3 +289,10 @@ it('uses a temporary sparse fallback without destroying purchased vectors or emb
  engine=MemoryEngine.create({...config,preserveStoredEmbeddings:true},sparse);try{await engine.indexAll();expect(engine.status().denseChunks).toBe(before);expect(sparse.embed).not.toHaveBeenCalled();}finally{await engine.close();}
  embed.mockClear();engine=MemoryEngine.create(config,fake);try{await engine.indexAll();expect(embed).not.toHaveBeenCalled();expect(engine.status().denseChunks).toBe(before);}finally{await engine.close();}
 });
+it('only clears the confirmed unavailable snapshot and skips files restored before cleanup',async()=>{
+ const {root,config}=setup();const absent=path.join(root,'docs/absent.md'),returned=path.join(root,'docs/returned.md');writeFileSync(absent,'# Absent\nA');writeFileSync(returned,'# Return\nB');const engine=MemoryEngine.create(config,new FakeEmbedder());
+ try{await engine.indexAll();rmSync(absent);rmSync(returned);await engine.indexAll();const list=engine.status().unavailableFiles!;expect(list).toHaveLength(2);writeFileSync(returned,'# Return\nB');
+  expect(await engine.clearUnavailableFiles(list)).toEqual({removed:1,skipped:1});expect(engine.status().unavailableFiles!.map(row=>row.sourcePath)).toEqual(['docs/returned.md']);
+  await engine.indexAll();expect(engine.status().unavailableFiles).toEqual([]);expect(engine.status().available!.sourceFiles).toBe(1);
+ }finally{await engine.close();}
+});

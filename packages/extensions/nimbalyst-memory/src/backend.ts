@@ -679,9 +679,9 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_embedding_usage','set_embedding_logging','get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
+    })), ...['clear_unavailable','get_embedding_usage','set_embedding_logging','get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: name==='get_embedding_usage'?{type:'object',properties:{period:{type:'string',enum:['today','7d','all']}},additionalProperties:false}:name==='set_embedding_logging'?{type:'object',properties:{enabled:{type:'boolean'}},required:['enabled'],additionalProperties:false}:{type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: name==='clear_unavailable'?{type:'object',properties:{confirmed:{type:'boolean'},files:{type:'array',maxItems:10000,items:{type:'object',properties:{sourcePath:{type:'string'},updatedAt:{type:'number'}},required:['sourcePath','updatedAt'],additionalProperties:false}}},required:['confirmed','files'],additionalProperties:false}:name==='get_embedding_usage'?{type:'object',properties:{period:{type:'string',enum:['today','7d','all']}},additionalProperties:false}:name==='set_embedding_logging'?{type:'object',properties:{enabled:{type:'boolean'}},required:['enabled'],additionalProperties:false}:{type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
@@ -721,6 +721,11 @@ export async function activate(ctx: ActivateCtx) {
         };
         return queueRuleChange(apply);
       },
+      clear_unavailable:async(params:{confirmed?:boolean;files?:Array<{sourcePath:string;updatedAt:number}>})=>{
+        if(params?.confirmed!==true||!Array.isArray(params.files)||params.files.length>10000||params.files.some(row=>typeof row?.sourcePath!=='string'||!Number.isFinite(row.updatedAt)))throw Error('Confirm the current unavailable-file list before clearing it.');
+        return requireEngine().clearUnavailableFiles(params.files);
+      },
+      notifyFileDeleted:async(params:{path:string})=>requireEngine().removeDeletedPath(params.path),
       get_embedding_usage:async(params?:{period?:'today'|'7d'|'all'})=>{const policy=await diagnosticsPolicy();const period=['today','7d','all'].includes(params?.period??'today')?params?.period??'today':'today';return{...usage?.summary(period),developerMode:policy.developerMode};},
       set_embedding_logging:async(params:{enabled:boolean})=>{if(typeof params?.enabled!=='boolean')throw Error('enabled must be boolean');const policy=await ctx.services.embeddingDiagnostics?.({op:'set',enabled:params.enabled});usage?.setLogging(policy?.developerMode===true&&policy.loggingEnabled);return{enabled:policy?.loggingEnabled===true};},
       get_sources: async (params?: {rootId?: string | null}) => {

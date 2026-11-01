@@ -455,6 +455,38 @@ export class MemoryEngine {
     this.watcher.start(seedOnly);
   }
 
+  /** Confirmed cleanup takes a metadata snapshot; never trusts caller paths as filesystem targets. */
+  async clearUnavailableFiles(files:Array<{sourcePath:string;updatedAt:number}>):Promise<{removed:number;skipped:number}>{
+    return this.fileWork.run(async()=>{
+      const entities=new Map(this.store.getFileRecords().map(record=>[record.id,record.file.path]));
+      let removed=0,skipped=0;const current=new Map(this.indexer.unavailableFiles().map(row=>[row.sourcePath,row]));
+      for(const expected of files){const row=current.get(expected.sourcePath);if(!row||row.updatedAt!==expected.updatedAt){skipped++;continue;}
+        let absent=false;
+        try{const target=resolveInRoots(this.roots,entities.get(row.sourcePath)??row.sourcePath);await stat(target.abs);}catch(error){absent=['ENOENT','ENOTDIR','EACCES','EPERM','EBUSY','EIO','ETIMEDOUT'].includes((error as NodeJS.ErrnoException).code??'');}
+        if(!absent){skipped++;continue;}
+        this.config.onLog?.('info','[memory] confirmed unavailable index cleanup: '+row.sourcePath);
+        this.indexer.removeFile(row.sourcePath);removed++;
+      }
+      this.refreshSnapshot();return{removed,skipped};
+    });
+  }
+  /** The host calls this only after its explicit trash operation has succeeded. */
+  async removeDeletedPath(absolute:string):Promise<void>{
+    if(!path.isAbsolute(absolute))throw Error('An absolute deleted path is required.');
+    await this.fileWork.run(async()=>{
+      const entities=new Map(this.store.getFileRecords().map(record=>[record.id,record.file.path]));
+      for(const sourcePath of new Set([...this.store.fileSourcePaths(),...entities.keys()])){
+        let target:string;try{target=resolveInRoots(this.roots,entities.get(sourcePath)??sourcePath).abs;}catch{continue;}
+        const relative=path.relative(absolute,target);if(relative===''||relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative)){
+          // A recreation racing a delayed host event is never erased.
+          try{await stat(target);continue;}catch(error){if(!['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))continue;}
+          this.indexer.removeFile(sourcePath);
+        }
+      }
+      this.refreshSnapshot();
+    });
+  }
+
   /** Explicit persisted workspace membership change, never an availability probe. */
   async removeSourceRoot(rootId:string):Promise<void>{
     await this.fileWork.run(async()=>{for(const sp of this.store.fileSourcePaths())if(sp.startsWith('@'+rootId+'/'))this.indexer.removeFile(sp);this.refreshSnapshot();});
