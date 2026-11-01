@@ -94,6 +94,7 @@ export class SqliteStore {
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_path);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS unavailable_sources (source_path TEXT PRIMARY KEY, record TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_search (source_path TEXT PRIMARY KEY, record TEXT NOT NULL, dense_embedding BLOB);
     `);
     this.migrate();
@@ -131,6 +132,12 @@ export class SqliteStore {
       else this.db.prepare('DELETE FROM source_search WHERE source_path=?').run(sourcePath);
     })();
   }
+
+  transaction<T>(operation:()=>T):T{return this.db.transaction(operation)();}
+  hasSource(sourcePath:string):boolean{return !!this.db.prepare('SELECT 1 FROM chunks WHERE source_path=? UNION ALL SELECT 1 FROM source_search WHERE source_path=? LIMIT 1').get(sourcePath,sourcePath);}
+  unavailableSources():import('../indexStatus.js').UnavailableFile[]{return (this.db.prepare('SELECT record FROM unavailable_sources').all() as {record:string}[]).map(row=>JSON.parse(row.record));}
+  setUnavailableSource(record:import('../indexStatus.js').UnavailableFile):void{this.db.prepare('INSERT INTO unavailable_sources(source_path,record) VALUES(?,?) ON CONFLICT(source_path) DO UPDATE SET record=excluded.record').run(record.sourcePath,JSON.stringify(record));}
+  clearUnavailableSource(sourcePath:string):void{this.db.prepare('DELETE FROM unavailable_sources WHERE source_path=?').run(sourcePath);}
 
   // --- Embedder identity ---------------------------------------------------
 
@@ -207,7 +214,7 @@ export class SqliteStore {
 
   /** Wipe all chunks (used when the embedder changes — vectors are non-comparable). */
   reset(): void {
-    this.db.exec(`DELETE FROM chunks; DELETE FROM source_search;`);
+    this.db.exec(`DELETE FROM chunks; DELETE FROM source_search; DELETE FROM unavailable_sources;`);
   }
 
   // --- Dirty-check helpers -------------------------------------------------
@@ -247,7 +254,7 @@ export class SqliteStore {
    */
   fileSourcePaths(): string[] {
     const rows = this.db
-      .prepare(`SELECT DISTINCT source_path FROM chunks WHERE ref_type = 'doc-file'`)
+      .prepare(`SELECT DISTINCT source_path FROM chunks WHERE ref_type = 'doc-file' UNION SELECT source_path FROM source_search`)
       .all() as { source_path: string }[];
     return rows.map((r) => r.source_path);
   }
@@ -331,7 +338,7 @@ export class SqliteStore {
   }
 
   deleteSource(sourcePath: string): void {
-    this.db.transaction(()=>{this.db.prepare('DELETE FROM source_search WHERE source_path=?').run(sourcePath);this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`).run(sourcePath);})();
+    this.db.transaction(()=>{this.clearUnavailableSource(sourcePath);this.db.prepare('DELETE FROM source_search WHERE source_path=?').run(sourcePath);this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`).run(sourcePath);})();
   }
 
   // --- Reads ---------------------------------------------------------------

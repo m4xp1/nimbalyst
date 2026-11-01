@@ -21,7 +21,7 @@ import type {
   FileRecord,
 } from '../types.js';
 import { parseFrontmatter } from '../frontmatter.js';
-import { safeIndexError, isProviderIndexFailure, type SourceIndexFailure } from '../indexStatus.js';
+import { safeIndexError, isProviderIndexFailure, type SourceIndexFailure, type UnavailableFile } from '../indexStatus.js';
 import { PAGE_VECTOR_BYTES } from '../types.js';
 import { embeddingInput, legacyEmbeddingInput,validateEmbeddingResponse, utf8Prefix, MAX_CHUNK_BODY_BYTES } from '../embeddingInput.js';
 import {sourceSearchRecord} from '../sourceSearch.js';
@@ -115,6 +115,36 @@ function pageRowFor(
 }
 
 export class Indexer {
+  private unavailable=new Map<string,UnavailableFile>();
+  private unavailableRoots=new Set<string|null>();
+  unavailableFiles():UnavailableFile[]{return this.store.unavailableSources();}
+  /** Saved configured files remain candidates even if no native event observed their return. */
+  retainedFilePaths():string[]{
+    const paths=new Set<string>();
+    for(const sourcePath of this.store.fileSourcePaths()){
+      const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);const file=record?.file.path??sourcePath;
+      try{const absolute=resolveInRoots(this.roots,file).abs;const hit=this.classify(absolute);if(hit&&!this.unavailable.has(this.failureKey(hit.sourcePath)))paths.add(absolute);}catch{/* Detached or non-file source. */}
+    }
+    return [...paths];
+  }
+  setSourceAvailability(folders:Array<{id:string|null;available:boolean}>):void{
+    this.unavailableRoots=new Set(folders.filter(root=>!root.available).map(root=>root.id));
+    const entities=new Map([...this.fileRecords.values()].map(record=>[record.id,record.file.path]));
+    this.store.transaction(()=>{for(const sourcePath of new Set([...this.store.fileSourcePaths(),...entities.keys()]))if(this.unavailableRoots.has(parseSourcePath(this.roots,entities.get(sourcePath)??sourcePath).root.id))this.markUnavailable(sourcePath,'root-unavailable');});
+  }
+  markUnavailable(sourcePath:string,reason:UnavailableFile['reason']='missing',error?:unknown):void{
+    sourcePath=this.failureKey(sourcePath);
+    if(!this.store.hasSource(sourcePath))return;
+    const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
+    const source=record?.file.path??sourcePath;
+    const located=parseSourcePath(this.roots,source);const prior=this.unavailable.get(sourcePath);
+    const code=(error as {code?:unknown})?.code;
+    if(prior?.reason===reason&&prior.code===code)return;
+    const row:UnavailableFile={sourcePath,rootId:located.root.id==='harness-memory'?null:located.root.id,relativePath:located.rel,reason,
+      firstSeenAt:prior?.firstSeenAt??Date.now(),updatedAt:Date.now(),...(typeof code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test(code)?{code}:{})};
+    this.unavailable.set(sourcePath,row);this.store.setUnavailableSource(row);
+  }
+  private clearUnavailable(sourcePath:string):void{if(this.unavailable.delete(sourcePath))this.store.clearUnavailableSource(sourcePath);}
   private failures = new Map<string,SourceIndexFailure>();
   sourceFailed(sourcePath:string):boolean {return this.failures.has(sourcePath)&&!this.failures.get(sourcePath)?.projectionOnly;}
   failuresForStatus():SourceIndexFailure[] { return [...this.failures.values()]; }
@@ -154,6 +184,7 @@ export class Indexer {
     private embedder: Embedder
   ) {
     this.roots = resolveRoots(config.root, config.sources);
+    this.unavailable=new Map(store.unavailableSources().map(row=>[row.sourcePath,row]));
     this.failures = new Map(store.getIndexDiagnostics().failures.map(f=>[f.sourcePath,f]));
     // A matcher is bound to its set's root: `docs/**/*.md` declared against the
     // primary root must not claim a `docs/x.md` that lives under another root.
@@ -185,6 +216,7 @@ export class Indexer {
   inheritState(previous:Indexer):void {
     for(const file of previous.knownFiles)this.knownFiles.add(file);
     this.unsupportedFiles=new Set(previous.unsupportedFiles);
+    this.unavailableRoots=new Set(previous.unavailableRoots);
     const unchanged=new Set([...this.fileRecords].filter(([key,record])=>JSON.stringify(previous.fileRecords.get(key))===JSON.stringify(record)).map(([,record])=>record.id));
     this.validatedFiles=new Set([...previous.validatedFiles].filter(id=>unchanged.has(id)));
   }
@@ -217,7 +249,9 @@ export class Indexer {
       const storedSources=new Set(this.store.sourcePaths());
       for(const file of await this.enumerate()){
         const old=previous.classify(file.sourcePath);
-        if(!old||old.sourceClass!==file.sourceClass||!storedSources.has(this.failureKey(file.sourcePath)))add(file.sourcePath);
+        const root=parseSourcePath(this.roots,file.sourcePath).root;
+        const moved=previous.sourceRoots().find(prior=>prior.id===root.id)?.dir!==root.dir;
+        if(!old||moved||old.sourceClass!==file.sourceClass||!storedSources.has(this.failureKey(file.sourcePath)))add(file.sourcePath);
       }
       for(const sp of this.store.fileSourcePaths())if(!this.classify(sp))add(sp);
       for(const record of this.fileRecords.values())if(!this.classifyDocument(record.file.path)){
@@ -258,7 +292,7 @@ export class Indexer {
   entityFilePaths(): string[] { return [...this.fileRecords.values()].filter(r=>!r.file.disabled).map(r => path.resolve(this.config.root, r.file.path.replace(/[\\/]/g, path.sep))); }
 
   readable(chunk: Pick<StoredChunk,'sourcePath'|'refType'>, beforeRuleReconciliation=false): boolean {
-    if(this.sourceFailed(chunk.sourcePath))return false;
+    if(this.unavailable.has(chunk.sourcePath)||this.sourceFailed(chunk.sourcePath))return false;
     if (chunk.refType === 'doc-file') {
       if (chunk.sourcePath.startsWith('@') && !this.roots.some(root => root.id && chunk.sourcePath.startsWith('@'+root.id+'/'))) return false;
       return beforeRuleReconciliation || this.classifyDocument(chunk.sourcePath) !== null;
@@ -276,11 +310,16 @@ export class Indexer {
       if (key) this.fileRecords.set(key, record);
       else this.store.deleteSource(record.id);
     }
+    // A missing manifest entry can be a transient disk observation, not a user deletion.
+    for(const [key,previous] of old)if(!this.fileRecords.has(key)&&![...this.fileRecords.values()].some(record=>record.id===previous.id)&&!this.excludedByRules(this.roots[0],previous.file.path)){
+      try{await stat(path.resolve(this.config.root,previous.file.path));}
+      catch(error){this.fileRecords.set(key,previous);this.markUnavailable(previous.id,['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??'')?'missing':'read',error);}
+    }
     this.store.setFileRecords([...this.fileRecords.values()]);
     this.entityIds = new Set([...this.fileRecords.values()].map(r => r.id));
     for (const [key, previous] of old) {
       if (this.fileRecords.get(key)?.id !== previous.id) {
-        this.store.deleteSource(previous.id);
+        if(![...this.fileRecords.values()].some(record=>record.id===previous.id))this.store.deleteSource(previous.id);
         this.validatedFiles.delete(previous.id);
       }
     }
@@ -324,7 +363,7 @@ export class Indexer {
   async enumerate(rootId?:string|null): Promise<FileRef[]> {
     const seen = new Map<string, string>();
     for (const set of this.config.sources) {
-      const root=rootForSet(this.roots,set);if(rootId!==undefined&&root.id!==rootId)continue;
+      const root=rootForSet(this.roots,set);if(this.unavailableRoots.has(root.id)||rootId!==undefined&&root.id!==rootId)continue;
       let matches:string[];try{matches=await this.globSet(set);}catch(error){if(error&&typeof error==='object')Object.assign(error,{memoryIndexContext:{stage:'discovery',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})}});throw error;}
       for (const sp of matches) if (!seen.has(sp)) seen.set(sp, set.sourceClass);
     }
@@ -407,7 +446,7 @@ export class Indexer {
     // so a markdown re-index can't wipe the catalog.
     onProgress?.({ phase: 'prune', done: 0, total: 0 });
     for (const sourcePath of this.store.fileSourcePaths()) {
-      if (!live.has(sourcePath)) this.store.deleteSource(sourcePath);
+      if (!live.has(sourcePath)) {if(!this.classify(sourcePath))this.removeFile(sourcePath);else this.markUnavailable(sourcePath,this.unavailableRoots.has(parseSourcePath(this.roots,sourcePath).root.id)?'root-unavailable':'missing');}
     }
 
     const liveFailures=new Set(files.map(f=>this.failureKey(f.sourcePath)));
@@ -434,6 +473,7 @@ export class Indexer {
   }
 
   private async indexFileNow(sourcePath: string, sourceClass: string): Promise<number> {
+    if(this.unavailableRoots.has(parseSourcePath(this.roots,sourcePath).root.id)){this.markUnavailable(this.failureKey(sourcePath),'root-unavailable');return 0;}
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
     if (record) return this.indexEntityFile(record);
@@ -451,17 +491,17 @@ export class Indexer {
     }
     let raw: string;
     try {
-      if (!await isInsideRealRoot(root.dir,abs)) { this.store.deleteSource(sourcePath); return 0; }
-      if((await stat(abs)).isDirectory()){this.removeFile(sourcePath);return 0;}
+      if (!await isInsideRealRoot(root.dir,abs)) { this.markUnavailable(sourcePath,'read'); return 0; }
+      if((await stat(abs)).isDirectory()){this.markUnavailable(sourcePath,'unsupported');return 0;}
       const bytes = await readFile(abs);
-      if (bytes.includes(0)) { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
+      if (bytes.includes(0)) { this.unsupportedFiles.add(sourcePath);this.markUnavailable(sourcePath,'unsupported'); return 0; }
       try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-      catch { this.unsupportedFiles.add(sourcePath);this.store.deleteSource(sourcePath); return 0; }
+      catch { this.unsupportedFiles.add(sourcePath);this.markUnavailable(sourcePath,'unsupported'); return 0; }
       this.unsupportedFiles.delete(sourcePath);
     } catch (err) {
+      this.markUnavailable(sourcePath,['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code??'')?'missing':'read',err);
       if (!['ENOENT','ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
-      // File vanished mid-pass; treat as deletion.
-      this.store.deleteSource(sourcePath);
+      // Missing is not a deletion authority; retain paid vectors until confirmed.
       return 0;
     }
     // `sourcePath` is the index key; `refId` is what a caller opens. They are
@@ -484,9 +524,10 @@ export class Indexer {
     this.store.deleteSource(rel);
     let embedding = false;
     try {
-      if (record.file.disabled || this.excludedByRules(this.roots[0],rel) || !await isInsideRealRoot(this.config.root, abs)) {
+      if (record.file.disabled || this.excludedByRules(this.roots[0],rel)) {
         this.store.deleteSource(record.id); return 0;
       }
+      if(!await isInsideRealRoot(this.config.root,abs)){this.markUnavailable(record.id,'read');return 0;}
       const bytes = await readFile(abs);
       if (bytes.includes(0)) throw new Error('Binary file body');
       const raw = new TextDecoder('utf-8', {fatal:true}).decode(bytes).replace(/^\uFEFF/, '');
@@ -512,8 +553,9 @@ export class Indexer {
       if(!this.cancelled)this.validatedFiles.add(record.id);
       return count;
     } catch (error) {
+      if(!embedding)this.markUnavailable(record.id,['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??'')?'missing':'read',error);
       if (embedding || !['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))throw error;
-      this.store.deleteSource(record.id);this.store.deleteSource(rel);
+      this.markUnavailable(record.id,'missing',error);
       return 0;
     }
   }
@@ -580,7 +622,7 @@ export class Indexer {
   ): Promise<number> {
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
-    if (p.unchanged) return 0;
+    if (p.unchanged) {this.clearUnavailable(sourcePath);return 0;}
     const inputs=p.pending.map(t=>t.input);if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
     if(inputs.length){try{const vectors=await this.embedder.embed(inputs,{...this.config.embeddingContext?.(),sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'}))});validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
       // A failed auxiliary migration must not quarantine an unchanged, verified body.
@@ -589,6 +631,7 @@ export class Indexer {
     }}
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
     this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);
+    this.clearUnavailable(sourcePath);
     return inputs.length;
   }
 
@@ -611,7 +654,7 @@ export class Indexer {
     const existing = new Map(this.store.chunksForSource(sourcePath).map((c) => [c.id, c]));
     const info = this.embedder.info;
     const reusableByInput=new Map<string,StoredChunk>();
-    for(const previous of existing.values())if(previous.embedderId===info.id&&previous.model===info.model&&previous.dims===info.dims&&(info.dims===0||previous.denseEmbedding?.length===info.dims&&previous.denseEmbedding.every(Number.isFinite)))reusableByInput.set(previous.embeddingInputHash??sha256(legacyEmbeddingInput(previous.headingPath,previous.text)),previous);
+    for(const previous of existing.values())if((this.config.preserveStoredEmbeddings&&info.dims===0||previous.embedderId===info.id&&previous.model===info.model&&previous.dims===info.dims)&&(info.dims===0||previous.denseEmbedding?.length===info.dims&&previous.denseEmbedding.every(Number.isFinite)))reusableByInput.set(previous.embeddingInputHash??sha256(legacyEmbeddingInput(previous.headingPath,previous.text)),previous);
 
     const pending: { idx: number; input: string }[] = [];
     const stored: StoredChunk[] = rows.map((c, idx) => {
@@ -625,9 +668,9 @@ export class Indexer {
         // double-count the document's vocabulary in the IDF statistics and let
         // the same source surface twice in the keyword arm.
         sparseTerms: c.granularity === 'page' ? {} : termFrequencies([c.headingPath.join(' > '),c.context,c.text].filter(Boolean).join('\n')),
-        embedderId: info.id,
-        model: info.model,
-        dims: info.dims,
+        embedderId: reusable?prev!.embedderId:info.id,
+        model: reusable?prev!.model:info.model,
+        dims: reusable?prev!.dims:info.dims,
         updatedAt: Date.now(),
       };
     });
@@ -639,7 +682,7 @@ export class Indexer {
     if((ref?.refType??'doc-file')==='doc-file'){
       sourceRecord=sourceSearchRecord(sourcePath,sourceClass,raw,chunks,info,ref,!/\.md$/i.test(sourcePath));
       const previous=this.store.sourceSearchFor(sourcePath);
-      if(previous&&previous.contextHash===sourceRecord.contextHash&&previous.embedderId===info.id&&previous.model===info.model&&previous.dims===info.dims&&(info.dims===0||previous.denseEmbedding?.length===info.dims&&previous.denseEmbedding.every(Number.isFinite)))sourceRecord.denseEmbedding=previous.denseEmbedding;
+      if(previous&&previous.contextHash===sourceRecord.contextHash&&(this.config.preserveStoredEmbeddings&&info.dims===0||previous.embedderId===info.id&&previous.model===info.model&&previous.dims===info.dims)&&(info.dims===0||previous.denseEmbedding?.length===info.dims&&previous.denseEmbedding.every(Number.isFinite)))sourceRecord={...sourceRecord,denseEmbedding:previous.denseEmbedding,embedderId:previous.embedderId,model:previous.model,dims:previous.dims};
       else sourcePendingInput=sourceRecord.context;
       const comparable=(record:SourceSearchRecord|null|undefined)=>{if(!record)return null;const {denseEmbedding,...data}=record;void denseEmbedding;return JSON.stringify(data);};
       const unchanged=chunksUnchanged&&!sourcePendingInput&&comparable(previous)===comparable(sourceRecord);
@@ -650,11 +693,12 @@ export class Indexer {
 
   /** Drop a source file from the index. */
   removeFile(sourcePath: string): void {
+    this.clearUnavailable(sourcePath);
     this.clearFailure(this.failureKey(sourcePath));
     this.knownFiles.delete(sourcePath);this.unsupportedFiles.delete(sourcePath);
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
-    if (record) { this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }
+    if (record) { this.clearUnavailable(record.id);this.store.deleteSource(record.id); this.validatedFiles.delete(record.id); }
     this.store.deleteSource(sourcePath);
   }
 

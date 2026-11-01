@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defaultSources, sourcesWithRules, normalizeSourceRules, type SourceRules, type SourceSet } from '../engine/dist/index.js';
-export interface MemorySourceRoot { id: string | null; path: string; label: string; available: boolean; error?: string;treePaths?:string[]; }
+export interface MemorySourceRoot { attachmentRevision?:number; id: string | null; path: string; label: string; available: boolean; error?: string;treePaths?:string[]; }
 export type AttachedRules = Record<string, SourceRules>;
 export function readAttachedRules(dataDir: string): AttachedRules {
   try {
@@ -19,7 +19,7 @@ export function writeAttachedRules(dataDir: string, roots: AttachedRules): void 
 export function attachedSources(factsDir:string,workspacePath:string,roots:MemorySourceRoot[],primary:SourceRules,rules:AttachedRules):SourceSet[] {
   const base=sourcesWithRules(defaultSources(factsDir,workspacePath),primary);
   for(const root of roots) {
-    if(root.id===null || !root.available)continue;
+    if(root.id===null)continue;
     const selected=rules[root.id]??{version:1 as const,include:[],exclude:[]};
     const sets=sourcesWithRules(defaultSources(factsDir,root.path).filter(set=>!set.root),selected);
     for(const set of sets)base.push({...set,exclude:selected.exclude,root:{id:root.id,path:root.path,personal:true}});

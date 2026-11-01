@@ -87,7 +87,7 @@ describe('Indexer', () => {
     store.close();
   });
 
-  it('prunes files deleted from disk', async () => {
+  it('retains missing files until an explicit index removal', async () => {
     const { root, config } = setup();
     writeFileSync(path.join(root, 'docs/keep.md'), '# Keep\nstays');
     const gone = path.join(root, 'docs/gone.md');
@@ -100,7 +100,9 @@ describe('Indexer', () => {
 
     unlinkSync(gone, { force: true });
     await indexer.indexAll();
-    expect(store.sourcePaths()).toEqual(['docs/keep.md']);
+    expect(store.sourcePaths().sort()).toEqual(['docs/gone.md','docs/keep.md']);
+    expect(indexer.unavailableFiles()).toMatchObject([{sourcePath:'docs/gone.md',reason:'missing'}]);
+    indexer.removeFile('docs/gone.md');expect(store.sourcePaths()).toEqual(['docs/keep.md']);
     store.close();
   });
 });
@@ -169,7 +171,9 @@ describe('Indexer with a second source root', () => {
 
     unlinkSync(secondReadme, { force: true });
     await indexer.indexAll();
-    expect(store.sourcePaths()).toEqual(['docs/README.md']);
+    expect(store.sourcePaths().sort()).toEqual(['@memory/README.md','docs/README.md']);
+    expect(indexer.unavailableFiles()).toMatchObject([{sourcePath:'@memory/README.md',rootId:'memory'}]);
+    indexer.removeFile('@memory/README.md');expect(store.sourcePaths()).toEqual(['docs/README.md']);
     store.close();
   });
 
@@ -292,13 +296,13 @@ describe('document search metadata projection',()=>{
 
 
 describe('document metadata lifecycle',()=>{
- it('fills an old index with only the missing context vector, survives reopen, and prunes deleted metadata',async()=>{
+ it('fills an old index with only the missing context vector, survives reopen, and retains missing metadata until confirmed removal',async()=>{
   const {root,config}=setup(),file=path.join(root,'docs/a.md'),fake=new FakeEmbedder(),inputs:string[]=[];writeFileSync(file,'# Main\nLIFECYCLE_BODY');
   const embedder={info:fake.info,embed:async(texts:string[])=>{inputs.push(...texts);return fake.embed(texts);}};
   let store=new SqliteStore(config.dbPath);try{await new Indexer(config,store,embedder).indexAll();store.writeSourceProjection(undefined,'docs/a.md');const body=store.loadAll();store.close();store=new SqliteStore(config.dbPath);inputs.length=0;
    await new Indexer(config,store,embedder).indexAll();expect(inputs).toHaveLength(1);expect(inputs[0]).toMatch(/^File: a.md/);expect(store.loadAll()).toEqual(body);expect(store.sourceSearchRecords()).toHaveLength(1);
    store.close();store=new SqliteStore(config.dbPath);inputs.length=0;await new Indexer(config,store,embedder).indexAll();expect(inputs).toEqual([]);
-   unlinkSync(file);await new Indexer(config,store,embedder).indexAll();expect(store.sourceSearchRecords()).toEqual([]);expect(store.count()).toBe(0);
+   unlinkSync(file);const missing=new Indexer(config,store,embedder);await missing.indexAll();expect(store.sourceSearchRecords()).toHaveLength(1);expect(store.count()).toBeGreaterThan(0);missing.removeFile('docs/a.md');expect(store.sourceSearchRecords()).toEqual([]);expect(store.count()).toBe(0);
   }finally{store.close();}
  });
  it('never embeds root IDs or machine paths for attached sources',async()=>{
@@ -316,4 +320,30 @@ describe('unchanged source projections',()=>{
   const {root,config}=setup();writeFileSync(path.join(root,'docs/a.md'),'---\ntitle: Stable\naliases: [One, Two]\n---\n# Main\nStable body.');const store=new SqliteStore(config.dbPath),fake=new FakeEmbedder(),indexer=new Indexer(config,store,fake);
   try{await indexer.indexAll();const write=vi.spyOn(store,'writeSourceProjection'),embed=vi.spyOn(fake,'embed');for(let i=0;i<3;i++)await indexer.indexAll();expect(write).not.toHaveBeenCalled();expect(embed).not.toHaveBeenCalled();}finally{store.close();}
  });
+});
+
+
+describe('retaining unavailable file embeddings', () => {
+  it('retains a missing file through scan, restart and recovery without new embedding inputs', async () => {
+    const {root,config}=setup(); const file=path.join(root,'docs/retained.md');
+    const raw='# Retained\nAn unchanged document must keep its purchased embedding.';
+    writeFileSync(file,raw); const embedder=new FakeEmbedder(); const embed=vi.spyOn(embedder,'embed');
+    let store=new SqliteStore(config.dbPath); let indexer=new Indexer(config,store,embedder);
+    try {
+      await indexer.indexAll();const saved=store.chunksForSource('docs/retained.md');expect(saved.length).toBeGreaterThan(0);embed.mockClear();
+      unlinkSync(file);await indexer.indexAll();expect(store.chunksForSource('docs/retained.md')).toEqual(saved);
+      expect(indexer.readable(saved[0])).toBe(false);
+      store.close();store=new SqliteStore(config.dbPath);indexer=new Indexer(config,store,embedder);
+      expect(indexer.readable(saved[0])).toBe(false);
+      writeFileSync(file,raw);await indexer.indexAll();expect(embed).not.toHaveBeenCalled();expect(indexer.readable(saved[0])).toBe(true);
+    } finally {store.close();}
+  });
+  it('retains saved vectors when reading a file reports ENOENT and reuses them on return',async()=>{
+    const {root,config}=setup();const file=path.join(root,'docs/return.md'),raw='# Return\nDo not purchase this embedding twice.';
+    writeFileSync(file,raw);const store=new SqliteStore(config.dbPath),embedder=new FakeEmbedder(),embed=vi.spyOn(embedder,'embed'),indexer=new Indexer(config,store,embedder);
+    try{await indexer.indexAll();const saved=store.chunksForSource('docs/return.md');embed.mockClear();unlinkSync(file);
+      await indexer.indexFile('docs/return.md','docs');expect(store.chunksForSource('docs/return.md')).toEqual(saved);expect(indexer.readable(saved[0])).toBe(false);
+      writeFileSync(file,raw);await indexer.indexAll();expect(embed).not.toHaveBeenCalled();
+    }finally{store.close();}
+  });
 });

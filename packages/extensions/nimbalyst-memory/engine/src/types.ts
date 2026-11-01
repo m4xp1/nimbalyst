@@ -178,6 +178,8 @@ export interface SourceSet {
 }
 
 export interface EngineConfig {
+  /** Temporary keyword-only fallback must preserve purchased dense vectors. */
+  preserveStoredEmbeddings?:boolean;
   embeddingContext?:()=>import("./embeddingUsage.js").EmbeddingCallContext;
   /**
    * Absolute PRIMARY root. Bare relative `sourcePath`s resolve against it, and

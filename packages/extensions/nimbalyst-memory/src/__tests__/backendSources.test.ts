@@ -161,8 +161,8 @@ describe('source settings backend bridge',()=>{
    await runtime.deactivate();
    roots=[...roots,{id:'attached-link',path:link,label:'link',available:true}];runtime=await activate({services});
    await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
-   expect((await runtime.methods.get_sources({rootId:'attached-link'})).include).toEqual(['archive/**']);
-   expect((await runtime.methods.search_project_knowledge({query:'ОбновленныйАрхивМаркер'}) as any).chunks).toHaveLength(1);
+   expect((await runtime.methods.get_sources({rootId:'attached-link'})).include).toEqual([]);
+   expect((await runtime.methods.search_project_knowledge({query:'ОбновленныйАрхивМаркер'}) as any).chunks).toHaveLength(0);
   }finally{await runtime.deactivate();rmSync(base,{recursive:true,force:true});}
  });
 });
@@ -360,4 +360,26 @@ describe('metadata ranking shared by MCP and Quick Open',()=>{
    expect((await runtime.methods.search_project_knowledge({query:'checkpoint'}) as any).chunks.map((r:any)=>r.sourcePath)).toContain('docs/target.md');
   }finally{await runtime.deactivate();rmSync(root,{recursive:true,force:true});}
  });
+});
+
+it('retains attached vectors through availability changes and clears rules only on detach',async()=>{
+ const base=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-root-retention-'))),root=path.join(base,'main'),linked=path.join(base,'linked'),dataDir=path.join(base,'data');
+ mkdirSync(root);mkdirSync(linked);mkdirSync(path.join(linked,'docs'));writeFileSync(path.join(linked,'docs/a.md'),'# Stable\nStableAttachedMarker');
+ let folders:any[]=[{id:null,path:root,label:'main',available:true},{id:'attached-stable',path:linked,label:'linked',available:true,attachmentRevision:1}];
+ const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir,log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),memorySourceRoots:async()=>folders}});
+ try{
+  await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+  await runtime.methods.set_sources({rootId:'attached-stable',include:['notes/**'],exclude:['archive/**']});
+  await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+  const before=await runtime.methods.status() as any;expect(before.chunks).toBeGreaterThan(0);
+  const update=vi.spyOn(MemoryEngine.prototype,'updateSources');folders=folders.map(row=>({...row,available:false}));await runtime.methods.get_source_roots();
+  const unavailable=await runtime.methods.status() as any;expect(unavailable.chunks).toBe(before.chunks);expect(unavailable.available.chunks).toBe(0);expect(update).not.toHaveBeenCalled();
+  expect((await runtime.methods.get_sources({rootId:'attached-stable'})).include).toEqual(['notes/**']);
+  folders=folders.map(row=>({...row,available:true}));await runtime.methods.get_source_roots();expect(update).not.toHaveBeenCalled();
+  // A new explicit attachment revision detects detach/reattach even between polls.
+  folders=folders.map(row=>row.id?{...row,attachmentRevision:2}:row);await runtime.methods.get_source_roots();
+  expect((await runtime.methods.get_sources({rootId:'attached-stable'})).include).toEqual([]);
+  await vi.waitFor(async()=>expect((await runtime.methods.status() as any).indexing).toBe(false));
+  update.mockRestore();folders=folders.slice(0,1);await runtime.methods.get_source_roots();await vi.waitFor(async()=>expect((await runtime.methods.status() as any).chunks).toBe(0));
+ }finally{vi.restoreAllMocks();await runtime.deactivate();rmSync(base,{recursive:true,force:true});}
 });

@@ -1,3 +1,8 @@
+/** Retained file index whose current source cannot be verified. No file text is duplicated here. */
+export interface UnavailableFile {
+ sourcePath:string;rootId:string|null;relativePath:string;
+ reason:'missing'|'root-unavailable'|'read'|'unsupported';code?:string;firstSeenAt:number;updatedAt:number;
+}
 export interface SourceIndexFailure { sourcePath:string; relativePath?:string;rootId:string|null; error:SafeIndexError; updatedAt:number; stage?:IndexIssueStage; code?:string; projectionOnly?:boolean }
 export interface SafeIndexError { category: 'authentication'|'quota'|'rate-limit'|'network'|'access'|'input'|'other'; action:string }
 /** Classify locally; never forward provider responses, credentials or document text. */
@@ -21,7 +26,7 @@ export function isProviderIndexFailure(error:unknown):boolean {
  return e?.code!=='EMBEDDING_INPUT_TOO_LARGE' && (['authentication','quota','rate-limit','network'].includes(category) || (e?.status!==undefined && category!=='input') || /\b(400|401|403|429|5\d\d)\b/.test(String((error as Error)?.message??'')) && category!=='input');
 }
 export interface FileOperation {
- id:number;kind:'scan'|'rules'|'watch';state:'queued'|'running'|'completed'|'partial'|'failed'|'cancelled';
+ id:number;trigger?:string;kind:'scan'|'rules'|'watch';state:'queued'|'running'|'completed'|'partial'|'failed'|'cancelled';
  phase:string|null;totalFiles:number|null;completedFiles:number;failedFiles:number;remainingFiles:number|null;
  error:SafeIndexError|null;rootId?:string|null;
 }
@@ -37,7 +42,7 @@ export interface FileIndexStatus {
 
 export type IndexIssueStage='discovery'|'watch'|'read'|'embeddings'|'unknown';
 export interface IndexIssueScope {stage:IndexIssueStage;rootId?:string|null;relativePath?:string;scopeId?:string;}
-export interface IndexIssue extends IndexIssueScope {id:string;error:SafeIndexError;code?:string;updatedAt:number;state:'active'|'recovered';resolvedAt?:number;}
+export interface IndexIssue extends IndexIssueScope {id:string;error:SafeIndexError;code?:string;firstSeenAt?:number;updatedAt:number;state:'active'|'recovered';resolvedAt?:number;}
 /** The ledger stores sanitized facts, never exception messages or absolute paths. */
 export class IndexIssueLedger {
  private rows:IndexIssue[];
@@ -46,7 +51,8 @@ export class IndexIssueLedger {
  record(error:unknown,scope:IndexIssueScope):void{
   const id=JSON.stringify([scope.stage,scope.rootId===undefined?'unknown':scope.rootId,scope.relativePath??'',scope.scopeId??'']);
   const code=(error as {code?:unknown})?.code;
-  const row:IndexIssue={...scope,id,error:safeIndexError(error),...(typeof code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test(code)?{code}:{}),updatedAt:Date.now(),state:'active'};
+  const prior=this.rows.find(row=>row.id===id);
+  const row:IndexIssue={...scope,id,...(prior?prior.firstSeenAt?{firstSeenAt:prior.firstSeenAt}:{}:{firstSeenAt:Date.now()}),error:safeIndexError(error),...(typeof code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test(code)?{code}:{}),updatedAt:Date.now(),state:'active'};
   this.rows=this.rows.filter(prior=>prior.id!==id);this.rows.push(row);this.trim();
  }
  verify(scope:IndexIssueScope):boolean{

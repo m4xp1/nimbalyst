@@ -67,3 +67,5 @@ export * from './types.js';
 export { literalSourceRule, sourceRulePath, compileSourceRules, pathOverrideFor, type PathOverride, normalizeSourceRules, readSourceRules, writeSourceRules, sourcesWithRules, expandSourcePatterns, type SourceRules } from './sourceRules.js';
 
 export { safeIndexError, type SafeIndexError, type FileIndexStatus, type FileOperation } from './indexStatus.js';
+
+export type {UnavailableFile} from './indexStatus.js';
