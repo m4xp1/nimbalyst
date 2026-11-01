@@ -120,7 +120,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await search('Files','Скрытый');await expect(page.locator('.files-pane .unified-quick-open-item').filter({hasText:'Скрытый.md'})).toHaveCount(0);
   await search('In Files','СкрытыйКонтентМаркер');await expect(page.locator('.in-files-pane .unified-quick-open-item')).toHaveCount(0);
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
- },120000);
+ });
  test('controls Memory rules from Files and scopes Coverage to an attached folder',async()=>{
   await page.keyboard.press('Escape');
   await fs.writeFile(path.join(workspace,'docs','TreeProbe.md'),'# Tree\nТочечноеДеревоМаркер');
@@ -201,7 +201,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect(page.locator('.file-tree-icon[data-memory-index="included"]')).toHaveCount(0);
   await docs.click({button:'right'});await expect(page.getByRole('button',{name:'Include in Memory index',exact:true})).toHaveCount(0);await page.keyboard.press('Escape');
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
- },120000);
+ });
 
  test('retains an unavailable attached root across an application restart and permits explicit Detach',async()=>{
   await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
@@ -225,15 +225,20 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
    await treeRoot.click({button:'right'});await page.getByTestId('context-menu-detach-folder').click();
    await expect.poll(async()=>(await panel('get_source_roots')).some((entry:any)=>entry.id===linked.id)).toBe(false);
    expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
-   await closeWorkspace();await fs.rename(offline,attached);await launchWorkspace(true);
-   expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:attached})).success).toBe(true);
-   await expect.poll(async()=>(await panel('get_source_roots')).some((entry:any)=>entry.id===linked.id)).toBe(true);
-   expect((await panel('get_sources',{rootId:linked.id})).include).toEqual([]);
-   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
+
   }finally{
    await closeWorkspace();
    if(await fs.stat(offline).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))await fs.rename(offline,attached);
   }
- },180000);
+ });
+
+ test('reattaches the detached root with default rules after another restart',async()=>{
+  await closeWorkspace();await launchWorkspace(true);
+  expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:attached})).success).toBe(true);
+  let linked:any;await expect.poll(async()=>{linked=(await panel('get_source_roots')).find((entry:any)=>entry.label==='link');return !!linked;}).toBe(true);
+  expect((await panel('get_sources',{rootId:linked.id})).include).toEqual([]);
+  expect((await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер',rootIds:[linked.id]})).chunks).toEqual([]);
+  expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
+ });
 
 });
