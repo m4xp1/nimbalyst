@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.10] - 2026-11-01
+
+### Fixed
+- Keep saved Memory vectors and source rules when attached folders or files become temporarily unavailable; reuse unchanged embeddings after recovery.
+- Clear unavailable records only after explicit confirmation, source-rule exclusion, Detach, or a successful file deletion in the app. Detach also clears that root's saved rules.
+- Show retained unavailable files and grouped recovered errors in Coverage, including background changes while idle.
+- Fence old embedding operations and usage counters across provider changes and close; preserve purchased vectors and counters during temporary keyword-only fallback.
+
+### Added
+- Privacy-safe source-check diagnostics with stage timings, timeout and late-result context for investigating repeated reconciliation.
+
 ## [0.81.7+m4xp1.9] - 2026-10-28
 
 ### Added
