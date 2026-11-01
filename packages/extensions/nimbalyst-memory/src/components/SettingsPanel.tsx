@@ -504,7 +504,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const issueScope=(issue:NonNullable<FileIndexStatus['issues']>[number])=>issue.rootId===undefined?'All sources (scope unknown)':coverageRoots.find(root=>root.id===issue.rootId)?.label??(issue.rootId===null?'Primary workspace':issue.rootId);
   const unavailableFiles=status?.unavailableFiles??[];
   const recoveredGroups=new Map<string,NonNullable<FileIndexStatus['issues']>>();
-  for(const issue of issues??[])if(issue.state==='recovered'){const key=JSON.stringify([issue.rootId,issue.stage]);recoveredGroups.set(key,[...(recoveredGroups.get(key)??[]),issue]);}
+  for(const issue of issues??[])if(issue.state==='recovered'){const key=JSON.stringify([issue.rootId===undefined?'__unknown_scope__':issue.rootId,issue.stage]);recoveredGroups.set(key,[...(recoveredGroups.get(key)??[]),issue]);}
   const needsAttention=Boolean(unavailableFiles.length||activeIssues.length||legacyRebuildError||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
