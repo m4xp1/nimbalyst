@@ -231,7 +231,7 @@ export class IndexWatcher {
     if (this.stopped || this.discovering) return;
     const indexer=this.indexer,generation=this.generation;
     this.discovering = (async () => {
-      const next=new Map<string,string>();
+      const next=new Map<string,string>();const verifiedRoots=new Set<string|null>();
       for(const root of indexer.sourceRoots()){
         let sourcePath:string|undefined;const scope:IndexIssueScope={stage:'discovery',rootId:root.id==='harness-memory'?null:root.id,...(root.id==='harness-memory'?{scopeId:root.id}:{})};
         try{
@@ -242,7 +242,7 @@ export class IndexWatcher {
             const stamp=info.mtimeMs+':'+info.size;next.set(abs,stamp);
             if(!seedOnly&&this.discovered.get(abs)!==stamp){this.watcher?.add(abs);this.queue(abs,'upsert');}
           }
-          if(!this.stopped&&generation===this.generation)this.onVerified?.(scope);
+          if(!this.stopped&&generation===this.generation){verifiedRoots.add(root.id);this.onVerified?.(scope);}
         }catch(error){
           if(this.stopped||generation!==this.generation)return;
           this.reportError(error,{...scope,...(sourcePath?{relativePath:path.relative(root.dir,resolveInRoots(indexer.sourceRoots(),sourcePath).abs).split(path.sep).join('/')}:{})});
@@ -250,7 +250,7 @@ export class IndexWatcher {
           this.config.onLog?.('warn','[watcher] source discovery failed; retained existing files');
         }
       }
-      if(!this.stopped&&generation===this.generation){for(const abs of this.discovered.keys())if(!next.has(abs))this.queue(abs,'remove');this.discovered=next;}
+      if(!this.stopped&&generation===this.generation){for(const abs of new Set([...this.discovered.keys(),...indexer.retainedFilePaths()]))if(!next.has(abs)&&verifiedRoots.has(locateAbsolute(indexer.sourceRoots(),abs)?.root.id??null))this.queue(abs,'remove');this.discovered=next;}
     })().finally(()=>{this.discovering=null;});
     await this.discovering;
   }
@@ -282,7 +282,7 @@ export class IndexWatcher {
       if(this.stopped||generation!==this.generation)break;
       try {
         if (op === "remove") {
-          indexer.removeFile(sourcePath);
+          indexer.markUnavailable(sourcePath,'missing');
         } else {
           const sourceClass =
             indexer.classify(sourcePath)?.sourceClass ?? "unknown";

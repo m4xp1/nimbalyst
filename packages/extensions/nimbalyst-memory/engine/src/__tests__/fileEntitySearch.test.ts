@@ -183,3 +183,10 @@ describe('file entity import during source-rule changes',()=>{
   }finally{release();await sync;spy.mockRestore();}
  });
 });
+
+it('retains a missing file entity omitted by metadata discovery until an explicit deletion event',async()=>{
+ const root=fixture(),file=path.join(root,'docs/card.md'),raw=markdown('RetainedOwnedFileMarker');writeFileSync(file,raw);const engine=open(root);await engine.syncFileRecords([record()]);const before=engine.status().chunks;
+ unlinkSync(file);await engine.syncFileRecords([]);expect(engine.status().chunks).toBe(before);expect(engine.status().unavailableFiles).toMatchObject([{sourcePath:'tracker:file-card',reason:'missing'}]);expect(await sparse(engine,'RetainedOwnedFileMarker')).toEqual([]);
+ writeFileSync(file,raw);await engine.syncFileRecords([record()]);expect((await sparse(engine,'RetainedOwnedFileMarker')).length).toBe(1);
+ unlinkSync(file);await engine.removeDeletedPath(file);expect(engine.status().chunks).toBe(0);expect(engine.status().unavailableFiles).toEqual([]);
+});

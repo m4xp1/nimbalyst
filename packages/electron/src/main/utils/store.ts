@@ -554,6 +554,10 @@ export interface WorkspaceState {
    * single-folder workspace every user has today.
    */
   attachedFolders?: string[];
+  /** Stable Memory identities survive temporarily missing aliases and process restarts. */
+  memoryRootIdentities?: Array<{id:string|null;path:string;treePaths:string[]}>;
+  /** Changes only on explicit attachments; distinguishes detach/reattach between polls. */
+  memoryAttachmentEpochs?: Record<string,number>;
   windowState?: SessionWindow;
   // only when separate agentic coding window is open
   agenticCodingWindowState?: AgenticCodingWindowState;
@@ -1391,6 +1395,7 @@ export function attachFolderToWorkspace(workspacePath: string, folderPath: strin
 
   const next = updateWorkspaceState(workspacePath, state => {
     state.attachedFolders = [...(state.attachedFolders ?? []), normalized];
+    const epochs=state.memoryAttachmentEpochs??={};epochs[normalized]=(epochs[normalized]??0)+1;
   });
   return { ok: true, attachedFolders: next.attachedFolders ?? [] };
 }

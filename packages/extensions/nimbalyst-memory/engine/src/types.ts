@@ -151,6 +151,7 @@ export interface EmbedderInfo {
  * `info` (the store keys on it) and return one vector per input text.
  */
 export interface Embedder {
+  cancel?():void;
   readonly info: EmbedderInfo;
   /** Embed a batch of texts; result[i] corresponds to texts[i]. */
   embed(texts: string[], context?: import("./embeddingUsage.js").EmbeddingCallContext): Promise<number[][]>;
@@ -178,6 +179,8 @@ export interface SourceSet {
 }
 
 export interface EngineConfig {
+  /** Temporary keyword-only fallback must preserve purchased dense vectors. */
+  preserveStoredEmbeddings?:boolean;
   embeddingContext?:()=>import("./embeddingUsage.js").EmbeddingCallContext;
   /**
    * Absolute PRIMARY root. Bare relative `sourcePath`s resolve against it, and

@@ -6,7 +6,7 @@
  * the ones proving membership did not become permissiveness: an escape attempt
  * against EACH root, a path outside ALL roots, and an unrecognized root id.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach,vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -271,4 +271,28 @@ describe('attached-root ownership and cancellation',()=>{
    expect((await engine.search('ПозднийУдаленныйКорень',30)).filter(hit=>hit.sourcePath.startsWith('@memory/'))).toEqual([]);
   }finally{release?.();await engine.close();}
  });
+});
+
+it('retains both primary and attached vectors through an availability-only round trip',async()=>{
+ const {root,memoryDir,config}=setup();config.sources[1].sourceClass='docs';writeFileSync(path.join(root,'docs/a.md'),'# Primary\nUnchanged primary');writeFileSync(path.join(memoryDir,'a.md'),'# Attached\nUnchanged attached');
+ const fake=new FakeEmbedder(),embed=vi.spyOn(fake,'embed'),engine=MemoryEngine.create(config,fake);
+ const folders=[{id:null,path:root,label:'main',available:true},{id:'memory',path:memoryDir,label:'attached',available:true}];
+ try{engine.setSourceFolders(folders);await engine.indexAll();const chunks=engine.status().chunks;embed.mockClear();
+  engine.setSourceFolders(folders.map(row=>({...row,available:false})));expect(engine.status().chunks).toBe(chunks);expect(engine.status().available!.chunks).toBe(0);
+  engine.setSourceFolders(folders);await vi.waitFor(()=>expect(engine.status().available!.sourceFiles).toBe(2));expect(engine.status().chunks).toBe(chunks);expect(embed).not.toHaveBeenCalled();
+ }finally{await engine.close();}
+});
+it('uses a temporary sparse fallback without destroying purchased vectors or embedding unchanged files on return',async()=>{
+ const {root,config}=setup();writeFileSync(path.join(root,'docs/a.md'),'# Stable\nPreserved during credential unavailability');
+ const fake=new FakeEmbedder(),embed=vi.spyOn(fake,'embed');let engine=MemoryEngine.create(config,fake);await engine.indexAll();const before=engine.status().denseChunks;await engine.close();
+ const sparse={info:{id:'sparse',model:'none',dims:0},embed:vi.fn(async(texts:string[])=>texts.map(()=>[]))};
+ engine=MemoryEngine.create({...config,preserveStoredEmbeddings:true},sparse);try{await engine.indexAll();expect(engine.status().denseChunks).toBe(before);expect(sparse.embed).not.toHaveBeenCalled();}finally{await engine.close();}
+ embed.mockClear();engine=MemoryEngine.create(config,fake);try{await engine.indexAll();expect(embed).not.toHaveBeenCalled();expect(engine.status().denseChunks).toBe(before);}finally{await engine.close();}
+});
+it('only clears the confirmed unavailable snapshot and skips files restored before cleanup',async()=>{
+ const {root,config}=setup();const absent=path.join(root,'docs/absent.md'),returned=path.join(root,'docs/returned.md');writeFileSync(absent,'# Absent\nA');writeFileSync(returned,'# Return\nB');const engine=MemoryEngine.create(config,new FakeEmbedder());
+ try{await engine.indexAll();rmSync(absent);rmSync(returned);await engine.indexAll();const list=engine.status().unavailableFiles!;expect(list).toHaveLength(2);writeFileSync(returned,'# Return\nB');
+  expect(await engine.clearUnavailableFiles(list)).toEqual({removed:1,skipped:1});expect(engine.status().unavailableFiles!.map(row=>row.sourcePath)).toEqual(['docs/returned.md']);
+  await engine.indexAll();expect(engine.status().unavailableFiles).toEqual([]);expect(engine.status().available!.sourceFiles).toBe(1);
+ }finally{await engine.close();}
 });

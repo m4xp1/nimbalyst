@@ -72,6 +72,9 @@ describe('MemoryEngine virtual records', () => {
     }
     writeFileSync(path.join(root, 'docs/gone.md'), '# Obsolete\nquartzorchid');
     const engine = makeEngine(root);
+    // Measure the explicit scan only. A native watcher may legitimately publish
+    // another deletion snapshot during a slow full-suite run; watcher/E2E cover it.
+    const observation=vi.spyOn(engine,'startWatching').mockImplementation(()=>{});
     try {
       await engine.ingestRecords([rec('record:kept', 'Retained record', 'violetcatalog')]);
       const initialLoads = vi.spyOn(SqliteStore.prototype, 'loadAll');
@@ -90,7 +93,7 @@ describe('MemoryEngine virtual records', () => {
         expect((await engine.search('quartzorchid', 100)).some(hit => hit.sourcePath === 'docs/gone.md')).toBe(false);
         expect((await engine.search('violetcatalog', 100)).some(hit => hit.sourcePath === 'record:kept')).toBe(true);
       } finally { loads.mockRestore(); }
-    } finally { await engine.close(); }
+    } finally { observation.mockRestore();await engine.close(); }
   });
 
   it('ingests records and finds them by hybrid search, carrying refType/refId', async () => {

@@ -207,7 +207,7 @@ describe("custom text sources", () => {
     );
     rmSync(path.join(r, "future/русский.md"));
     await vi.waitFor(
-      () => expect(engine.status().bySourceClass.custom ?? 0).toBe(0),
+      () => expect(engine.status().available!.bySourceClass.custom ?? 0).toBe(0),
       { timeout: 9000, interval: 100 }
     );
   });

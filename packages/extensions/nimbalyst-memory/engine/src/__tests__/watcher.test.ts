@@ -105,3 +105,13 @@ it('does not watch or surface errors for an unrelated ZIP and Git lock in an att
  fs.writeFileSync(path.join(attached,'new-CLAUDE-test.md'),'not selected');fs.mkdirSync(path.join(attached,'nested'));fs.writeFileSync(path.join(attached,'nested/CLAUDE.md'),'# New\nNEW_INSTRUCTION_MARKER');await vi.waitFor(async()=>expect((await engine!.search('NEW_INSTRUCTION_MARKER')).some(hit=>hit.text.includes('NEW_INSTRUCTION_MARKER'))).toBe(true),{timeout:8000,interval:100});
  }finally{await engine?.close();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+it('rediscovers a saved file missing again after a return between discovery ticks',async()=>{
+ const fs=await import('node:fs');const os=await import('node:os');const {Indexer}=await import('../indexer/indexer');const {IndexWatcher}=await import('../indexer/watcher');const {SqliteStore}=await import('../store/sqliteStore');const {FakeEmbedder}=await import('./fakeEmbedder');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'watch-return-'));const config={root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]};const store=new SqliteStore(config.dbPath);const indexer=new Indexer(config,store,new FakeEmbedder());const watcher=new IndexWatcher(config,indexer,()=>{});
+ try{fs.mkdirSync(path.join(root,'docs'));const file=path.join(root,'docs/probe.md'),parked=path.join(root,'parked');fs.writeFileSync(file,'# Retained\nRETURN_MARKER');await indexer.indexAll();await (watcher as any).discover(true);const saved=store.loadAll().length;
+ fs.renameSync(file,parked);await (watcher as any).discover();await (watcher as any).flush();expect(indexer.unavailableFiles()).toHaveLength(1);
+ fs.renameSync(parked,file);await indexer.indexFile('docs/probe.md','docs');expect(indexer.unavailableFiles()).toHaveLength(0);
+ fs.renameSync(file,parked);await (watcher as any).discover();await (watcher as any).flush();expect(indexer.unavailableFiles()).toHaveLength(1);expect(store.loadAll()).toHaveLength(saved);
+ }finally{await watcher.stop();store.close();fs.rmSync(root,{recursive:true,force:true});}
+});

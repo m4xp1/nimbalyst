@@ -17,7 +17,7 @@
  * the host advertises `<ext-short>.<name>` and routes a call back to the RPC
  * method of the same `name`.
  */
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { buildTreeIndexState, buildTreePolicyState, describeTreePolicy, resolveTreeTarget } from './treeIndexState';
 import { attachedSources, readAttachedRules, writeAttachedRules, type MemorySourceRoot } from './attachedSources';
 import path from 'node:path';
@@ -223,7 +223,7 @@ function resolvePlanPath(ref: string): string {
  * conversational essentials; the rest stay coding-agent-only.
  */
 const TOOL_DESCRIPTORS = [
-  {name:'list_sources',description:'List the primary and attached folders available to this workspace Memory index. Use their rootId values to restrict search_project_knowledge to one or several folders. This does not change indexing rules or filesystem permissions.',inputSchema:{type:'object',properties:{}},voiceAgent:true},
+  {name:'list_sources',description:'List configured primary and attached folders and their current availability. Unavailable folders keep their saved index but cannot supply current search results. Use their rootId values to restrict search_project_knowledge to one or several folders. This does not change indexing rules or filesystem permissions.',inputSchema:{type:'object',properties:{}},voiceAgent:true},
   {
     name: 'search_project_knowledge',
     description:
@@ -462,7 +462,19 @@ export async function activate(ctx: ActivateCtx) {
     ? await ctx.services.memorySourceRoots()
     : [{id:null,path:realpathSync.native(workspacePath),label:path.basename(workspacePath),available:true,treePaths:[workspacePath]}];
   let rootRules = readAttachedRules(dataDir);
-  let rootSignature = JSON.stringify(sourceRoots);
+  const membership=(roots:MemorySourceRoot[])=>JSON.stringify(roots.map(({id,path,treePaths,attachmentRevision})=>({id,path,treePaths,attachmentRevision:attachmentRevision??0})));
+  let rootSignature=membership(sourceRoots),observationSignature=JSON.stringify(sourceRoots);
+  const manifestFile=path.join(dataDir,'source-roots.json');
+  let previousRoots:MemorySourceRoot[]=[];
+  try{previousRoots=JSON.parse(readFileSync(manifestFile,'utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+  function cleanDetachedRules(before:MemorySourceRoot[],next:MemorySourceRoot[]):string[]{
+    const removed=before.filter(root=>root.id&&!next.some(other=>other.id===root.id&&(other.attachmentRevision??0)===(root.attachmentRevision??0))).map(root=>root.id!);
+    const configured=new Set(next.filter(root=>root.id).map(root=>root.id!));
+    const keep=Object.fromEntries(Object.entries(rootRules).filter(([id])=>configured.has(id)&&!removed.includes(id)));
+    if(JSON.stringify(keep)!==JSON.stringify(rootRules)){writeAttachedRules(dataDir,keep);rootRules=keep;}
+    writeFileSync(manifestFile+'.tmp',JSON.stringify(next));renameSync(manifestFile+'.tmp',manifestFile);return removed;
+  }
+  let startupRemoved=cleanDetachedRules(previousRoots,sourceRoots);
   let disposed = false;
 
   const config: EngineConfig = {
@@ -540,13 +552,15 @@ export async function activate(ctx: ActivateCtx) {
       embedder = await createEmbedder(want.config);
     }
     const identity=JSON.stringify([embedder.info.id,embedder.info.model,embedder.info.dims]);
-    usage??=new EmbeddingUsage(dataDir,identity);usage.reset(identity);
-    if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;embedder={info:original.info,embed:async(texts,context)=>{try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
+    usage??=new EmbeddingUsage(dataDir,identity,{preserveIdentity:want.mode==='sparse'});if(want.mode!=='sparse')usage.reset(identity);
+    if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;let cancelled=false;embedder={info:original.info,cancel:()=>{cancelled=true;original.cancel?.();},embed:async(texts,context)=>{const epoch=usage!.generation();try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}if(cancelled||context?.isCurrent?.()===false)throw Object.assign(Error('Embedding operation was cancelled.'),{code:'EMBEDDING_CANCELLED'});const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context,epoch);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
     selection = want;
     log('info', `[memory] ${want.reason}`);
 
+    config.preserveStoredEmbeddings=want.mode==='sparse';
     engine = MemoryEngine.create(config, embedder);
     engine.setSourceFolders(sourceRoots);
+    for(const id of startupRemoved)await engine.removeSourceRoot(id);startupRemoved=[];
     log('info', `[memory] engine ready: root=${config.root} db=${config.dbPath}`);
 
     // Background initial index + live watch. Never blocks activation; the
@@ -596,7 +610,7 @@ export async function activate(ctx: ActivateCtx) {
   let sourceGeneration=0;
   const sourceUpdateRoots=new Set<string|null>();
   let discoverSources=false;
-  let sourceScheduled=false;
+  let sourceScheduled=false;let sourceTrigger='source-configuration';
   const sourcePaths=new Set<string>();
   let sourceUpdate:{pending:boolean;error:ReturnType<typeof safeIndexError>|null}={pending:false,error:null};
   type RebuildOperation={id:number;state:'queued'|'running'|'completed'|'failed';error:ReturnType<typeof safeIndexError>|null};
@@ -620,13 +634,14 @@ export async function activate(ctx: ActivateCtx) {
       if(disposed||generation!==sourceGeneration)return;
       const paths=discoverSources?undefined:[...sourcePaths];discoverSources=false;sourcePaths.clear();
       configureSources();
-      await requireEngine().updateSources(config.sources!,config.workspaceExclude??[],{paths,incremental:true});
+      await requireEngine().updateSources(config.sources!,config.workspaceExclude??[],{paths,incremental:true,trigger:sourceTrigger});
     })().then(()=>{if(generation===sourceGeneration)sourceUpdate={pending:false,error:null};},error=>{
       if(generation===sourceGeneration)sourceUpdate={pending:false,error:safeIndexError(error)};
       log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');
     });
   }
-  function applySources(paths?:string[],rootId?:string|null):void {
+  function applySources(paths?:string[],rootId?:string|null,trigger='workspace-membership'):void {
+    sourceTrigger=trigger;
     if(!sourceUpdate.pending)sourceUpdateRoots.clear();
     if(rootId===undefined)for(const root of sourceRoots)sourceUpdateRoots.add(root.id);else sourceUpdateRoots.add(rootId);
     sourceGeneration++;sourceScheduled=true;sourceUpdate={pending:true,error:null};
@@ -643,14 +658,14 @@ export async function activate(ctx: ActivateCtx) {
     if (disposed || !ctx.services.memorySourceRoots) return;
     const next = await ctx.services.memorySourceRoots();
     if (disposed) return;
-    const signature = JSON.stringify(next);
-    if (signature !== rootSignature) {
-      sourceRoots = next; rootSignature = signature;
-      engine?.setSourceFolders(next);
-      engine?.restrictSourceRoots(['harness-memory',...next.filter(root=>root.available&&root.id).map(root=>root.id!)]);
-      engine?.cancelFileIndexing();
-      await queueRuleChange(async()=>{applySources();});
-    }
+    const signature=membership(next),observed=JSON.stringify(next);
+    if(observed===observationSignature)return;
+    observationSignature=observed;const before=sourceRoots;sourceRoots=next;engine?.setSourceFolders(next);
+    if(signature!==rootSignature){
+      rootSignature=signature;engine?.cancelFileIndexing();
+      await queueRuleChange(async()=>{const removed=cleanDetachedRules(before,next);for(const id of removed)await engine?.removeSourceRoot(id);applySources();});
+      log('info','[memory] source configuration changed; reconciliation queued');
+    }else log('info','[memory] source availability changed; stored embeddings retained',{changes:next.filter(root=>before.find(old=>old.id===root.id)?.available!==root.available).map(root=>({rootId:root.id,available:root.available}))});
   }
   const sourcePoll = ctx.services.memorySourceRoots ? setInterval(() => {
     void syncSourceRoots().catch(error => log('error', '[memory] source roots: '+String(error)));
@@ -664,9 +679,9 @@ export async function activate(ctx: ActivateCtx) {
       inputSchema: t.inputSchema,
       voiceAgent: t.voiceAgent,
       scope: 'global' as const,
-    })), ...['get_embedding_usage','set_embedding_logging','get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
+    })), ...['clear_unavailable','get_embedding_usage','set_embedding_logging','get_sources','set_sources','get_source_roots','get_tree_index_state','set_path_override'].map(name => ({
       name, description: 'Project text source settings (owning settings panel only).',
-      inputSchema: name==='get_embedding_usage'?{type:'object',properties:{period:{type:'string',enum:['today','7d','all']}},additionalProperties:false}:name==='set_embedding_logging'?{type:'object',properties:{enabled:{type:'boolean'}},required:['enabled'],additionalProperties:false}:{type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
+      inputSchema: name==='clear_unavailable'?{type:'object',properties:{confirmed:{type:'boolean'},files:{type:'array',maxItems:10000,items:{type:'object',properties:{sourcePath:{type:'string'},updatedAt:{type:'number'}},required:['sourcePath','updatedAt'],additionalProperties:false}}},required:['confirmed','files'],additionalProperties:false}:name==='get_embedding_usage'?{type:'object',properties:{period:{type:'string',enum:['today','7d','all']}},additionalProperties:false}:name==='set_embedding_logging'?{type:'object',properties:{enabled:{type:'boolean'}},required:['enabled'],additionalProperties:false}:{type:'object',properties:{rootId:{type:'string'},includeRules:{type:'boolean'},expectedRevision:{type:'string'},include:{type:'array',items:{type:'string'}},exclude:{type:'array',items:{type:'string'}}}},
       panelOnly:true, voiceAgent:false, scope:'global' as const,
     }))]
   );
@@ -701,11 +716,16 @@ export async function activate(ctx: ActivateCtx) {
             exclude:current.exclude.filter(rule=>key(sourceRulePath(rule)??rule)!==key(target.relative))});
           if(params.mode!=='inherit')next[params.mode!].push(pattern);
           if(id){const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;}else{writeSourceRules(dataDir,next);sourceRules=next;}
-          applySources([target.absolute],id);
+          applySources([target.absolute],id,'path-override');
           return{rules:next,rootId:id,revision:revision(next),indexingQueued:true,treePolicy:treePolicy()};
         };
         return queueRuleChange(apply);
       },
+      clear_unavailable:async(params:{confirmed?:boolean;files?:Array<{sourcePath:string;updatedAt:number}>})=>{
+        if(params?.confirmed!==true||!Array.isArray(params.files)||params.files.length>10000||params.files.some(row=>typeof row?.sourcePath!=='string'||!Number.isFinite(row.updatedAt)))throw Error('Confirm the current unavailable-file list before clearing it.');
+        return requireEngine().clearUnavailableFiles(params.files);
+      },
+      notifyFileDeleted:async(params:{path:string})=>requireEngine().removeDeletedPath(params.path),
       get_embedding_usage:async(params?:{period?:'today'|'7d'|'all'})=>{const policy=await diagnosticsPolicy();const period=['today','7d','all'].includes(params?.period??'today')?params?.period??'today':'today';return{...usage?.summary(period),developerMode:policy.developerMode};},
       set_embedding_logging:async(params:{enabled:boolean})=>{if(typeof params?.enabled!=='boolean')throw Error('enabled must be boolean');const policy=await ctx.services.embeddingDiagnostics?.({op:'set',enabled:params.enabled});usage?.setLogging(policy?.developerMode===true&&policy.loggingEnabled);return{enabled:policy?.loggingEnabled===true};},
       get_sources: async (params?: {rootId?: string | null}) => {
@@ -725,7 +745,7 @@ export async function activate(ctx: ActivateCtx) {
             if (!sourceRoots.some(root=>root.id===id)) throw Error('Unknown or detached source root');
             const saved={...rootRules,[id]:next};writeAttachedRules(dataDir,saved);rootRules=saved;
           } else { writeSourceRules(dataDir,next);sourceRules=next; }
-          applySources(undefined,id??null);
+          applySources(undefined,id??null,'source-rules');
           return {rules:next,revision:revision(next),rootId:id??null,indexingQueued:true,treePolicy:treePolicy()};
         };
         return queueRuleChange(apply);

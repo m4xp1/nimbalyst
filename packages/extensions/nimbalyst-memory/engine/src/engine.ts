@@ -10,7 +10,7 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { IndexIssueLedger, type IndexIssueScope, safeIndexError, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
+import { IndexIssueLedger, type IndexIssueScope, safeIndexError, isProviderIndexFailure, type FileIndexStatus, type SafeIndexError, type FileOperation } from './indexStatus.js';
 import type {
   Embedder,
   EngineConfig,
@@ -35,6 +35,7 @@ import { Retriever } from './retrieval/retriever.js';
 import { FactsStore, type RecallQuery, type RememberInput } from './facts/facts.js';
 
 export interface EngineStatus {
+  unavailableFiles?:import('./indexStatus.js').UnavailableFile[];
   sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?: {chunks:number;sourceFiles:number;indexedFiles:number;sessions:number;trackers:number;bySourceClass:Record<string,number>;lastIndexedAt:number|null};
   operation?:FileOperation|null;
@@ -133,9 +134,20 @@ export class MemoryEngine {
     return this.roots.filter(root=>root.id!=='harness-memory').map(root=>({id:root.id,path:root.dir,label:path.basename(root.dir)||root.dir,available:root.id===null||!this.availableSourceRoots||this.availableSourceRoots.has(root.id)}));
   }
   setSourceFolders(folders:MemorySourceFolder[]):void{
+    const recovering=new Set(folders.filter(root=>root.available&&this.sourceFolders?.some(previous=>previous.id===root.id&&!previous.available)).map(root=>root.id));
     this.sourceFolders=folders.filter(root=>root.id!=='harness-memory').map(root=>({...root}));
     this.availableSourceRoots=new Set(folders.filter(root=>root.available&&root.id).map(root=>root.id!));
+    this.indexer.setSourceAvailability(folders);
     this.updateFileRootOwners();this.invalidateView();
+    if(recovering.size)void this.fileWork.run(async()=>{
+      if(this.closed)return;
+      const files=this.indexer.unavailableFiles().filter(file=>recovering.has(file.rootId));
+      for(const file of files){if(this.closed||!this.sourceRootAllowed(file.sourcePath))continue;
+        try{await this.indexer.indexFile(file.sourcePath,this.indexer.classify(file.sourcePath)?.sourceClass??'unknown');}
+        catch(error){this.config.onLog?.('warn','[memory] recovered source verification: '+safeIndexError(error).category);if(isProviderIndexFailure(error))break;}
+      }
+      this.refreshSnapshot();
+    }).catch(error=>this.config.onLog?.('warn','[memory] source recovery failed: '+safeIndexError(error).category));
   }
   searchScope(rootIds?:Array<string|null>):MemorySearchScope{
     const folders=this.listSources();
@@ -170,7 +182,7 @@ export class MemoryEngine {
     if(saved)this.queryVectors.delete(key);
     const pending=this.queryRequests.get(key);if(pending)return pending;
     const request=(async()=>{
-      const vectors=await this.embedder.embed([query],{reason:"search",origin:context?.origin??"unknown",...context});validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
+      const vectors=await this.embedder.embed([query],{isCurrent:()=>!this.closed,reason:"search",origin:context?.origin??"unknown",...context});validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
       const vector=vectors[0];
       if(!this.closed){this.queryVectors.set(key,{vector,expires:Date.now()+300000});while(this.queryVectors.size>32)this.queryVectors.delete(this.queryVectors.keys().next().value!);}
       return vector;
@@ -198,13 +210,13 @@ export class MemoryEngine {
     store: SqliteStore
   ) {
     this.store = store;
-    config.embeddingContext=()=>({operationId:this.operation?String(this.operation.id):undefined,reason:this.operation?.kind==='scan'?'startup-or-scan':this.operation?.kind??'background',origin:'background'});
+    config.embeddingContext=()=>({operationId:this.operation?String(this.operation.id):undefined,reason:this.operation?.kind==='scan'?'startup-or-scan':this.operation?.kind??'background',trigger:this.operation?.trigger??this.operation?.kind??'background',origin:'background'});
     this.roots = resolveRoots(config.root, config.sources);
     this.indexer = new Indexer(config, store, embedder);
     const saved=store.getIndexDiagnostics().scans;
     this.fileIndex=saved.all??this.fileIndex;
     this.issues=new IndexIssueLedger(store.getIndexDiagnostics().issues??[]);
-    if(this.fileIndex.globalError){const prior=this.fileIndex.globalError;this.issues.record({}, {stage:'unknown'});const rows=this.issues.list();rows.find(row=>row.stage==='unknown'&&row.rootId===undefined&&row.state==='active')!.error=prior;this.issues=new IndexIssueLedger(rows);delete this.fileIndex.globalError;}
+    if(this.fileIndex.globalError){const prior=this.fileIndex.globalError;this.issues.record({}, {stage:'unknown'});const rows=this.issues.list();const legacy=rows.find(row=>row.stage==='unknown'&&row.rootId===undefined&&row.state==='active')!;legacy.error=prior;delete legacy.firstSeenAt;this.issues=new IndexIssueLedger(rows);delete this.fileIndex.globalError;}
     this.rootScans={...saved};delete this.rootScans.all;
     this.facts = new FactsStore(config.root, config.factsDir);
     this.snapshot=store.loadAll();
@@ -221,7 +233,7 @@ export class MemoryEngine {
     let changed = false;
     if (!prior) {
       store.setEmbedderInfo(info);
-    } else if (prior.id !== info.id || prior.model !== info.model || prior.dims !== info.dims) {
+    } else if (!(config.preserveStoredEmbeddings&&info.dims===0) && (prior.id !== info.id || prior.model !== info.model || prior.dims !== info.dims)) {
       // Non-comparable vectors — wipe and re-key. Caller must re-index.
       store.reset();
       store.setEmbedderInfo(info);
@@ -392,7 +404,7 @@ export class MemoryEngine {
   cancelFileIndexing(): void { this.indexer.cancel(); }
 
   updateSources(
-    sources:SourceSet[],workspaceExclude:string[],options?:{paths?:string[];incremental?:boolean}
+    sources:SourceSet[],workspaceExclude:string[],options?:{paths?:string[];incremental?:boolean;trigger?:string}
   ):Promise<{indexed:number;files:number}> {
     if(this.closed)return Promise.reject(Error('Memory is closed.'));
     if(!this.pendingReadableSources)this.pendingReadableSources=new Set(this.snapshot.filter(chunk=>this.readable(chunk)).map(chunk=>chunk.sourcePath));
@@ -409,9 +421,10 @@ export class MemoryEngine {
     this.issues.retainRoots(new Set(this.roots.map(root=>root.id)));
     this.indexer=new Indexer(this.config,this.store,this.embedder);
     this.indexer.inheritState(previous);
+    if(this.sourceFolders)this.indexer.setSourceAvailability(this.sourceFolders);
     const generation=++this.policyGeneration;
     this.watcher?.configure(this.config,this.indexer);
-    const queued=this.beginOperation('rules','queued');
+    const queued=this.beginOperation('rules','queued');queued.trigger=options?.trigger;
     return this.fileWork.run(async()=>{
       if(generation!==this.policyGeneration||this.closed)return{indexed:0,files:0};
       const indexer=this.indexer,paths=this.pendingDiscovery?undefined:[...this.pendingPaths];
@@ -442,6 +455,43 @@ export class MemoryEngine {
     this.watcher.start(seedOnly);
   }
 
+  /** Confirmed cleanup takes a metadata snapshot; never trusts caller paths as filesystem targets. */
+  async clearUnavailableFiles(files:Array<{sourcePath:string;updatedAt:number}>):Promise<{removed:number;skipped:number}>{
+    return this.fileWork.run(async()=>{
+      const entities=new Map(this.store.getFileRecords().map(record=>[record.id,record.file.path]));
+      let removed=0,skipped=0;const current=new Map(this.indexer.unavailableFiles().map(row=>[row.sourcePath,row]));
+      for(const expected of files){const row=current.get(expected.sourcePath);if(!row||row.updatedAt!==expected.updatedAt){skipped++;continue;}
+        let absent=false;
+        try{const target=resolveInRoots(this.roots,entities.get(row.sourcePath)??row.sourcePath);await stat(target.abs);}catch(error){absent=['ENOENT','ENOTDIR','EACCES','EPERM','EBUSY','EIO','ETIMEDOUT'].includes((error as NodeJS.ErrnoException).code??'');}
+        if(!absent){skipped++;continue;}
+        this.config.onLog?.('info','[memory] confirmed unavailable index cleanup: '+row.sourcePath);
+        this.indexer.removeFile(row.sourcePath);removed++;
+      }
+      this.refreshSnapshot();return{removed,skipped};
+    });
+  }
+  /** The host calls this only after its explicit trash operation has succeeded. */
+  async removeDeletedPath(absolute:string):Promise<void>{
+    if(!path.isAbsolute(absolute))throw Error('An absolute deleted path is required.');
+    await this.fileWork.run(async()=>{
+      const entities=new Map(this.store.getFileRecords().map(record=>[record.id,record.file.path]));
+      for(const sourcePath of new Set([...this.store.fileSourcePaths(),...entities.keys()])){
+        let target:string;try{target=resolveInRoots(this.roots,entities.get(sourcePath)??sourcePath).abs;}catch{continue;}
+        const relative=path.relative(absolute,target);if(relative===''||relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative)){
+          // A recreation racing a delayed host event is never erased.
+          try{await stat(target);continue;}catch(error){if(!['ENOENT','ENOTDIR'].includes((error as NodeJS.ErrnoException).code??''))continue;}
+          this.indexer.removeFile(sourcePath);
+        }
+      }
+      this.refreshSnapshot();
+    });
+  }
+
+  /** Explicit persisted workspace membership change, never an availability probe. */
+  async removeSourceRoot(rootId:string):Promise<void>{
+    await this.fileWork.run(async()=>{for(const sp of this.store.fileSourcePaths())if(sp.startsWith('@'+rootId+'/'))this.indexer.removeFile(sp);this.refreshSnapshot();});
+  }
+
   // --- Virtual records (DB-resident content: trackers, sessions, …) ---------
 
   /**
@@ -454,7 +504,9 @@ export class MemoryEngine {
    * the synthetic source path and the `removeRecords` key.
    */
   async ingestRecords(records: VirtualRecord[], context?:import("./embeddingUsage.js").EmbeddingCallContext): Promise<{ ingested: number }> {
+    if(this.closed)return{ingested:0};
     const { embedded, changed } = await this.indexer.indexRecords(records,context);
+    if(this.closed)return{ingested:0};
     const projection=this.store.getSessionProjection();
     for(const record of records) if(record.refType==='session') projection.parents[record.id]=record.parentSessionId??null;
     this.store.setSessionProjection(projection);
@@ -648,7 +700,7 @@ export class MemoryEngine {
   /** Delete a fact by its relative sourcePath. Returns true if removed. The
    *  fact's chunks are pruned from the shadow index on the next index pass. */
   deleteFact(sourcePath: string): Promise<boolean> {
-    return this.facts.delete(sourcePath);
+    return this.facts.delete(sourcePath).then(async removed=>{if(removed)await this.fileWork.run(async()=>{this.indexer.removeFile(sourcePath);this.refreshSnapshot();});return removed;});
   }
 
   // --- Lifecycle -----------------------------------------------------------
@@ -669,7 +721,7 @@ export class MemoryEngine {
     this.aggregateCache.set(rootId,counts);
     }
     return {
-      ...counts,operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
+      ...counts,unavailableFiles:this.indexer.unavailableFiles().filter(row=>rootId===undefined||row.rootId===rootId),operation:rootId===undefined?this.operation:this.rootOperations[rootId??'primary']??null,lastFullScan:rootId===undefined?{...this.fileIndex}:this.rootScans[rootId??'primary'],
       embedder: this.embedder.info,
       embedderChanged: this.embedderChanged,
       indexing: rootId===undefined?this.operation?.state==='running'||this.operation?.state==='queued':this.rootOperations[rootId??'primary']?.state==='running',
@@ -688,7 +740,7 @@ export class MemoryEngine {
   }
 
   async close(): Promise<void> {
-    this.closed=true;this.indexer.cancel();
+    this.closed=true;this.indexer.cancel();this.embedder.cancel?.();
     this.queryVectors.clear();this.queryRequests.clear();
     await this.fileWork.idle();
     await this.waitForIndexing();

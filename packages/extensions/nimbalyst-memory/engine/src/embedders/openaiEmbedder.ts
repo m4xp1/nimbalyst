@@ -29,6 +29,9 @@ const DEFAULT_BATCH = 128;
 
 export class OpenAIEmbedder implements Embedder {
   readonly info: EmbedderInfo;
+  private cancelled=false;
+  cancel():void{this.cancelled=true;}
+  private ensureCurrent(context:EmbeddingCallContext,epoch?:string):void{if(this.cancelled||context.isCurrent?.()===false||epoch!==undefined&&epoch!==this.usage?.generation())throw Object.assign(Error('Embedding operation was cancelled.'),{code:'EMBEDDING_CANCELLED'});}
   private apiKey: string;
   private baseUrl: string;
   private batchSize: number;
@@ -51,6 +54,7 @@ export class OpenAIEmbedder implements Embedder {
 
   async embed(texts: string[],context:EmbeddingCallContext={}): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const epoch=this.usage?.generation();this.ensureCurrent(context,epoch);
     const sizes = texts.map(text => utf8Bytes(text));
     if (sizes.some(size => size > MAX_EMBEDDING_INPUT_BYTES)) {
       throw Object.assign(new Error('Embedding input exceeds the safe input length limit; shorten the query or re-index the source.'), {code:'EMBEDDING_INPUT_TOO_LARGE'});
@@ -59,17 +63,19 @@ export class OpenAIEmbedder implements Embedder {
     let batch: string[] = [], bytes = 0;
     for (let i = 0; i < texts.length; i++) {
       if (batch.length && (batch.length >= this.batchSize || bytes + sizes[i] > MAX_EMBEDDING_BATCH_BYTES)) {
-        out.push(...await this.embedBatch(batch,{...context,sources:context.sources?.slice(i-batch.length,i)})); batch = []; bytes = 0;
+        out.push(...await this.embedBatch(batch,{...context,sources:context.sources?.slice(i-batch.length,i)},epoch)); batch = []; bytes = 0;
       }
       batch.push(texts[i]); bytes += sizes[i];
     }
-    if (batch.length) out.push(...await this.embedBatch(batch,{...context,sources:context.sources?.slice(texts.length-batch.length)}));
+    if (batch.length) out.push(...await this.embedBatch(batch,{...context,sources:context.sources?.slice(texts.length-batch.length)},epoch));
     return out;
   }
 
-  private async embedBatch(batch: string[],context:EmbeddingCallContext): Promise<number[][]> {
+  private async embedBatch(batch: string[],context:EmbeddingCallContext,epoch?:string): Promise<number[][]> {
+    this.ensureCurrent(context,epoch);
     if(!await this.requestAllowed())throw Object.assign(Error("OpenAI API access is disabled for this launch."),{code:"OPENAI_ACCESS_DISABLED"});
-    const request=this.usage?.start(batch.length,batch.reduce((sum,text)=>sum+utf8Bytes(text),0),context);
+    this.ensureCurrent(context,epoch);
+    const request=this.usage?.start(batch.length,batch.reduce((sum,text)=>sum+utf8Bytes(text),0),context,epoch);
     let tokens:number|undefined,providerRequestId:string|undefined;
     try {
     const body: Record<string, unknown> = { model: this.info.model, input: batch };
@@ -99,7 +105,7 @@ export class OpenAIEmbedder implements Embedder {
     const vectors=json.data.slice().sort((a,b)=>a.index-b.index).map(row=>row.embedding);
     validateEmbeddingResponse(vectors,batch.length,this.info.dims);
     try{await this.refreshUsagePolicy?.();}catch{this.usage?.setLogging(false);}
-    if(request)this.usage?.finish(request,{state:"succeeded",tokens,providerRequestId});return vectors;
+    if(request)this.usage?.finish(request,{state:"succeeded",tokens,providerRequestId});this.ensureCurrent(context,epoch);return vectors;
     }catch(error){try{await this.refreshUsagePolicy?.();}catch{this.usage?.setLogging(false);}if(request)this.usage?.finish(request,{state:"failed",tokens,providerRequestId,code:(error as {code?:string;status?:number}).code??((error as {status?:number}).status?"HTTP_"+(error as {status:number}).status:"NETWORK_OR_UNKNOWN")});throw error;}
   }
 }

@@ -10,7 +10,7 @@ import {execFileSync} from 'node:child_process';
 // Real host broker, utility backend, MCP and UI; artificial files and no provider keys.
 for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attached workspace search ('+database+')',()=>{
  let app:ElectronApplication,page:Page,client:Client,temp:string,workspace:string,attached:string,permissionOnly:string;
- let tools:{name:string}[]=[];
+ let tools:{name:string}[]=[];let applicationClosed=true;
  const root=path.resolve(__dirname,'../../..');
  const invoke=(channel:string,...args:any[])=>page.evaluate(({channel,args})=>(window as any).electronAPI.invoke(channel,...args),{channel,args});
  const panel=(name:string,args:any={})=>invoke('extensions:ai-call-backend-tool',{workspacePath:workspace,callerExtensionId:'com.nimbalyst.memory',toolName:'memory.'+name,args});
@@ -25,6 +25,41 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await page.locator('.unified-quick-open-tab').getByText(tab,{exact:true}).click();
   await page.getByTestId('unified-quick-open-search').fill(query);
  }
+ async function closeWorkspace(){
+  await client?.close();
+  if(!app||applicationClosed)return;
+  const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);applicationClosed=true;}
+ }
+ async function launchWorkspace(reuse=false){
+  const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
+  await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(mainPath))+');require('+JSON.stringify(mainPath)+');');
+  const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
+  app=await _electron.launch({...(process.env.NIMBALYST_E2E_RECORD_VIDEO==='1'?{recordVideo:{dir:path.join(root,'e2e_test_output/search-results/attached-videos'),size:{width:1280,height:720}}}:{}),...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+path.join(temp,'user')]:[isolate]),'--workspace',workspace],cwd:root,timeout:45000,
+   env:{...clean,PLAYWRIGHT:'1',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',TEMP:path.join(temp,'tmp'),TMP:path.join(temp,'tmp')}});
+  applicationClosed=false;page=await app.firstWindow();
+  const startupErrors:string[]=[];page.on('pageerror',error=>startupErrors.push(error.message));page.on('console',message=>{if(message.type()==='error')startupErrors.push(message.text());});
+  try{await page.getByTestId('tracker-mode-button').waitFor();}catch(error){
+    const diagnostic={url:page.url(),errors:startupErrors,windows:await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().map(window=>({url:window.webContents.getURL(),loading:window.webContents.isLoading()}))),document:await page.evaluate(()=>({state:document.readyState,text:document.body?.innerText.slice(0,1500)})).catch(()=>null)};
+    await fs.writeFile(path.join(temp,'startup-failure.json'),JSON.stringify(diagnostic,null,2));throw error;
+  }
+  expect(realpathSync.native(await app.evaluate(({app})=>app.getPath('userData')))).toBe(realpathSync.native(path.join(temp,'user')));
+  await app.evaluate(({session,dialog})=>{
+   (globalThis as any).__attachedOpenAI=0;
+   session.defaultSession.webRequest.onBeforeRequest({urls:['*://*.openai.com/*','*://openai.com/*']},(_details,cb)=>{(globalThis as any).__attachedOpenAI++;cb({cancel:true});});
+   (dialog as any).showMessageBox=async()=>({response:0,checkboxChecked:false});
+  });
+  if(!reuse)expect((await invoke('test:insert-session',{id:'attached-search-agent',workspaceId:workspace,provider:'openai-codex',title:'Attached search probe'})).success).toBe(true);
+  expect((await invoke('db:migration:get-status')).activeBackend).toBe(database);
+  await invoke('permissions:trustWorkspace',workspace);
+  await invoke('extensions:list-installed');await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
+  const {port}=await invoke('mcp:get-server-port'),{token}=await invoke('mcp:get-auth-token');
+  client=new Client({name:'attached-search-probe',version:'1'},{capabilities:{}});
+  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+port+'/mcp/ext/memory?workspacePath='+encodeURIComponent(workspace)+'&sessionId=attached-search-agent'),{requestInit:{headers:{Authorization:'Bearer '+token}}}));
+  await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
+  await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(tool=>tool.name.endsWith('search_project_knowledge'));},{timeout:30000}).toBe(true);
+  // IPC enablement starts the backend; reload lets normal renderer discovery load its settings contribution.
+  await page.reload();await page.getByTestId('files-mode-button').waitFor();
+ }
  test.beforeAll(async()=>{
   temp=await fs.mkdtemp(path.join(os.tmpdir(),'nimbalyst-attached-e2e-'));
   workspace=path.join(temp,'main');attached=path.join(temp,'link');permissionOnly=path.join(temp,'permissions-only');
@@ -38,32 +73,10 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await fs.writeFile(path.join(attached,'archive','archive.md'),'# Archive\nАрхивПодключеннойПапкиМаркер');
   await fs.mkdir(path.join(temp,'db'));
   if(database==='pglite')await fs.writeFile(path.join(temp,'db','database-backend.json'),JSON.stringify({backend:'pglite',setAt:new Date().toISOString(),setBy:'rollback'}));
-  const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
-  await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(mainPath))+');require('+JSON.stringify(mainPath)+');');
-  const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
-  app=await _electron.launch({...(process.env.NIMBALYST_E2E_RECORD_VIDEO==='1'?{recordVideo:{dir:path.join(root,'e2e_test_output/search-results/attached-videos'),size:{width:1280,height:720}}}:{}),...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+path.join(temp,'user')]:[isolate]),'--workspace',workspace],cwd:root,timeout:45000,
-   env:{...clean,PLAYWRIGHT:'1',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',TEMP:path.join(temp,'tmp'),TMP:path.join(temp,'tmp')}});
-  page=await app.firstWindow();await page.getByTestId('tracker-mode-button').waitFor();
-  expect(realpathSync.native(await app.evaluate(({app})=>app.getPath('userData')))).toBe(realpathSync.native(path.join(temp,'user')));
-  await app.evaluate(({session,dialog})=>{
-   (globalThis as any).__attachedOpenAI=0;
-   session.defaultSession.webRequest.onBeforeRequest({urls:['*://*.openai.com/*','*://openai.com/*']},(_details,cb)=>{(globalThis as any).__attachedOpenAI++;cb({cancel:true});});
-   (dialog as any).showMessageBox=async()=>({response:0,checkboxChecked:false});
-  });
-  expect((await invoke('test:insert-session',{id:'attached-search-agent',workspaceId:workspace,provider:'openai-codex',title:'Attached search probe'})).success).toBe(true);
-  expect((await invoke('db:migration:get-status')).activeBackend).toBe(database);
-  await invoke('permissions:trustWorkspace',workspace);
-  await invoke('extensions:list-installed');await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
-  const {port}=await invoke('mcp:get-server-port'),{token}=await invoke('mcp:get-auth-token');
-  client=new Client({name:'attached-search-probe',version:'1'},{capabilities:{}});
-  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:'+port+'/mcp/ext/memory?workspacePath='+encodeURIComponent(workspace)+'&sessionId=attached-search-agent'),{requestInit:{headers:{Authorization:'Bearer '+token}}}));
-  await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
-  await expect.poll(async()=>{tools=(await client.listTools()).tools;return tools.some(tool=>tool.name.endsWith('search_project_knowledge'));},{timeout:30000}).toBe(true);
-  // IPC enablement starts the backend; reload lets normal renderer discovery load its settings contribution.
-  await page.reload();await page.getByTestId('files-mode-button').waitFor();
+  await launchWorkspace();
  },90000);
  test.afterEach(async({},info)=>{if(page&&info.status!==info.expectedStatus)await page.screenshot({path:info.outputPath('attached-search-failure.png')});});
- test.afterAll(async()=>{await client?.close();if(app){const timer=setTimeout(()=>app.process().kill(),5000);try{await app.close();}finally{clearTimeout(timer);}}});
+ test.afterAll(closeWorkspace);
  test('keeps permission-only directories separate and searches/opens attached files through UI and Memory',async()=>{
   await invoke('permissions:addAdditionalDirectory',workspace,permissionOnly,false);
   expect((await invoke('workspace:get-folders',{workspacePath:workspace})).folders).not.toContain(permissionOnly);
@@ -107,7 +120,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await search('Files','Скрытый');await expect(page.locator('.files-pane .unified-quick-open-item').filter({hasText:'Скрытый.md'})).toHaveCount(0);
   await search('In Files','СкрытыйКонтентМаркер');await expect(page.locator('.in-files-pane .unified-quick-open-item')).toHaveCount(0);
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
- },120000);
+ });
  test('controls Memory rules from Files and scopes Coverage to an attached folder',async()=>{
   await page.keyboard.press('Escape');
   await fs.writeFile(path.join(workspace,'docs','TreeProbe.md'),'# Tree\nТочечноеДеревоМаркер');
@@ -154,6 +167,29 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect(page.getByRole('textbox',{name:'Source excludes'})).toHaveValue('docs');
   await sourceIncludes.fill('');await sourceIncludes.blur();
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
+  // A real missing/returning attached source keeps its saved index in both app DB modes.
+  await fs.writeFile(path.join(attached,'docs','RetainedProbe.md'),'# Retained\nУдержанныйИндексМаркер');
+  await panel('set_sources',{rootId:link.id,include:['docs/RetainedProbe.md'],exclude:[]});
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'УдержанныйИндексМаркер'})).chunks.length).toBe(1);
+  const retainedFile=path.join(attached,'docs','RetainedProbe.md'),parked=path.join(temp,'parked-RetainedProbe.md');
+  const storedBefore=await panel('status',{rootId:link.id});
+  await fs.rename(retainedFile,parked);
+  await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles?.some((row:any)=>row.relativePath==='docs/RetainedProbe.md')).toBe(true);
+  expect((await panel('status',{rootId:link.id})).chunks).toBe(storedBefore.chunks);
+  await expect(coverage.locator('.nimbalyst-memory-unavailable-files')).toContainText('docs/RetainedProbe.md');
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'УдержанныйИндексМаркер'})).chunks.length).toBe(0);
+  await fs.rename(parked,retainedFile);
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'УдержанныйИндексМаркер'})).chunks.length).toBe(1);
+  await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles.length).toBe(0);
+  await fs.rename(retainedFile,parked);
+  await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles.length).toBeGreaterThan(0);
+  await coverage.getByRole('button',{name:'Clear all',exact:true}).click();
+  await expect(coverage.getByRole('button',{name:'Confirm cleanup'})).toBeVisible();
+  await coverage.getByRole('button',{name:'Cancel cleanup'}).click();
+  await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles.length).toBeGreaterThan(0);
+  await coverage.getByRole('button',{name:'Clear all',exact:true}).click();await coverage.getByRole('button',{name:'Confirm cleanup'}).click();
+  await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles.length).toBe(0);
+  await fs.rename(parked,retainedFile);
   for(const folder of (await invoke('workspace:get-folders',{workspacePath:workspace})).folders.slice(1))expect((await invoke('workspace:detach-folder',{workspacePath:workspace,folderPath:folder})).success).toBe(true);
   await expect(select).toHaveCount(0);await expect(page.getByRole('combobox',{name:'Source folder',exact:true})).toHaveCount(0);
   await coverage.screenshot({path:test.info().outputPath('memory-coverage-summary.png')});
@@ -165,6 +201,44 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect(page.locator('.file-tree-icon[data-memory-index="included"]')).toHaveCount(0);
   await docs.click({button:'right'});await expect(page.getByRole('button',{name:'Include in Memory index',exact:true})).toHaveCount(0);await page.keyboard.press('Escape');
   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
- },120000);
+ });
+
+ test('retains an unavailable attached root across an application restart and permits explicit Detach',async()=>{
+  await invoke('extensions:set-enabled','com.nimbalyst.memory',true);
+  expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:attached})).success).toBe(true);
+  let linked:any;await expect.poll(async()=>{try{linked=(await panel('get_source_roots')).find((entry:any)=>entry.label==='link');return !!linked;}catch{return false;}}).toBe(true);
+  await panel('set_sources',{rootId:linked.id,include:['archive/**'],exclude:[]});
+  await expect.poll(async()=>(await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер',rootIds:[linked.id]})).chunks.length).toBe(1);
+  const saved=await panel('status',{rootId:linked.id}),offline=attached+'-offline';
+  // Prepare restart state with the app fully closed; Windows may keep active roots open.
+  // Live loss/recovery is covered by engine regressions and the preceding file scenario.
+  await closeWorkspace();await fs.rename(attached,offline);
+  try{
+   await launchWorkspace(true);
+   const restored=(await panel('get_source_roots')).find((entry:any)=>entry.id===linked.id);expect(restored.available).toBe(false);
+   expect((await panel('get_sources',{rootId:linked.id})).include).toEqual(['archive/**']);
+   expect((await panel('status',{rootId:linked.id})).chunks).toBe(saved.chunks);
+   expect((await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер',rootIds:[linked.id]})).chunks).toEqual([]);
+   await page.getByTestId('files-mode-button').click();
+   const showFiles=page.getByRole('button',{name:'Show Files sidebar',exact:true});if(await showFiles.isVisible())await showFiles.click();
+   const treeRoot=page.locator('.file-tree-directory.workspace-root').filter({has:page.locator('.file-tree-name',{hasText:/^link$/})});await expect(treeRoot).toBeVisible();
+   await treeRoot.click({button:'right'});await page.getByTestId('context-menu-detach-folder').click();
+   await expect.poll(async()=>(await panel('get_source_roots')).some((entry:any)=>entry.id===linked.id)).toBe(false);
+   expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
+
+  }finally{
+   await closeWorkspace();
+   if(await fs.stat(offline).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))await fs.rename(offline,attached);
+  }
+ });
+
+ test('reattaches the detached root with default rules after another restart',async()=>{
+  await closeWorkspace();await launchWorkspace(true);
+  expect((await invoke('workspace:attach-folder',{workspacePath:workspace,folderPath:attached})).success).toBe(true);
+  let linked:any;await expect.poll(async()=>{linked=(await panel('get_source_roots')).find((entry:any)=>entry.label==='link');return !!linked;}).toBe(true);
+  expect((await panel('get_sources',{rootId:linked.id})).include).toEqual([]);
+  expect((await call('search_project_knowledge',{query:'АрхивПодключеннойПапкиМаркер',rootIds:[linked.id]})).chunks).toEqual([]);
+  expect(await app.evaluate(()=>(globalThis as any).__attachedOpenAI)).toBe(0);
+ });
 
 });

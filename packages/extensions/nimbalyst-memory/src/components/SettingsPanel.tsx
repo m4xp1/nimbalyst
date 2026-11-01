@@ -24,6 +24,7 @@ import { coveragePalette } from './coveragePalette';
 import { MemorySourcePicker, useMemorySearchRoots } from '@nimbalyst/runtime';
 
 interface IndexStatus {
+  unavailableFiles?:import('../../engine/dist/index.js').UnavailableFile[];
   sourceProjection?:{version:number;pendingFiles:number;warnings:Array<{sourcePath:string;relativePath:string;warning:string}>};
   available?:{chunks:number;sourceFiles:number;indexedFiles:number;sessions?:number;trackers?:number;bySourceClass:Record<string,number>;lastIndexedAt?:number|null};
   sourceUpdate?:{pending:boolean;error:SafeIndexError|null};
@@ -140,10 +141,14 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const muted = 'var(--nim-text-muted)';
 
   const [status, setStatus] = useState<IndexStatus | null>(null);
+  const [cleanupFiles,setCleanupFiles]=useState<Array<{sourcePath:string;updatedAt:number}>|null>(null);
+  const [clearingUnavailable,setClearingUnavailable]=useState(false);
+  const [unavailableLimit,setUnavailableLimit]=useState(100);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [coverageRootId,setCoverageRootId]=useState<string|null|undefined>(undefined);
+  useEffect(()=>{setCleanupFiles(null);setUnavailableLimit(100);},[workspacePath,coverageRootId]);
   const coverageSelection=useRef<string|null|undefined>(undefined);
   const statusGeneration=useRef(0);
   const rootSignature=useRef('');
@@ -276,6 +281,16 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     }
   }, [callBackendTool]);
 
+  async function clearUnavailable():Promise<void>{
+    if(!callBackendTool||!cleanupFiles||clearingUnavailable)return;
+    const files=cleanupFiles;setClearingUnavailable(true);setStatusError(null);
+    try{
+      for(let offset=0;offset<files.length;offset+=1000)await callBackendTool('memory.clear_unavailable',{confirmed:true,files:files.slice(offset,offset+1000)});
+      setCleanupFiles(null);statusGeneration.current++;statusCache.current.clear();statusRequests.current.clear();await refreshStatus();
+    }catch(error){setStatusError(error instanceof Error?error.message:String(error));}
+    finally{setClearingUnavailable(false);}
+  }
+
   const refreshFacts = useCallback(async () => {
     if (!callBackendTool) return;
     setFactsError(null);
@@ -323,12 +338,11 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     refreshStatus,
   ]);
 
-  // Poll while an index pass is in flight so chunk counts tick up live.
+  // Read the lightweight snapshot while mounted, including background changes at idle.
   useEffect(() => {
-    if (!status?.indexing) return;
     const id = setInterval(() => void refreshStatus(), 3000);
     return () => clearInterval(id);
-  }, [status?.indexing, refreshStatus]);
+  }, [refreshStatus]);
 
   const rebuild = useCallback(async () => {
     if (!callBackendTool) return;
@@ -488,7 +502,10 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const historicalOperationError=issues===undefined?operation?.error:null;
   const legacyRebuildError=issues===undefined?status?.rebuildOperation?.error:null;
   const issueScope=(issue:NonNullable<FileIndexStatus['issues']>[number])=>issue.rootId===undefined?'All sources (scope unknown)':coverageRoots.find(root=>root.id===issue.rootId)?.label??(issue.rootId===null?'Primary workspace':issue.rootId);
-  const needsAttention=Boolean(activeIssues.length||legacyRebuildError||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
+  const unavailableFiles=status?.unavailableFiles??[];
+  const recoveredGroups=new Map<string,NonNullable<FileIndexStatus['issues']>>();
+  for(const issue of issues??[])if(issue.state==='recovered'){const key=JSON.stringify([issue.rootId,issue.stage]);recoveredGroups.set(key,[...(recoveredGroups.get(key)??[]),issue]);}
+  const needsAttention=Boolean(unavailableFiles.length||activeIssues.length||legacyRebuildError||status?.sourceRootErrors?.length||problems.length||status?.fileIndex?.error||status?.sourceUpdate?.error||status?.embeddingError||historicalOperationError||status?.fileIndex?.state==='partial'||status?.fileIndex?.state==='failed');
   const indexLabel=status?.indexing||status?.sourceUpdate?.pending?'Indexing…':needsAttention?'Needs attention':status?.fileIndex?.state==='ready'?'Ready':'Preparing index…';
   const errorAction=(error:SafeIndexError)=>error.category==='authentication'?'Check the API key in AI Settings → OpenAI, then use Rebuild.':error.category==='other'?'Check that the source is accessible and supported, then use Rebuild.':error.action;
 
@@ -787,7 +804,19 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
             {!!status.sourceProjection?.pendingFiles&&<p>Search metadata update: {status.sourceProjection.pendingFiles} files pending. Available indexed content remains searchable.</p>}
             {!!status.sourceProjection?.warnings.length&&<ul aria-label="Document metadata warnings">{status.sourceProjection.warnings.map(warning=><li key={warning.sourcePath}><code>{warning.relativePath}</code> — Invalid YAML frontmatter; searching the literal text without field priority.</li>)}</ul>}
             {!!activeIssues.length&&<ul className="nimbalyst-memory-observer-errors" aria-label="Current source observation errors">{activeIssues.map(issue=><li key={issue.id} role="alert"><strong>{issueScope(issue)}</strong>{issue.relativePath&&<> / <code>{issue.relativePath}</code></>} — {issue.stage} · {issue.error.category}{issue.code? ' · '+issue.code:''} · Active error, last observed {new Date(issue.updatedAt).toLocaleString()}<p>{issue.stage==='discovery'||issue.stage==='watch'?'Check access and source settings. The error clears after this scope is successfully verified.':errorAction(issue.error)}</p></li>)}</ul>}
-            {!!issues?.some(issue=>issue.state==='recovered')&&<details><summary>Recovered source errors</summary><ul>{issues.filter(issue=>issue.state==='recovered').map(issue=><li key={issue.id}>{issueScope(issue)} — {issue.stage} · recovered {new Date(issue.resolvedAt??issue.updatedAt).toLocaleString()}</li>)}</ul></details>}
+            {recoveredGroups.size>0&&<details className="nimbalyst-memory-recovered-errors"><summary>Recovered source errors</summary>
+              {[...recoveredGroups].map(([key,group])=><details key={key}><summary>{issueScope(group[0])} — {group[0].stage} · {group.length} records</summary>
+                <ul>{group.map(issue=><li key={issue.id}><code>{issue.relativePath??'Scope unknown'}</code> — {issue.error.category}{issue.code?' · '+issue.code:''}
+                  {issue.firstSeenAt&&<> · first observed {new Date(issue.firstSeenAt).toLocaleString()}</>} · {issue.stage==='unknown'&&issue.rootId===undefined?'saved record time':'last observed'} {new Date(issue.updatedAt).toLocaleString()} · recovered {new Date(issue.resolvedAt??issue.updatedAt).toLocaleString()}
+                  {issue.stage==='watch'&&<p>Observation resumed for this scope; individual file availability is listed separately.</p>}</li>)}</ul></details>)}
+            </details>}
+            {unavailableFiles.length>0&&<section className="nimbalyst-memory-unavailable-files" aria-label="Retained unavailable files">
+              <div><strong>Unavailable files retained in index ({unavailableFiles.length})</strong> <button disabled={clearingUnavailable} onClick={()=>setCleanupFiles(unavailableFiles.map(({sourcePath,updatedAt})=>({sourcePath,updatedAt})))}>Clear all</button></div>
+              <p>Saved embeddings are retained. These files are excluded from search until successfully verified.</p>
+              <ul>{unavailableFiles.slice(0,unavailableLimit).map(file=><li key={file.sourcePath}><strong>{coverageRoots.find(root=>root.id===file.rootId)?.label??(file.rootId===null?'Primary workspace':file.rootId)}</strong> / <code>{file.relativePath}</code> — {file.reason}{file.code?' · '+file.code:''} · first observed {new Date(file.firstSeenAt).toLocaleString()} · state recorded {new Date(file.updatedAt).toLocaleString()}</li>)}</ul>
+              {unavailableFiles.length>unavailableLimit&&<button onClick={()=>setUnavailableLimit(value=>value+100)}>Show more unavailable files</button>}
+              {cleanupFiles&&<div role="group" aria-label="Confirm unavailable index cleanup"><p>Remove saved index entries for {cleanupFiles.length} unavailable files in this source selection? Returning files will need embeddings again. Restored or changed entries will be skipped.</p><button disabled={clearingUnavailable} onClick={()=>void clearUnavailable()}>Confirm cleanup</button> <button disabled={clearingUnavailable} onClick={()=>setCleanupFiles(null)}>Cancel cleanup</button></div>}
+            </section>}
             {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
@@ -796,7 +825,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
             {!activeIssues.length&&!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
             {!activeIssues.length&&!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&historicalOperationError&&<p role="alert" style={ERR}>{errorAction(historicalOperationError)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
-            {!status.indexing&&needsAttention&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}
+            {!status.indexing&&needsAttention&&!unavailableFiles.length&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}
             <details><summary>Index diagnostics</summary>
               <dl style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 14px',margin:0,fontSize:12}}>
                 <dt>Searchable chunks</dt><dd>{countLabel(available?.chunks??status.chunks)}</dd>

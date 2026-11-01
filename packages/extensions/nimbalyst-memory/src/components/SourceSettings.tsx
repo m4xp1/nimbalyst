@@ -126,7 +126,7 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
       onChange={event=>{void loadRoot(event.target.value||null);}}>
       {roots.map(root=><option key={root.id??'primary'} value={root.id??''}>{root.label} — {root.path}{root.available?'':' (unavailable)'}</option>)}
     </select></label>}
-    {roots.some(root=>!root.available) && <p role="alert">Some source folders are unavailable. Their old search results have been removed.</p>}
+    {roots.some(root=>!root.available) && <p role="alert">Some source folders are unavailable. Their saved index and rules are retained; unavailable results are excluded from search.</p>}
     <p style={{ margin: 0, color: 'var(--nim-text-muted)', lineHeight: 1.5 }}>
       Add files relative to the selected source folder, folders or globs, one per line. Additional sources
       support UTF-8 text of any extension, including JSON, YAML, code and files without
