@@ -182,7 +182,7 @@ export class MemoryEngine {
     if(saved)this.queryVectors.delete(key);
     const pending=this.queryRequests.get(key);if(pending)return pending;
     const request=(async()=>{
-      const vectors=await this.embedder.embed([query],{reason:"search",origin:context?.origin??"unknown",...context});validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
+      const vectors=await this.embedder.embed([query],{isCurrent:()=>!this.closed,reason:"search",origin:context?.origin??"unknown",...context});validateEmbeddingResponse(vectors,1,this.embedder.info.dims);
       const vector=vectors[0];
       if(!this.closed){this.queryVectors.set(key,{vector,expires:Date.now()+300000});while(this.queryVectors.size>32)this.queryVectors.delete(this.queryVectors.keys().next().value!);}
       return vector;
@@ -504,7 +504,9 @@ export class MemoryEngine {
    * the synthetic source path and the `removeRecords` key.
    */
   async ingestRecords(records: VirtualRecord[], context?:import("./embeddingUsage.js").EmbeddingCallContext): Promise<{ ingested: number }> {
+    if(this.closed)return{ingested:0};
     const { embedded, changed } = await this.indexer.indexRecords(records,context);
+    if(this.closed)return{ingested:0};
     const projection=this.store.getSessionProjection();
     for(const record of records) if(record.refType==='session') projection.parents[record.id]=record.parentSessionId??null;
     this.store.setSessionProjection(projection);
@@ -738,7 +740,7 @@ export class MemoryEngine {
   }
 
   async close(): Promise<void> {
-    this.closed=true;this.indexer.cancel();
+    this.closed=true;this.indexer.cancel();this.embedder.cancel?.();
     this.queryVectors.clear();this.queryRequests.clear();
     await this.fileWork.idle();
     await this.waitForIndexing();

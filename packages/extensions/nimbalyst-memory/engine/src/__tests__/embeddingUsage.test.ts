@@ -109,3 +109,27 @@ it('reports journal write failures without losing request counters', async () =>
     await usage.close();
     expect(usage.summary('all')).toMatchObject({ error: 'Embedding request log could not be written.', logging: { dropped: 2 }, totals: { attempts: 1, tokens: 2 } });
 });
+
+it('does not send a later packet into a new provider epoch',async()=>{
+ const {OpenAIEmbedder}=await import('../embedders/openaiEmbedder');const {vi}=await import('vitest');
+ const dir=mkdtempSync(path.join(os.tmpdir(),'embedding-epoch-'));dirs.push(dir);const usage=new EmbeddingUsage(dir,'openai');
+ let release!:()=>void;const gate=new Promise<void>(r=>release=r);let calls=0;
+ vi.stubGlobal('fetch',vi.fn(async()=>{calls++;if(calls===1)await gate;return{ok:true,json:async()=>({data:[{index:0,embedding:[1,0]}],usage:{total_tokens:17}})};}));
+ try{const embedder=new OpenAIEmbedder({apiKey:'synthetic',dims:2,batchSize:1,requestAllowed:()=>true,usageLedger:usage});
+  const operation=embedder.embed(['one','two']);await vi.waitFor(()=>expect(calls).toBe(1));usage.reset('local');release();
+  await expect(operation).rejects.toMatchObject({code:'EMBEDDING_CANCELLED'});expect(calls).toBe(1);expect(usage.summary('all').totals).toMatchObject({attempts:0,tokens:0,inputs:0});
+ }finally{release();vi.unstubAllGlobals();await usage.close();}
+});
+it('rechecks cancellation after the asynchronous permission check',async()=>{
+ const {OpenAIEmbedder}=await import('../embedders/openaiEmbedder');const {vi}=await import('vitest');
+ let release!:(value:boolean)=>void;const permission=new Promise<boolean>(r=>release=r);const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
+ let current=true;const embedder=new OpenAIEmbedder({apiKey:'synthetic',requestAllowed:()=>permission});
+ try{const operation=embedder.embed(['one'],{isCurrent:()=>current} as any);current=false;release(true);await expect(operation).rejects.toMatchObject({code:'EMBEDDING_CANCELLED'});expect(fetch).not.toHaveBeenCalled();}
+ finally{release(true);vi.unstubAllGlobals();}
+});
+
+it('preserves paid usage when a temporary sparse launch cannot access the configured provider',()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'embedding-fallback-'));dirs.push(dir);const original=new EmbeddingUsage(dir,'openai');const request=original.start(3,120);original.finish(request,{state:'succeeded',tokens:41});
+ const fallback=new EmbeddingUsage(dir,'sparse',{preserveIdentity:true});expect(fallback.summary('all').totals).toMatchObject({attempts:1,inputs:3,tokens:41});
+ expect(new EmbeddingUsage(dir,'openai').summary('all').totals.tokens).toBe(41);
+});

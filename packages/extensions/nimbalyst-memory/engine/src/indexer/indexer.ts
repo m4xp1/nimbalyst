@@ -587,13 +587,14 @@ export class Indexer {
     }
 
     if (inputs.length) {
-      const vectors = await this.embedder.embed(inputs,{reason:records.every(record=>record.refType==='session')?'session-change':'tracker-change',origin:'background',...context,sources:backref.map(item=>({sourcePath:prepared[item.p].sourcePath,kind:records[item.p].refType}))});
+      const vectors = await this.embedder.embed(inputs,{reason:records.every(record=>record.refType==='session')?'session-change':'tracker-change',origin:'background',...context,isCurrent:()=>!this.cancelled&&context.isCurrent?.()!==false,sources:backref.map(item=>({sourcePath:prepared[item.p].sourcePath,kind:records[item.p].refType}))});
       validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);
       backref.forEach((b, i) => {
         prepared[b.p].stored[b.idx].denseEmbedding = vectors[i] ?? null;
       });
     }
 
+    if(this.cancelled)return{embedded:0,changed:0};
     // Hosts re-send every record on each backfill pass. An unchanged record is
     // not written, and a pass with no changes lets the engine skip reloading
     // the whole catalog (every dense vector) into a new retrieval snapshot.
@@ -624,7 +625,7 @@ export class Indexer {
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
     if (p.unchanged) {this.clearUnavailable(sourcePath);return 0;}
     const inputs=p.pending.map(t=>t.input);if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
-    if(inputs.length){try{const vectors=await this.embedder.embed(inputs,{...this.config.embeddingContext?.(),sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'}))});validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
+    if(inputs.length){try{const vectors=await this.embedder.embed(inputs,{...this.config.embeddingContext?.(),isCurrent:()=>!this.cancelled,sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'}))});validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
       // A failed auxiliary migration must not quarantine an unchanged, verified body.
       if(!p.pending.length&&p.sourceRecord&&!this.cancelled){this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);const prior=error as {message?:string;code?:string;status?:number};throw Object.assign(new Error(prior?.message??String(error),{cause:error}),{projectionOnly:true,code:prior?.code,status:prior?.status});}
       throw error;

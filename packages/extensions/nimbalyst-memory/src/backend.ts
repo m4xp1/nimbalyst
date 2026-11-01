@@ -552,8 +552,8 @@ export async function activate(ctx: ActivateCtx) {
       embedder = await createEmbedder(want.config);
     }
     const identity=JSON.stringify([embedder.info.id,embedder.info.model,embedder.info.dims]);
-    usage??=new EmbeddingUsage(dataDir,identity);usage.reset(identity);
-    if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;embedder={info:original.info,embed:async(texts,context)=>{try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
+    usage??=new EmbeddingUsage(dataDir,identity,{preserveIdentity:want.mode==='sparse'});if(want.mode!=='sparse')usage.reset(identity);
+    if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;let cancelled=false;embedder={info:original.info,cancel:()=>{cancelled=true;original.cancel?.();},embed:async(texts,context)=>{const epoch=usage!.generation();try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}if(cancelled||context?.isCurrent?.()===false)throw Object.assign(Error('Embedding operation was cancelled.'),{code:'EMBEDDING_CANCELLED'});const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context,epoch);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
     selection = want;
     log('info', `[memory] ${want.reason}`);
 

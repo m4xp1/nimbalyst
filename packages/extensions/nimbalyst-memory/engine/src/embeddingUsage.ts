@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 export interface EmbeddingCallContext {
+    /** Internal liveness guard, deliberately omitted from persisted diagnostics. */
+    isCurrent?:()=>boolean;
     trigger?:string;
     operationId?: string;
     reason?: string;
@@ -54,6 +56,8 @@ interface Saved {
 /** Small derived counters, independent of the index and of optional request logging. */
 export class EmbeddingUsage {
     private state: Saved;
+    private finished=new WeakSet<EmbeddingRequest>();
+    generation():string{return this.state.epoch;}
     private file: string;
     private readOnly = false;
     private error: string | null = null;
@@ -62,7 +66,7 @@ export class EmbeddingUsage {
     private queue: Promise<void> = Promise.resolve();
     private queued = 0;
     private dropped = 0;
-    constructor(private directory: string, identity: string) {
+    constructor(private directory: string, identity: string,options:{preserveIdentity?:boolean}={}) {
         this.file = path.join(directory, 'embedding-usage.json');
         this.state = this.fresh(identity);
         try {
@@ -70,7 +74,7 @@ export class EmbeddingUsage {
             const valid = (row: Counts) => row && Object.keys(empty()).every(key => Number.isSafeInteger(row[key as keyof Counts]) && row[key as keyof Counts] >= 0);
             if (data.version !== 1 || !valid(data.totals) || !data.pending || !data.days || !data.reasons || typeof data.epoch !== 'string' || typeof data.identity !== 'string' || !Number.isFinite(data.since) || ![...Object.values(data.days), ...Object.values(data.reasons), ...Object.values(data.dayReasons ?? {}).flatMap(rows => Object.values(rows))].every(valid))
                 throw Error('invalid counters');
-            if (data.identity === identity) {
+            if (data.identity === identity||options.preserveIdentity) {
                 data.dayReasons ??= {};
                 // A previous process cannot confirm these packets. Keep the counters,
                 // but do not retain orphaned source contexts indefinitely.
@@ -101,7 +105,7 @@ export class EmbeddingUsage {
         this.error = 'Embedding statistics could not be saved; current counts may not survive restart.';
     } }
     private groups(request: EmbeddingRequest): Counts[] { return [this.state.totals, this.state.days[request.day] ??= empty(), this.state.reasons[request.reason] ??= empty(), (this.state.dayReasons[request.day] ??= {})[request.reason] ??= empty()]; }
-    start(inputs: number, bytes: number, context: EmbeddingCallContext = {}): EmbeddingRequest { const now = Date.now(); const reason = knownReasons.has(context.reason ?? 'unknown') ? context.reason ?? 'unknown' : 'unknown'; const grouped = new Map<string, {
+    start(inputs: number, bytes: number, context: EmbeddingCallContext = {},expectedEpoch=this.state.epoch): EmbeddingRequest { if(expectedEpoch!==this.state.epoch)throw Object.assign(Error('Embedding operation was cancelled.'),{code:'EMBEDDING_CANCELLED'});const now = Date.now(); const reason = knownReasons.has(context.reason ?? 'unknown') ? context.reason ?? 'unknown' : 'unknown'; const grouped = new Map<string, {
         sourcePath: string;
         kind?: string;
         inputs: number;
@@ -113,7 +117,7 @@ export class EmbeddingUsage {
             row.inputs++;
         else if (grouped.size < 128)
             grouped.set(key, { sourcePath, kind: source.kind?.slice(0, 64), inputs: 1 });
-    } const safe: EmbeddingCallContext = { operationId: context.operationId?.slice(0, 128), reason, origin: context.origin ?? 'unknown', sources: [...grouped.values()] }; const request: EmbeddingRequest = { id: randomUUID(), epoch: this.state.epoch, day: new Date(now).toISOString().slice(0, 10), reason: safe.reason!, startedAt: now, inputs, bytes, context: safe }; for (const row of this.groups(request)) {
+    } const safe: EmbeddingCallContext = { operationId: context.operationId?.slice(0, 128), reason, origin: context.origin ?? 'unknown', trigger:context.trigger?.replace(/[^a-zA-Z0-9_-]/g,'').slice(0,64), sources: [...grouped.values()] }; const request: EmbeddingRequest = { id: randomUUID(), epoch: this.state.epoch, day: new Date(now).toISOString().slice(0, 10), reason: safe.reason!, startedAt: now, inputs, bytes, context: safe }; for (const row of this.groups(request)) {
         row.attempts++;
         row.unfinished++;
         row.unknownUsage++;
@@ -124,8 +128,7 @@ export class EmbeddingUsage {
             delete this.state.days[day];
             delete this.state.dayReasons[day];
         } this.save(); this.log({ event: 'started', ...request }); return request; }
-    finish(request: EmbeddingRequest, outcome: EmbeddingOutcome): void { if (request.epoch !== this.state.epoch || !this.state.pending[request.id])
-        return; delete this.state.pending[request.id]; const known = Number.isSafeInteger(outcome.tokens) && outcome.tokens! >= 0; for (const row of this.groups(request)) {
+    finish(request: EmbeddingRequest, outcome: EmbeddingOutcome): void { if(this.finished.has(request))return;this.finished.add(request);if(request.epoch!==this.state.epoch){this.log({event:'finished',...request,durationMs:Date.now()-request.startedAt,...outcome});return;}if(!this.state.pending[request.id])return;delete this.state.pending[request.id]; const known = Number.isSafeInteger(outcome.tokens) && outcome.tokens! >= 0; for (const row of this.groups(request)) {
         row.unfinished--;
         row[outcome.state]++;
         if (known) {

@@ -151,6 +151,7 @@ export interface EmbedderInfo {
  * `info` (the store keys on it) and return one vector per input text.
  */
 export interface Embedder {
+  cancel?():void;
   readonly info: EmbedderInfo;
   /** Embed a batch of texts; result[i] corresponds to texts[i]. */
   embed(texts: string[], context?: import("./embeddingUsage.js").EmbeddingCallContext): Promise<number[][]>;
