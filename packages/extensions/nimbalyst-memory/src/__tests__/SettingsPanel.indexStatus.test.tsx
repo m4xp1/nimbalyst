@@ -98,3 +98,12 @@ it('updates idle Coverage when a background file becomes unavailable without a m
  try{render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(1);});missing=true;await act(async()=>{await vi.advanceTimersByTimeAsync(3100);});expect(screen.getByText('docs/background.md')).toBeDefined();}
  finally{vi.useRealTimers();}
 });
+
+it('keeps unknown-scope recovery separate from primary recovery at the same stage',async()=>{
+ const common={stage:'watch',state:'recovered',updatedAt:1,resolvedAt:2,error:{category:'access',action:'Check access'}};
+ const call=vi.fn(async(name:string)=>name==='memory.status'?{ready:true,fileIndex:{state:'ready',issues:[{...common,id:'global'},{...common,id:'primary',rootId:null}]}}:name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
+ render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+ await screen.findByText('Recovered source errors');
+ expect(screen.getByText('All sources (scope unknown) — watch · 1 records')).toBeDefined();
+ expect(screen.getByText('Primary workspace — watch · 1 records')).toBeDefined();
+});
