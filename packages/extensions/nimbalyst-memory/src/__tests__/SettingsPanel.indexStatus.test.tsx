@@ -75,3 +75,26 @@ describe('scoped Coverage recovery UI',()=>{
   recovered=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('Ready');expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Recovered source errors')).toBeDefined();
  });
 });
+
+it('retains unavailable source details and requires confirmation before scoped cleanup',async()=>{
+ const missing={sourcePath:'docs/retained.md',rootId:null,relativePath:'docs/retained.md',reason:'missing',firstSeenAt:1,updatedAt:2};let cleared=false;
+ const call=vi.fn(async(name:string)=>{
+  if(name==='memory.status')return{ready:true,available:{indexedFiles:0,chunks:0,sourceFiles:0,bySourceClass:{}},unavailableFiles:cleared?[]:[missing],fileIndex:{state:'ready',discoveredFiles:0,completedFiles:0,failedFiles:0}};
+  if(name==='memory.clear_unavailable'){cleared=true;return{removed:1,skipped:0};}
+  if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,models:[]};return{};
+ });
+ render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+ await screen.findByText('docs/retained.md');expect(screen.getByText('Needs attention')).toBeDefined();
+ fireEvent.click(screen.getByRole('button',{name:'Clear all'}));expect(call.mock.calls.some(([name])=>name==='memory.clear_unavailable')).toBe(false);
+ fireEvent.click(screen.getByRole('button',{name:'Cancel cleanup'}));expect(screen.getByText('docs/retained.md')).toBeDefined();
+ fireEvent.click(screen.getByRole('button',{name:'Clear all'}));fireEvent.click(screen.getByRole('button',{name:'Confirm cleanup'}));
+ await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.clear_unavailable',{confirmed:true,files:[{sourcePath:missing.sourcePath,updatedAt:2}]}));
+ await waitFor(()=>expect(screen.queryByText('docs/retained.md')).toBeNull());
+});
+
+it('updates idle Coverage when a background file becomes unavailable without a manual Refresh',async()=>{
+ vi.useFakeTimers();let missing=false;
+ const call=vi.fn(async(name:string)=>name==='memory.status'?{ready:true,indexing:false,fileIndex:{state:'ready',discoveredFiles:1,completedFiles:1,failedFiles:0},unavailableFiles:missing?[{sourcePath:'docs/background.md',relativePath:'docs/background.md',rootId:null,reason:'missing',firstSeenAt:1,updatedAt:1}]:[]}:name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
+ try{render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(1);});missing=true;await act(async()=>{await vi.advanceTimersByTimeAsync(3100);});expect(screen.getByText('docs/background.md')).toBeDefined();}
+ finally{vi.useRealTimers();}
+});
