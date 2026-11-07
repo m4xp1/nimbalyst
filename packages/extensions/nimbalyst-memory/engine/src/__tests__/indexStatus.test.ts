@@ -6,9 +6,18 @@ import { MemoryEngine } from '../engine.js';
 import { Indexer } from '../indexer/indexer.js';import { FakeEmbedder } from './fakeEmbedder.js';
 import { safeIndexError } from '../indexStatus.js';import { buildPublicEngineStatus } from '../searchResponse.js';
 const roots:string[]=[],engines:MemoryEngine[]=[];
-function setup(){const root=mkdtempSync(path.join(tmpdir(),'memory-status-'));roots.push(root);mkdirSync(path.join(root,'docs'));const embedder=new FakeEmbedder();const engine=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}]},embedder);engines.push(engine);return{root,embedder,engine};}
+function setup(onStatusChanged?:()=>void){const root=mkdtempSync(path.join(tmpdir(),'memory-status-'));roots.push(root);mkdirSync(path.join(root,'docs'));const embedder=new FakeEmbedder();const engine=MemoryEngine.create({root,dbPath:path.join(root,'index.db'),factsDir:'facts',sources:[{sourceClass:'docs',include:['docs/**/*.md']}],onStatusChanged},embedder);engines.push(engine);return{root,embedder,engine};}
 afterEach(async()=>{for(const e of engines.splice(0))await e.close();for(const r of roots.splice(0))rmSync(r,{recursive:true,force:true});});
 describe('truthful index status',()=>{
+ it('notifies changed snapshots but status reads never notify or start indexing',async()=>{
+  const changed=vi.fn(),{root,engine,embedder}=setup(changed);
+  changed.mockClear();engine.status();await engine.indexSizeBytes();expect(changed).not.toHaveBeenCalled();
+  writeFileSync(path.join(root,'docs/a.md'),'# Event\nSnapshot changes');await engine.indexAll();
+  expect(changed.mock.calls.length).toBeGreaterThan(0);
+  changed.mockClear();const embed=vi.spyOn(embedder,'embed');
+  for(let i=0;i<10;i++)engine.status();expect(changed).not.toHaveBeenCalled();expect(embed).not.toHaveBeenCalled();
+  engine.setSourceFolders([{id:null,path:root,label:'main',available:false}]);expect(changed).toHaveBeenCalledTimes(1);
+ });
  it('reuses Coverage aggregates until searchable content changes',async()=>{
   const {root,engine}=setup();writeFileSync(path.join(root,'docs/a.md'),'# First\ncacheprobe');await engine.indexAll();
   const summaries=vi.spyOn((engine as any).store,'sourceSummaries');

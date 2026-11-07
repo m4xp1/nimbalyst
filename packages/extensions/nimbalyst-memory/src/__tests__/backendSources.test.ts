@@ -4,6 +4,20 @@ import { describe,it,expect,vi } from 'vitest';import { mkdtempSync,mkdirSync,wr
 import { activate } from '../backend';
 import { Indexer,MemoryEngine } from '../../engine/dist/index.js';
 describe('source settings backend bridge',()=>{
+ it('coalesces backend change events and keeps snapshot reads and deactivation quiet',async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'memory-notifications-'));mkdirSync(path.join(root,'docs'));writeFileSync(path.join(root,'docs/a.md'),'# Notification\nSynthetic content');
+  const notifyMemoryChanged=vi.fn(async()=>{});
+  const runtime=await activate({services:{workspacePath:root,extensionPath:root,dataDir:path.join(root,'state'),log:vi.fn(),getApiKey:async()=>({key:null}),registerMcpTools:async()=>({registered:[]}),notifyMemoryChanged}});
+  try{
+   await runtime.methods.rebuild();await new Promise(resolve=>setTimeout(resolve,200));
+   expect(notifyMemoryChanged.mock.calls.length).toBeGreaterThan(0);notifyMemoryChanged.mockClear();
+   await runtime.methods.status();await runtime.methods.get_embedding_usage({});await runtime.methods.get_source_roots({includeRules:true});
+   await new Promise(resolve=>setTimeout(resolve,200));expect(notifyMemoryChanged).not.toHaveBeenCalled();
+   await runtime.methods.set_sources({version:1,include:['extra.md'],exclude:[]});await new Promise(resolve=>setTimeout(resolve,200));
+   expect(notifyMemoryChanged.mock.calls.length).toBeGreaterThan(0);expect(notifyMemoryChanged.mock.calls.length).toBeLessThanOrEqual(2);
+   expect(notifyMemoryChanged).toHaveBeenCalledWith({areas:expect.arrayContaining(['sources','status'])});
+  }finally{await runtime.deactivate();notifyMemoryChanged.mockClear();await new Promise(resolve=>setTimeout(resolve,200));expect(notifyMemoryChanged).not.toHaveBeenCalled();rmSync(root,{recursive:true,force:true});}
+ });
  it('exposes folder IDs and applies scopes to MCP, Quick Open and exact tracker lookup',async()=>{
   const base=realpathSync.native(mkdtempSync(path.join(tmpdir(),'memory-search-scopes-'))),root=path.join(base,'main'),link=path.join(base,'link');
   for(const dir of [root,link]){mkdirSync(path.join(dir,'docs'),{recursive:true});writeFileSync(path.join(dir,'docs/a.md'),'# Тест\nОбщийПоисковыйМаркер');}

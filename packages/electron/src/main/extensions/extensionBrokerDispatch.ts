@@ -12,7 +12,7 @@
  * anything that escapes it (absolute paths outside the workspace, `..`
  * traversal).
  */
-import {app} from 'electron';
+import {app,BrowserWindow} from 'electron';
 import {openAIAccessAllowed} from '../../shared/openaiAccessPolicy';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -41,6 +41,16 @@ export async function dispatchBrokerMethod(
   ctx: BackendRuntimeContext
 ): Promise<BrokerResults[BrokerMethodName]> {
   switch (method) {
+    case 'notifyMemoryChanged': {
+      if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine')throw new Error('Memory notification capability denied');
+      const payload=rawPayload as BrokerPayloads['notifyMemoryChanged'];
+      if(!Array.isArray(payload?.areas))throw new Error('Memory notification areas are required');
+      const areas=[...new Set(payload.areas.filter(area=>area==='status'||area==='sources'||area==='usage'))];
+      if(areas.length)for(const window of BrowserWindow.getAllWindows()){
+        if(!window.isDestroyed())window.webContents.send('memory:changed',{workspacePath:ctx.workspacePath,areas});
+      }
+      return;
+    }
     case 'memorySourceRoots': {
       if(ctx.extensionId!=='com.nimbalyst.memory'||ctx.moduleId!=='memory-engine') throw new Error('Memory source capability denied');
       const treePaths=getWorkspaceRoots(ctx.workspacePath);

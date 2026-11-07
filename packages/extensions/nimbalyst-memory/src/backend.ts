@@ -86,6 +86,7 @@ interface ActivateCtx {
     getApiKey: (providerId: string) => Promise<{ key: string | null }>;
     embeddingDiagnostics?:(payload:{op:"get"|"set";enabled?:boolean})=>Promise<{developerMode:boolean;loggingEnabled:boolean;openaiAllowed:boolean}>;
     memorySourceRoots?: () => Promise<MemorySourceRoot[]>;
+    notifyMemoryChanged?:(payload:{areas:Array<'status'|'sources'|'usage'>})=>Promise<void>;
     memorySessions?: (payload:{op:'rebuild'}|{op:'read';sessionId:string;cursor?:string;maxChars?:number})=>Promise<unknown>;
     registerMcpTools: (
       tools: Array<{
@@ -476,6 +477,18 @@ export async function activate(ctx: ActivateCtx) {
   }
   let startupRemoved=cleanDetachedRules(previousRoots,sourceRoots);
   let disposed = false;
+  const changedAreas=new Set<'status'|'sources'|'usage'>();
+  let changeTimer:ReturnType<typeof setTimeout>|undefined;
+  const notifyChanged=(...areas:Array<'status'|'sources'|'usage'>)=>{
+    if(disposed||!ctx.services.notifyMemoryChanged)return;
+    for(const area of areas)changedAreas.add(area);
+    if(changeTimer)return;
+    changeTimer=setTimeout(()=>{
+      changeTimer=undefined;if(disposed)return;
+      const areas=[...changedAreas];changedAreas.clear();
+      void ctx.services.notifyMemoryChanged!({areas}).catch(error=>log('warn','[memory] status notification failed: '+String(error)));
+    },100);changeTimer.unref?.();
+  };
 
   const config: EngineConfig = {
     root: sourceRoots.find(root=>root.id===null)?.path ?? workspacePath,
@@ -486,6 +499,7 @@ export async function activate(ctx: ActivateCtx) {
     // Surface engine-internal warnings (e.g. a failed query embedding that
     // would otherwise silently degrade search to sparse-only) into the host log.
     onLog: (level, message) => log(level, message),
+    onStatusChanged:()=>notifyChanged('status'),
   };
 
   let engine: MemoryEngine | null = null;
@@ -541,7 +555,7 @@ export async function activate(ctx: ActivateCtx) {
     let embedder:Awaited<ReturnType<typeof createEmbedder>>;
     try {
       if(want.config.kind==='openai'){
-        usage??=new EmbeddingUsage(dataDir,JSON.stringify(['openai',want.config.model??'text-embedding-3-small',want.config.dims??1536]));
+        usage??=new EmbeddingUsage(dataDir,JSON.stringify(['openai',want.config.model??'text-embedding-3-small',want.config.dims??1536]),{onChanged:()=>notifyChanged('usage')});
         embedder=await createEmbedder({...want.config,usageLedger:usage,refreshUsagePolicy:async()=>{await diagnosticsPolicy();},requestAllowed:async()=>{const policy=await diagnosticsPolicy();return policy.openaiAllowed;}});
       }else embedder = await createEmbedder(want.config);
     } catch (err) {
@@ -552,7 +566,7 @@ export async function activate(ctx: ActivateCtx) {
       embedder = await createEmbedder(want.config);
     }
     const identity=JSON.stringify([embedder.info.id,embedder.info.model,embedder.info.dims]);
-    usage??=new EmbeddingUsage(dataDir,identity,{preserveIdentity:want.mode==='sparse'});if(want.mode!=='sparse')usage.reset(identity);
+    usage??=new EmbeddingUsage(dataDir,identity,{preserveIdentity:want.mode==='sparse',onChanged:()=>notifyChanged('usage')});if(want.mode!=='sparse')usage.reset(identity);
     if(embedder.info.id!=='openai'&&embedder.info.dims>0){const original=embedder;let cancelled=false;embedder={info:original.info,cancel:()=>{cancelled=true;original.cancel?.();},embed:async(texts,context)=>{const epoch=usage!.generation();try{await diagnosticsPolicy();}catch{usage!.setLogging(false);}if(cancelled||context?.isCurrent?.()===false)throw Object.assign(Error('Embedding operation was cancelled.'),{code:'EMBEDDING_CANCELLED'});const request=usage!.start(texts.length,texts.reduce((sum,text)=>sum+Buffer.byteLength(text),0),context,epoch);try{const vectors=await original.embed(texts,context);usage!.finish(request,{state:'succeeded'});return vectors;}catch(error){usage!.finish(request,{state:'failed',code:'LOCAL_EMBEDDING_ERROR'});throw error;}}};}
     selection = want;
     log('info', `[memory] ${want.reason}`);
@@ -638,13 +652,14 @@ export async function activate(ctx: ActivateCtx) {
     })().then(()=>{if(generation===sourceGeneration)sourceUpdate={pending:false,error:null};},error=>{
       if(generation===sourceGeneration)sourceUpdate={pending:false,error:safeIndexError(error)};
       log('error','[memory] source reconciliation: '+safeIndexError(error).category+'; saved rules retained');
-    });
+    }).finally(()=>notifyChanged('status','sources'));
   }
   function applySources(paths?:string[],rootId?:string|null,trigger='workspace-membership'):void {
     sourceTrigger=trigger;
     if(!sourceUpdate.pending)sourceUpdateRoots.clear();
     if(rootId===undefined)for(const root of sourceRoots)sourceUpdateRoots.add(root.id);else sourceUpdateRoots.add(rootId);
     sourceGeneration++;sourceScheduled=true;sourceUpdate={pending:true,error:null};
+    notifyChanged('status','sources');
     if(paths)for(const file of paths)sourcePaths.add(file);else discoverSources=true;
     if(sourceTimer)clearTimeout(sourceTimer);
     sourceTimer=setTimeout(flushSources,25);sourceTimer.unref?.();
@@ -661,6 +676,7 @@ export async function activate(ctx: ActivateCtx) {
     const signature=membership(next),observed=JSON.stringify(next);
     if(observed===observationSignature)return;
     observationSignature=observed;const before=sourceRoots;sourceRoots=next;engine?.setSourceFolders(next);
+    notifyChanged('status','sources');
     if(signature!==rootSignature){
       rootSignature=signature;engine?.cancelFileIndexing();
       await queueRuleChange(async()=>{const removed=cleanDetachedRules(before,next);for(const id of removed)await engine?.removeSourceRoot(id);applySources();});
@@ -1087,10 +1103,12 @@ export async function activate(ctx: ActivateCtx) {
         if(!rebuildTask){
           const operation:RebuildOperation={id:++rebuildSequence,state:'queued',error:null};
           rebuildOperation=operation;
+          notifyChanged('status');
           rebuildTask=new Promise<{indexed:number;files:number}>((resolve,reject)=>{
             setTimeout(()=>{void (async()=>{
               if(disposed)throw Error('Memory workspace was closed.');
               operation.state='running';
+              notifyChanged('status');
               await syncSourceRoots();await sourceChanges;flushSources();await sourceIndexing;
               const result=await requireEngine().indexAll();
               if(disposed)throw Error('Memory workspace was closed.');
@@ -1100,7 +1118,7 @@ export async function activate(ctx: ActivateCtx) {
               return result;
             })().then(resolve,reject);},0);
           });
-          void rebuildTask.catch(error=>{operation.state='failed';operation.error=safeIndexError(error);log('error','[memory] rebuild failed: '+operation.error.category);}).finally(()=>{rebuildTask=null;});
+          void rebuildTask.catch(error=>{operation.state='failed';operation.error=safeIndexError(error);log('error','[memory] rebuild failed: '+operation.error.category);}).finally(()=>{rebuildTask=null;notifyChanged('status');});
         }
         if(params?.background)return{ok:true,queued:true,operationId:rebuildOperation!.id};
         return {ok:true,...await rebuildTask};
@@ -1144,6 +1162,7 @@ export async function activate(ctx: ActivateCtx) {
 
     deactivate: async () => {
       disposed=true;
+      if(changeTimer)clearTimeout(changeTimer);changedAreas.clear();
       if(sourcePoll)clearInterval(sourcePoll);
       if(sourceTimer)clearTimeout(sourceTimer);
       await engineChanges;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {memorySourceChanges,sameMemoryWorkspace} from '@nimbalyst/runtime';
 import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
+import { subscribeMemoryUpdates } from './memoryUpdates';
 interface Rules { version: 1; include: string[]; exclude: string[];revision?:string;}
 type Call = (name: string, params?: any) => Promise<any>;
 const parse = (text: string) => text.split('\n').map(s => s.trim()).filter(Boolean);
@@ -67,7 +68,7 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
     });
   };
   const generation=useRef(0);
-  const loadRoot = async (id:string|null) => {
+  const loadRoot = async (id:string|null,isCurrent:()=>boolean=()=>document.visibilityState!=='hidden') => {
     flush.current();
     drafts.current.set(draft.current.rootId,{...draft.current});
     const current=++generation.current;
@@ -85,18 +86,18 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
       if(!request){request=bridge.current.callBackendTool!('memory.get_sources',id ? {rootId:id} : undefined);pendingLoads.current.set(id,request);}
       const rules:Rules=await request;
       pendingLoads.current.delete(id);confirmed.current.set(id,rules);
-      if(!live.current || current!==generation.current)return;
+      if(!isCurrent()||!live.current || current!==generation.current)return;
       const cached=drafts.current.get(id);
       if(cached?.dirty){draft.current=cached;setInclude(cached.include);setExclude(cached.exclude);setLoaded(true);setConflict(true);setError('Your unsaved draft is kept. Reload the saved rules to discard it.');}
       else adopt.current(id,rules);
-    }catch{pendingLoads.current.delete(id);if(live.current && current===generation.current)setError('Could not load saved sources.');}
+    }catch{pendingLoads.current.delete(id);if(isCurrent()&&live.current && current===generation.current)setError('Could not load saved sources.');}
   };
   useEffect(() => {
     live.current=true;
-    void loadRoot(null);
-    let refreshing=false;
-    const refresh=()=>{if(refreshing)return;refreshing=true;void bridge.current.callBackendTool?.('memory.get_source_roots',{includeRules:true}).then(value=>{
-      if(live.current && Array.isArray(value)){
+    const refresh=async(isCurrent:()=>boolean)=>{
+      if(!draft.current.loaded)void loadRoot(draft.current.rootId,isCurrent);
+      await bridge.current.callBackendTool?.('memory.get_source_roots',{includeRules:true}).then(value=>{
+      if(isCurrent() && live.current && Array.isArray(value)){
         const next=selectableSourceFolders(value);setRoots(next);
         for(const root of next){if(root.rules){
           const incoming={...root.rules,revision:root.rulesRevision??root.rules.revision};
@@ -106,17 +107,17 @@ export function SourceSettings({ callBackendTool, onApplied, onRootsChanged,work
         const remote=next.find(root=>root.id===draft.current.rootId)?.rulesRevision;
         if(draft.current.loaded&&remote&&remote!==revisions.current.get(draft.current.rootId)){
           const id=draft.current.rootId,current=generation.current;
-          void bridge.current.callBackendTool?.('memory.get_sources',id?{rootId:id}:undefined).then(rules=>{if(live.current&&current===generation.current)adopt.current(id,rules);}).catch(()=>{});
+          void bridge.current.callBackendTool?.('memory.get_sources',id?{rootId:id}:undefined).then(rules=>{if(isCurrent()&&live.current&&current===generation.current)adopt.current(id,rules);}).catch(()=>{});
         }bridge.current.onRootsChanged?.(next);
-        if(draft.current.rootId && !next.some(root=>root.id===draft.current.rootId))void loadRoot(null);
+        if(draft.current.rootId && !next.some(root=>root.id===draft.current.rootId))void loadRoot(null,isCurrent);
       }
-    }).catch(()=>{}).finally(()=>{refreshing=false;});};
-    refresh();const timer=setInterval(refresh,2000);
+    }).catch(()=>{});};
+    const stopUpdates=subscribeMemoryUpdates(workspacePath,['sources'],refresh);
     const stop=memorySourceChanges.subscribe(change=>{if(change&&sameMemoryWorkspace(change.workspacePath,workspacePath)&&change.revision!==revisions.current.get(change.rootId)){
       const rules={...change.rules,revision:change.revision};confirmed.current.set(change.rootId,rules);
       if(change.rootId===draft.current.rootId){generation.current++;adopt.current(change.rootId,rules);}
     }});
-    return ()=>{stop();clearInterval(timer);flush.current();live.current=false;generation.current++;};
+    return ()=>{stop();stopUpdates();flush.current();live.current=false;generation.current++;};
   }, []);
   const field = { width: '100%', minHeight: 75, fontFamily: 'monospace',
     background: 'var(--nim-bg)', color: 'var(--nim-text)', border: '1px solid var(--nim-border)', borderRadius: 6, padding: 8 } as const;

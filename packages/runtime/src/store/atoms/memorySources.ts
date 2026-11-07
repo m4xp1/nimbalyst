@@ -9,6 +9,8 @@ export interface MemorySourceChange {
  treePolicy?:unknown;
 }
 export const memorySourceChangeAtom=atom<MemorySourceChange|null>(null);
+export interface MemoryStatusChange { workspacePath:string; areas:Array<'status'|'sources'|'usage'>; }
+const memoryStatusChangeAtom=atom<MemoryStatusChange|null>(null);
 export interface MemorySourceFolder {id:string|null;label:string;path:string;available:boolean;}
 /** Host-owned metadata, updated by the central Memory listener, never one RPC per picker. */
 export const memorySourceFoldersAtomFamily=atomFamily((_workspacePath:string)=>atom<MemorySourceFolder[]>([]));
@@ -22,6 +24,8 @@ export function sameMemoryWorkspace(a:string|undefined,b:string|undefined):boole
 
 /** Renderer-only notifications, never a backend capability or a rule write route. */
 export const memorySourceChanges={
+ publishStatus(change:MemoryStatusChange):void{store.set(memoryStatusChangeAtom,change);},
+ subscribeStatus(listener:(change:MemoryStatusChange)=>void):()=>void{return store.sub(memoryStatusChangeAtom,()=>{const change=store.get(memoryStatusChangeAtom);if(change)listener(change);});},
  publish(change:MemorySourceChange):void{store.set(memorySourceChangeAtom,change);},
  subscribe(listener:(change:MemorySourceChange)=>void):()=>void{return store.sub(memorySourceChangeAtom,()=>{const change=store.get(memorySourceChangeAtom);if(change)listener(change);});},
 };

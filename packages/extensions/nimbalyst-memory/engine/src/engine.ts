@@ -138,7 +138,7 @@ export class MemoryEngine {
     this.sourceFolders=folders.filter(root=>root.id!=='harness-memory').map(root=>({...root}));
     this.availableSourceRoots=new Set(folders.filter(root=>root.available&&root.id).map(root=>root.id!));
     this.indexer.setSourceAvailability(folders);
-    this.updateFileRootOwners();this.invalidateView();
+    this.updateFileRootOwners();this.invalidateView();this.config.onStatusChanged?.();
     if(recovering.size)void this.fileWork.run(async()=>{
       if(this.closed)return;
       const files=this.indexer.unavailableFiles().filter(file=>recovering.has(file.rootId));const batch:FileIndexBatch={};
@@ -277,6 +277,7 @@ export class MemoryEngine {
   }
   private persistDiagnostics():void {
     this.store.setIndexDiagnostics({...this.store.getIndexDiagnostics(),scans:{all:{...this.fileIndex},...this.rootScans},issues:this.issues.list()});
+    this.config.onStatusChanged?.();
   }
 
   ruleFilePaths(visiblePaths:string[]=[]):string[]{return this.indexer.ruleFilePaths(visiblePaths);}
@@ -307,6 +308,7 @@ export class MemoryEngine {
     this.sourceRecords=this.store.sourceSearchRecords();
     this.indexedTrackerPaths=new Set(this.snapshot.filter(chunk=>chunk.refType==='tracker').map(chunk=>chunk.sourcePath));
     this.retriever = new Retriever(this.snapshot.filter(chunk => this.readable(chunk)),undefined,this.sourceRecords.filter(record=>this.readable(record)));
+    this.config.onStatusChanged?.();
   }
 
   indexAll(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
@@ -314,7 +316,7 @@ export class MemoryEngine {
   }
   private beginOperation(kind:FileOperation['kind'],state:'queued'|'running'='running'):FileOperation {
     const op:FileOperation={id:(this.operation?.id??0)+1,kind,state,phase:'enumerate',totalFiles:null,completedFiles:0,failedFiles:0,remainingFiles:null,error:null};
-    this.operation=op;this.rootOperations={};return op;
+    this.operation=op;this.rootOperations={};this.config.onStatusChanged?.();return op;
   }
   private progressOperation(op:FileOperation,p:IndexProgress):void {
     if(this.operation!==op)return;
@@ -324,12 +326,14 @@ export class MemoryEngine {
       const scoped=this.rootOperations[key]??={...op,rootId:key==='primary'?null:key,totalFiles:0,completedFiles:0,failedFiles:0,remainingFiles:0};scoped.totalFiles!++;scoped.remainingFiles!++;
     }}
     if(p.file&&p.success!==undefined){const scoped=this.rootOperations[this.coverageRoot(p.file)??'primary'];if(scoped){if(p.success)scoped.completedFiles++;else scoped.failedFiles++;scoped.remainingFiles=Math.max(0,(scoped.remainingFiles??0)-1);}}
+    this.config.onStatusChanged?.();
   }
   private finishOperation(op:FileOperation,error?:unknown,cancelled=false):void {
     if(this.operation!==op)return;
     op.error=error?(typeof error==='object'&&error!==null&&'category' in error&&'action' in error?error as SafeIndexError:safeIndexError(error)):null;
     op.state=cancelled?'cancelled':error?'failed':op.failedFiles?'partial':'completed';
     for(const scoped of Object.values(this.rootOperations)){scoped.error=op.error;scoped.state=cancelled?'cancelled':error&&(scoped.remainingFiles??0)>0?'failed':scoped.failedFiles?'partial':'completed';}
+    this.config.onStatusChanged?.();
   }
   private async indexAllNow(onProgress?: (p: IndexProgress) => void): Promise<{ indexed: number; files: number }> {
     if (this.indexing) throw new Error('An index pass is already running. Wait for it to finish.');
@@ -452,6 +456,7 @@ export class MemoryEngine {
       try{await work();if(op.state==='failed')this.finishOperation(op,op.error);else this.finishOperation(op);}catch(error){this.finishOperation(op,error);throw error;}finally{this.activeSourcePaths=undefined;}
     }),p=>{if(this.operation?.kind==='watch'){if(p.sources)this.activeSourcePaths=p.sources.flatMap(source=>{try{return[resolveInRoots(this.roots,source.sourcePath).abs];}catch{return[];}});this.progressOperation(this.operation,p);}},scope=>{if(!this.closed&&this.issues.verify(scope))this.persistDiagnostics();});
     this.watcher.start(seedOnly);
+    this.config.onStatusChanged?.();
   }
 
   /** Confirmed cleanup takes a metadata snapshot; never trusts caller paths as filesystem targets. */
@@ -573,6 +578,7 @@ export class MemoryEngine {
       if (this.lastEmbedError) {
         this.log('info', '[engine] query embedding recovered; dense retrieval re-enabled');
         this.lastEmbedError = null;
+        this.config.onStatusChanged?.();
       }
     } catch (err) {
       if((err as {code?:string})?.code==='EMBEDDING_INPUT_TOO_LARGE')throw err;
@@ -584,6 +590,7 @@ export class MemoryEngine {
         this.log('warn', `[engine] query embedding failed; falling back to sparse-only (${safeIndexError(err).category})`);
       }
       this.lastEmbedError = msg;
+      this.config.onStatusChanged?.();
     }
     if(this.closed)throw Error('Memory workspace was closed.');
     this.searchScope(opts?.rootIds);

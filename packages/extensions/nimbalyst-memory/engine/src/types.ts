@@ -214,6 +214,8 @@ export interface EngineConfig {
    * sparse-only with no trace).
    */
   onLog?: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void;
+  /** Snapshot invalidation only; never called by status reads. */
+  onStatusChanged?: () => void;
 }
 
 /** A retrieval hit returned to callers. */

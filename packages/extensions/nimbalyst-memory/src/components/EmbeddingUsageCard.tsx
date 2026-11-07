@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SettingsPanelProps } from '@nimbalyst/runtime';
+import { subscribeMemoryUpdates } from './memoryUpdates';
 type Period = 'today' | '7d' | 'all';
 interface Counts {
     attempts: number;
@@ -29,19 +30,19 @@ export function EmbeddingUsageCard({ callBackendTool, workspacePath }: {
     const [period, setPeriod] = useState<Period>('today'), [usage, setUsage] = useState<Usage | null>(null), [error, setError] = useState<string | null>(null), [saving, setSaving] = useState(false);
     const sequence = useRef(0);
     const inFlight = useRef<number | null>(null);
-    const refresh = useCallback(async () => { if (!callBackendTool)
+    const refresh = useCallback(async (isCurrent:()=>boolean=()=>true) => { if (!callBackendTool || document.visibilityState==='hidden')
         return; const current = sequence.current; if (inFlight.current === current) return; inFlight.current = current; try {
         const next = await callBackendTool('memory.get_embedding_usage', { period }) as Usage;
-        if (current === sequence.current) {
+        if (isCurrent() && current === sequence.current) {
             setUsage(next?.totals ? next : null);
             setError(null);
         }
     }
     catch {
-        if (current === sequence.current)
+        if (isCurrent() && current === sequence.current)
             setError('Embedding usage could not be read.');
     } finally { if (inFlight.current === current) inFlight.current = null; } }, [callBackendTool, period, workspacePath]);
-    useEffect(() => { setUsage(null); void refresh(); const timer = setInterval(() => void refresh(), 3000); return () => { clearInterval(timer); sequence.current++; }; }, [refresh]);
+    useEffect(() => { setUsage(null); const stop=subscribeMemoryUpdates(workspacePath,['usage'],refresh); return () => { stop(); sequence.current++; }; }, [refresh,workspacePath]);
     const toggle = async (enabled: boolean) => { if (!callBackendTool)
         return; setSaving(true); try {
         await callBackendTool('memory.set_embedding_logging', { enabled });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {memorySourceChanges} from '@nimbalyst/runtime';
+import {memorySourceChanges} from '../../../../runtime/src/store/atoms/memorySources';
 import { SourceSettings } from '../components/SourceSettings';
 afterEach(cleanup);
 const initial = { version: 1, include: ['ропо'], exclude: [] };

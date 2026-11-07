@@ -14,6 +14,10 @@ export interface MemorySourceChange {
 export declare const memorySourceChangeAtom: import("jotai").PrimitiveAtom<MemorySourceChange | null> & {
     init: MemorySourceChange | null;
 };
+export interface MemoryStatusChange {
+    workspacePath: string;
+    areas: Array<'status' | 'sources' | 'usage'>;
+}
 export interface MemorySourceFolder {
     id: string | null;
     label: string;
@@ -31,6 +35,8 @@ export declare const memorySearchRootIdsAtomFamily: import("jotai-family").AtomF
 export declare function sameMemoryWorkspace(a: string | undefined, b: string | undefined): boolean;
 /** Renderer-only notifications, never a backend capability or a rule write route. */
 export declare const memorySourceChanges: {
+    publishStatus(change: MemoryStatusChange): void;
+    subscribeStatus(listener: (change: MemoryStatusChange) => void): () => void;
     publish(change: MemorySourceChange): void;
     subscribe(listener: (change: MemorySourceChange) => void): () => void;
 };
