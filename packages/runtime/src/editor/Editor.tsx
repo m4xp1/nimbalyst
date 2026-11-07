@@ -20,7 +20,7 @@ import type { LexicalEditor } from 'lexical';
 
 import { $convertToEnhancedMarkdownString } from './markdown';
 
-import { EXTERNAL_CONTENT_UPDATE_TAG } from './applyExternalMarkdown';
+import { registerMarkdownDirtyListener } from './registerMarkdownDirtyListener';
 import { DEFAULT_EDITOR_CONFIG, type EditorConfig } from './EditorConfig';
 import { getEditorTransformers } from './markdown';
 import AutoEmbedPlugin from './plugins/AutoEmbedPlugin';
@@ -148,10 +148,10 @@ export default function Editor({ config = DEFAULT_EDITOR_CONFIG }: EditorProps):
   useEffect(() => {
     if (config.onGetContent) {
       const getContent = () =>
-        editor.read(() => $convertToEnhancedMarkdownString(markdownTransformers));
+        editor.read(() => $convertToEnhancedMarkdownString(markdownTransformers, { preserveSource: config.preserveMarkdownSource }));
       config.onGetContent(getContent);
     }
-  }, [editor, config.onGetContent, markdownTransformers]);
+  }, [editor, config.onGetContent, config.preserveMarkdownSource, markdownTransformers]);
 
   // Expose editor instance
   useEffect(() => {
@@ -160,24 +160,9 @@ export default function Editor({ config = DEFAULT_EDITOR_CONFIG }: EditorProps):
     }
   }, [editor, config]);
 
-  // Track whether initial load has completed to avoid false dirty state
-  const hasCompletedInitialLoadRef = useRef(false);
-
   useEffect(() => {
-    const removeUpdateListener = editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, tags }) => {
-      if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
-      // Content that arrived from outside the editor (collaborator, file
-      // watcher, agent) is not unsaved local work -- flagging it dirty would
-      // schedule an autosave that writes the document straight back.
-      if (tags.has(EXTERNAL_CONTENT_UPDATE_TAG)) return;
-      if (!hasCompletedInitialLoadRef.current) {
-        hasCompletedInitialLoadRef.current = true;
-        return;
-      }
-      if (config.onDirtyChange) config.onDirtyChange(true);
-    });
-    return () => removeUpdateListener();
-  }, [editor, config.onDirtyChange]);
+    return registerMarkdownDirtyListener(editor, markdownTransformers, () => config.onDirtyChange?.(true));
+  }, [editor, config.onDirtyChange, markdownTransformers]);
 
   const cursorsContainerRef = useRef<HTMLElement | null>(null);
   const cursorFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

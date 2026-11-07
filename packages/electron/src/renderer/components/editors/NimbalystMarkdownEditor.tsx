@@ -21,6 +21,7 @@
 
 import React, { useCallback } from 'react';
 import { MarkdownEditor, type MarkdownEditorProps } from '@nimbalyst/runtime/editors';
+import { preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
 
 export function NimbalystMarkdownEditor({
   host,
@@ -49,6 +50,8 @@ export function NimbalystMarkdownEditor({
       config={{
         showToolbar: true,
         editable: host.readOnly ? false : true,
+        preserveMarkdownSource: !rest.collaborationConfig || rest.collaborationConfig.personalSync
+          ? preserveMarkdownSource : undefined,
         onImageDoubleClick: handleImageDoubleClick,
         onImageDragStart: handleImageDragStart,
         ...config, // Extension overrides take precedence

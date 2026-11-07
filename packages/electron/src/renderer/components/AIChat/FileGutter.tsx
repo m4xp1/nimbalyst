@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
-  MaterialSymbol,
   buildFileDirectoryTree,
   getFileDirectoryPaths,
   getWorkspaceRelativeFilePath,
   type FileDirectoryNode,
-} from '@nimbalyst/runtime';
+} from '@nimbalyst/extension-sdk/file-tree';
 import { getFileName } from '../../utils/pathUtils';
 import {
   diffTreeGroupByDirectoryAtom,
@@ -317,7 +317,7 @@ export function FileGutter({ sessionId, workspacePath, type, onFileClick, pendin
 
             {node.files.map((file) => {
               const fileName = getFileName(file.filePath);
-              const hasStats = type === 'edited' && (file.linesAdded || file.linesRemoved);
+              const hasStats = type === 'edited' && Boolean(file.linesAdded || file.linesRemoved);
               const hasPendingReview = type === 'edited' && pendingReviewFiles?.has(file.filePath);
 
               return (
@@ -424,7 +424,7 @@ export function FileGutter({ sessionId, workspacePath, type, onFileClick, pendin
           ) : (
             groupedFiles.map((file) => {
               const fileName = getFileName(file.filePath);
-              const hasStats = type === 'edited' && (file.linesAdded || file.linesRemoved);
+              const hasStats = type === 'edited' && Boolean(file.linesAdded || file.linesRemoved);
               const hasPendingReview = type === 'edited' && pendingReviewFiles?.has(file.filePath);
 
               return (

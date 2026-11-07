@@ -37,6 +37,7 @@ import {
 
 import { $getDiffState, OriginalMarkdownState } from '../plugins/DiffPlugin/core/DiffState';
 import { $getState } from 'lexical';
+import { $preserveMarkdownSource, type MarkdownSourcePreserver } from './MarkdownSourceSnapshot';
 
 type UnclosedFormatTag = {
   format: TextFormatType;
@@ -47,6 +48,9 @@ type UnclosedFormatTag = {
  * Options for enhanced markdown export.
  */
 export interface EnhancedExportOptions {
+  /** Disk/editor exports retain untouched source formatting; diff internals remain canonical.
+   * Requires an editor-bound read (editor.read or editorState.read with { editor }). */
+  preserveSource?: MarkdownSourcePreserver;
   shouldPreserveNewLines?: boolean;
   includeFrontmatter?: boolean;
   /**
@@ -200,7 +204,8 @@ export function $convertToEnhancedMarkdownString(
 
   // Add frontmatter if requested and available
   if (includeFrontmatter) {
-    return serializeWithFrontmatter(markdownContent, $resolveExportFrontmatter());
+    const rendered = serializeWithFrontmatter(markdownContent, $resolveExportFrontmatter());
+    return options.preserveSource ? $preserveMarkdownSource(rendered, options.preserveSource) : rendered;
   }
 
   return markdownContent;
