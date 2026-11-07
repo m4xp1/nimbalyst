@@ -1,8 +1,17 @@
+// @vitest-environment node
 import { codexSandboxSetupCompleted } from '../../protocols/codexAppServer/windowsSandbox';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
+
+// Only the fake SDK/JSON-RPC peer may run in this unit fixture.
+beforeEach(() => vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'));
+afterEach(() => vi.unstubAllEnvs());
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(() => { throw new Error('Real Codex is forbidden in this unit fixture'); }),
+}));
 import { OpenAICodexProvider } from '../OpenAICodexProvider';
 import { OpenAICodexACPProvider } from '../OpenAICodexACPProvider';
 import { configureMcpServers } from '../../services/mcpServerConfig';
@@ -307,6 +316,17 @@ describe('OpenAICodexProvider', () => {
     );
   });
 
+  it('uses the runtime catalog without a curated allowlist or synthetic fallback additions', async () => {
+    const loadAppServerModels = vi.fn(async () => [
+      { id: 'catalog-row', model: 'fixture-new-model', displayName: 'New runtime model' },
+      { model: 'hidden-model', hidden: true },
+      { model: 'fixture-new-model' },
+    ]);
+    const models = await OpenAICodexProvider.getModels(undefined, { loadAppServerModels }, '/worktree');
+    expect(loadAppServerModels).toHaveBeenCalledWith('/worktree');
+    expect(models).toEqual([expect.objectContaining({ id: 'openai-codex:fixture-new-model', name: 'New runtime model' })]);
+  });
+
   it('uses SDK-provided model discovery when available', async () => {
     let codexConstructorOptions: Record<string, unknown> | undefined;
     const listModels = vi.fn(async () => ({
@@ -339,26 +359,9 @@ describe('OpenAICodexProvider', () => {
 
     expect(codexConstructorOptions).toEqual({ apiKey: 'test-key' });
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(models).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'openai-codex:gpt-5.6-sol',
-        provider: 'openai-codex',
-      }),
-      expect.objectContaining({
-        id: 'openai-codex:gpt-5.5',
-        provider: 'openai-codex',
-      }),
-      expect.objectContaining({
-        id: 'openai-codex:gpt-5.4',
-        provider: 'openai-codex',
-      }),
-      expect.objectContaining({
-        id: 'openai-codex:gpt-5.4-mini',
-        name: 'GPT-5.4 Mini',
-        provider: 'openai-codex',
-      }),
-    ]));
-    expect(models).toHaveLength(10);
+    expect(models).toEqual([expect.objectContaining({
+      id: 'openai-codex:gpt-5.4-mini', name: 'GPT-5.4 Mini', provider: 'openai-codex',
+    })]);
   });
 
   it('preserves CLI auth when initialized without an API key', async () => {

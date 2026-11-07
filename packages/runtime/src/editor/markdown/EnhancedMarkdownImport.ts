@@ -27,6 +27,8 @@ import {
   normalizeMarkdown,
   type NormalizerConfig
 } from './MarkdownNormalizer';
+import { $convertToEnhancedMarkdownString } from './EnhancedMarkdownExport';
+import { $rememberMarkdownSource } from './MarkdownSourceSnapshot';
 
 /**
  * Options for enhanced markdown import.
@@ -187,6 +189,10 @@ export function $convertFromEnhancedMarkdownString(
   // surrounding TextNodes, so collapse upstream's TabNodes back to text here
   // to preserve that behavior until the diff system grows TabNode awareness.
   $collapseTabNodes(node ?? $getRoot());
+
+  if ((!node || node === $getRoot()) && extractFrontmatter) {
+    $rememberMarkdownSource(markdown, $convertToEnhancedMarkdownString(transformers || []));
+  }
 
   return {
     frontmatter,

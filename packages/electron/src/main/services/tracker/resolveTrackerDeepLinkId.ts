@@ -15,13 +15,14 @@
  */
 
 import { parseFullDocumentTrackerId } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
+import { encodeWorkspaceLocalId, isPortableTrackerSourceId } from './portableTrackerIdentity';
 
 interface QueryableDatabase {
   query<T = any>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 }
 
 /** `NIM-2324` — an issue key, not a row id. */
-const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9_-]+$/;
 
 export async function resolveTrackerDeepLinkId(
   database: QueryableDatabase,
@@ -37,6 +38,14 @@ export async function resolveTrackerDeepLinkId(
       [id, workspacePath],
     );
     if (direct.rows.length > 0) return direct.rows[0].id;
+
+    if (isPortableTrackerSourceId(id)) {
+      const portable = await database.query<{ id: string }>(
+        'SELECT id FROM tracker_items WHERE id = $1 AND workspace = $2 LIMIT 1',
+        [encodeWorkspaceLocalId(workspacePath, id), workspacePath],
+      );
+      if (portable.rows[0]) return portable.rows[0].id;
+    }
 
     if (ISSUE_KEY_PATTERN.test(id)) {
       const byKey = await database.query<{ id: string }>(
@@ -63,4 +72,31 @@ export async function resolveTrackerDeepLinkId(
   }
 
   return incomingId;
+}
+
+/** Files links are capability-scoped to one portable card in the selected checkout.
+ * Never fall back to a native UUID, issue key, legacy path or another workspace.
+ * The caller hydrates this workspace's file projections before resolving.
+ */
+export async function resolvePortableTrackerDeepLinkId(
+  database: QueryableDatabase,
+  workspacePath: string,
+  portableId: string,
+): Promise<string | null> {
+  if (typeof portableId !== 'string' || !isPortableTrackerSourceId(portableId)) return null;
+  try {
+    const localId = encodeWorkspaceLocalId(workspacePath, portableId);
+    const result = await database.query<{ id: string; source: string; data: unknown }>(
+      'SELECT id, source, data FROM tracker_items WHERE id = $1 AND workspace = $2 LIMIT 1',
+      [localId, workspacePath],
+    );
+    const row = result.rows[0];
+    if (!row || row.id !== localId || row.source !== 'frontmatter') return null;
+    const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const fields = data as Record<string, unknown>;
+    return fields.trackerFormat === 1 && fields.portableId === portableId ? localId : null;
+  } catch {
+    return null;
+  }
 }

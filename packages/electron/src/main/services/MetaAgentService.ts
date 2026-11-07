@@ -1,3 +1,6 @@
+import { FileTrackerStore } from './tracker/fileTrackerStore';
+import { ensurePortablePlanReview } from './metaAgentPortablePlan';
+import { getDocumentServiceForWorkspace } from '../mcp/tools/trackerToolItemAccess';
 import type { OrchestrationMessageKind } from '@nimbalyst/runtime/ai/server/types';
 import path from 'path';
 import { BrowserWindow } from 'electron';
@@ -1673,6 +1676,15 @@ export class MetaAgentService {
       [workspaceId, sourceRef]
     );
     if (existing.length > 0) {
+      return;
+    }
+
+    const storage = await new FileTrackerStore(workspaceId).config();
+    if (storage.mode === 'files') {
+      const { docService } = await getDocumentServiceForWorkspace(workspaceId);
+      if (!docService) throw new Error('Open the workspace before saving the plan review card.');
+      await ensurePortablePlanReview(workspaceId, sessionId, result.title, pendingPrompt,
+        storage.directories.plan, docService);
       return;
     }
 

@@ -62,3 +62,36 @@ describe('E2E launcher userData isolation', () => {
     }
   });
 });
+
+describe('E2E launcher agent isolation', () => {
+  it('does not inherit live account, routing or permission settings', () => {
+    const env = buildTestEnv('http://127.0.0.1:5273', { env: {
+      CODEX_HOME: '/working/codex',
+      CODEX_APP_TOOLS_PIPE_PATH: 'synthetic-live-pipe',
+      CODEX_THREAD_ID: 'working-thread',
+      CLAUDE_CONFIG_DIR: '/working/claude',
+      OPENAI_API_KEY: 'synthetic-only',
+      GH_TOKEN: 'synthetic-only',
+      NIMBALYST_ALLOW_CODEX_ACCESS: '1',
+      NIMBALYST_ALLOW_OPENAI_API: '1',
+    } });
+    expect(env.NIMBALYST_ALLOW_CODEX_ACCESS).toBe('0');
+    expect(env.NIMBALYST_ALLOW_OPENAI_API).toBe('0');
+    expect(env.CODEX_APP_TOOLS_PIPE_PATH).toBeUndefined();
+    expect(env.CODEX_THREAD_ID).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.CODEX_HOME).toBe(path.join(env.USERPROFILE, '.codex'));
+    expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(env.USERPROFILE, '.claude'));
+    expect(env.USERPROFILE.startsWith(env.NIMBALYST_USER_DATA_DIR)).toBe(true);
+    expect(env.HOME).toBe(env.USERPROFILE);
+  });
+
+  it('keeps agent isolation when session restore disables the Playwright runtime flag', () => {
+    const env = buildTestEnv('http://127.0.0.1:5273', { env: { ENABLE_SESSION_RESTORE: '1' } });
+    expect(env.PLAYWRIGHT).toBeUndefined();
+    expect(env.NIMBALYST_ALLOW_CODEX_ACCESS).toBe('0');
+    expect(env.NIMBALYST_ALLOW_OPENAI_API).toBe('0');
+    expect(env.CODEX_HOME.startsWith(env.NIMBALYST_USER_DATA_DIR)).toBe(true);
+  });
+});

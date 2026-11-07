@@ -110,6 +110,7 @@ beforeEach(() => {
   createTrackerItem.mockClear();
   (window as any).electronAPI = {
     invoke: vi.fn().mockResolvedValue(undefined),
+    copyToClipboard: vi.fn().mockResolvedValue(undefined),
     readFileContent: vi.fn().mockResolvedValue({ success: true, content: '# Preview body' }),
     documentService: {
       updateTrackerItem,
@@ -148,6 +149,18 @@ function renderPage({ collabScope = { scopeKey: '/ws' } as unknown } = {}) {
 }
 
 describe('TrackerItemDetail metadata region', () => {
+  it('copies a portable file-card link without a team or local projection ID', async () => {
+    const localId = 'p:workspace-hash:card-123';
+    store.set(replaceAllTrackerItemsAtom, [{
+      ...ITEM, id: localId, source: 'frontmatter',
+      fields: { ...ITEM.fields, trackerFormat: 1, portableId: 'card-123' },
+      system: { ...ITEM.system, documentPath: 'plans/imported.md' },
+    } as TrackerRecord]);
+    renderDetail({ itemId: localId, workspacePath: '/ws' });
+    fireEvent.click(screen.getByTitle('Copy shareable link'));
+    await waitFor(() => expect(window.electronAPI.copyToClipboard).toHaveBeenCalledWith('nimbalyst://tracker/card-123?scope=files'));
+  });
+
   it('shows the shared file editor for a file-backed item in the detail card', async () => {
     store.set(replaceAllTrackerItemsAtom, [{
       ...ITEM,
@@ -160,7 +173,11 @@ describe('TrackerItemDetail metadata region', () => {
     await waitFor(() => expect(window.electronAPI.readFileContent).toHaveBeenCalledWith('/ws/plans/imported.md'));
     expect((await screen.findByTestId('file-backed-tab-editor')).textContent).toBe('# Preview body');
     expect(screen.getByTestId('file-backed-tab-editor').getAttribute('data-embedded')).toBe('true');
-    screen.getByText('Open in Editor');
+    const open = screen.getByTestId('tracker-open-in-editor');
+    expect(open.closest('.tracker-detail-content-editor')).toBeNull();
+    expect(screen.queryByText('plans/imported.md')).toBeNull();
+    fireEvent.click(open);
+    await waitFor(() => expect(window.electronAPI.invoke).toHaveBeenCalledWith('workspace:open-file', { workspacePath: '/ws', filePath: '/ws/plans/imported.md' }));
   });
 
   it('renders the schema fields as chips, with tags kept as an open row', () => {
@@ -183,6 +200,46 @@ describe('TrackerItemDetail metadata region', () => {
     expect(overflow?.textContent).toContain('Agent Sessions');
     expect(overflow?.textContent).toContain('{"sessionId":"session-1"}');
     expect(overflow?.textContent).not.toContain('[object Object]');
+  });
+
+  it('writes file-card fields through the source-file service and keeps the editor action when its header is hidden', async () => {
+    store.set(replaceAllTrackerItemsAtom, [{
+      ...ITEM, source: 'frontmatter', issueKey: 'PLAN-PORTABLE-1',
+      system: { ...ITEM.system, documentPath: 'plans/imported.md' },
+    } as TrackerRecord]);
+    renderDetail({ workspacePath: '/ws', hideHeader: true });
+    fireEvent.click(screen.getByTestId('tracker-detail-field-pill-status'));
+    fireEvent.click(screen.getByText('Completed'));
+    await waitFor(() => expect(window.electronAPI.documentService.updateTrackerItemInFile).toHaveBeenCalledWith({ itemId: ITEM.id, updates: { status: 'completed' } }));
+    expect(updateTrackerItem).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('tracker-open-in-editor'));
+    await waitFor(() => expect(window.electronAPI.invoke).toHaveBeenCalledWith('workspace:open-file', { workspacePath: '/ws', filePath: '/ws/plans/imported.md' }));
+  });
+
+  it('routes file-card type tags through the service and exposes rejected writes', async () => {
+    store.set(replaceAllTrackerItemsAtom, [{
+      ...ITEM, source: 'frontmatter', issueKey: 'PLAN-PORTABLE-1',
+      system: { ...ITEM.system, documentPath: 'plans/imported.md' },
+    } as TrackerRecord]);
+    updateTrackerItem.mockResolvedValueOnce({ success: false, error: 'File changed outside Nimbalyst' });
+    renderDetail({ workspacePath: '/ws' });
+    fireEvent.click(screen.getByText('+ Add'));
+    fireEvent.click(screen.getByText('+ Task'));
+    await waitFor(() => expect(updateTrackerItem).toHaveBeenCalledWith(expect.objectContaining({ itemId: ITEM.id, updates: { typeTags: ['plan', 'task'] } })));
+    expect((await screen.findByText('File changed outside Nimbalyst')).getAttribute('role')).toBe('alert');
+  });
+
+  it('shows and edits the secondary type fields through the file-card write route', async () => {
+    store.set(replaceAllTrackerItemsAtom, [{
+      ...ITEM, source: 'frontmatter', typeTags: ['plan', 'release'],
+      fields: { ...ITEM.fields, channel: 'alpha' },
+      system: { ...ITEM.system, documentPath: 'plans/imported.md' },
+    } as TrackerRecord]);
+    renderDetail({ workspacePath: '/ws' });
+    fireEvent.click(screen.getByTestId('tracker-detail-field-pill-channel'));
+    fireEvent.click(screen.getByText('Stable'));
+    await waitFor(() => expect(window.electronAPI.documentService.updateTrackerItemInFile).toHaveBeenCalledWith({ itemId: ITEM.id, updates: { channel: 'stable' } }));
+    expect(screen.getByTestId('tracker-detail-field-pill-status')).toBeTruthy();
   });
 
   it('offers inline collection creation from the detail chip', async () => {

@@ -68,8 +68,11 @@ export function AgenticInput({
     }
   }, [value]);
 
+  const slashRequestGeneration = useRef(0);
+
   // Fetch slash commands from IPC (SDK commands + local commands)
   const fetchSlashCommands = useCallback(async () => {
+    const generation = ++slashRequestGeneration.current;
     if (!workspacePath) return;
     try {
       const commands = await fetchSlashCommandEntries({
@@ -78,16 +81,17 @@ export function AgenticInput({
         provider,
       });
 
-      setAllSlashCommands(commands);
+      if (generation === slashRequestGeneration.current) setAllSlashCommands(commands);
     } catch (error) {
       console.error('[AgenticInput] Failed to load slash commands:', error);
-      setAllSlashCommands([]);
+      if (generation === slashRequestGeneration.current) setAllSlashCommands([]);
     }
   }, [workspacePath, sessionId, provider]);
 
   // Fetch on mount and when workspace/session changes
   useEffect(() => {
     fetchSlashCommands();
+    return () => { slashRequestGeneration.current++; };
   }, [fetchSlashCommands]);
 
   // Filter and sort slash commands based on query

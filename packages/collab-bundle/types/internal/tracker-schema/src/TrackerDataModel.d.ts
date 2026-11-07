@@ -509,7 +509,7 @@ export declare class TrackerDataModelRegistry {
      * the `models` map, so patch resolution never double-applies.
      */
     getBuiltinModel(type: string): TrackerDataModel | undefined;
-    validate(type: string, data: Record<string, any>): ValidationResult;
+    validate(type: string, data: Record<string, any>, effectiveModel?: TrackerDataModel): ValidationResult;
     /**
      * Validate one statement-bearing field against the project's predicate
      * registry (contract 4.1).
@@ -552,4 +552,4 @@ export declare function getFieldByRole(registry: TrackerDataModelRegistry, type:
  * Returns the union of all tag types' fields. Primary type (first tag) takes
  * precedence for duplicate field names.
  */
-export declare function resolveFields(typeTags: string[]): FieldDefinition[];
+export declare function resolveFields(typeTags: readonly string[], getModel?: (type: string) => TrackerDataModel | undefined): FieldDefinition[];

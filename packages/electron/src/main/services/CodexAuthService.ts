@@ -1,3 +1,4 @@
+import { assertCodexAccessAllowed, codexAccessAllowed } from '@nimbalyst/runtime/ai/codexAccessPolicy';
 import { CodexSandboxSetup } from './CodexSandboxSetup';
 import { codexSandboxSetupCompleted, type WindowsSandboxMode } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/windowsSandbox';
 /**
@@ -76,6 +77,7 @@ class CodexAuthServiceImpl {
   }
 
   async getStatus(refreshToken = false): Promise<CodexAuthStatus> {
+    if (!codexAccessAllowed()) return { account: null, requiresOpenaiAuth: true, authMode: null, planType: null };
     const client = await this.ensureChild();
     const res = await client.request<AccountReadResponse>('account/read', { refreshToken });
     // logger.main.info('[CodexAuth] account/read result', {
@@ -139,6 +141,7 @@ class CodexAuthServiceImpl {
   }
 
   getCachedStatus(): CodexAuthStatus | null {
+    if (!codexAccessAllowed()) return null;
     return this.cachedStatus;
   }
 
@@ -162,6 +165,7 @@ class CodexAuthServiceImpl {
   }
 
   private ensureChild(): Promise<JsonRpcClient> {
+    assertCodexAccessAllowed();
     if (this.client) return Promise.resolve(this.client);
     if (this.initializing) return this.initializing;
 

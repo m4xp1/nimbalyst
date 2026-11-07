@@ -1,3 +1,4 @@
+import { assertCodexAccessAllowed } from '../../codexAccessPolicy';
 /**
  * OpenAI Codex SDK Protocol Adapter (LEGACY -- retained as escape hatch)
  *
@@ -350,6 +351,7 @@ export class CodexSDKProtocol implements AgentProtocol {
    * Get or initialize the Codex client
    */
   private async getCodexClient(options: SessionOptions): Promise<CodexClientLike> {
+    assertCodexAccessAllowed();
     const sdkModule = await this.loadSdkModule();
     const codexPathOverride = this.resolveCodexPathOverride();
     const codexConfigOverrides = this.getCodexConfigOverrides(options);

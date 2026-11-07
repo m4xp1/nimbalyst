@@ -1,5 +1,8 @@
 // @vitest-environment node
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 /**
  * Contract tests for tracker_create against the REAL builtin tracker schemas
@@ -74,6 +77,8 @@ import { handleTrackerCreate } from '../trackerToolHandlers';
 import { loadBuiltinTrackers } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/ModelLoader';
 import { globalRegistry } from '@nimbalyst/tracker-schema';
 
+let workspace: string;
+
 function makeRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'item_test',
@@ -88,7 +93,7 @@ function makeRow(overrides: Record<string, unknown> = {}) {
 }
 
 function setupCreateQueue(type: string, hasDescription = false) {
-  const createdRow = makeRow({ id: `${type}_test`, type, type_tags: [type], workspace: '/tmp/ws' });
+  const createdRow = makeRow({ id: `${type}_test`, type, type_tags: [type], workspace });
   mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT item
   if (hasDescription) mockQuery.mockResolvedValueOnce({ rows: [] }); // cache in same transaction
   mockQuery.mockResolvedValueOnce({ rows: [createdRow] }); // resolve created
@@ -103,8 +108,13 @@ function insertedData(): Record<string, any> {
   return JSON.parse(String((insert as any[])[1][3]));
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'tracker-schema-contract-'));
   loadBuiltinTrackers();
+});
+
+afterAll(async () => {
+  if (workspace) await fs.rm(workspace, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -124,7 +134,7 @@ describe('tracker_create honors the builtin schema contract (real schemas)', () 
         labels: ['extensions'],
         description: '## Context\nwhy\n\n## Reasoning\nbecause',
       },
-      '/tmp/ws',
+      workspace,
     );
     expect(result.isError).toBe(false);
     const data = insertedData();
@@ -134,7 +144,7 @@ describe('tracker_create honors the builtin schema contract (real schemas)', () 
 
   it('creates a plan with title only, defaulting status to the schema default', async () => {
     setupCreateQueue('plan');
-    const result = await handleTrackerCreate({ type: 'plan', title: 'A plan' }, '/tmp/ws');
+    const result = await handleTrackerCreate({ type: 'plan', title: 'A plan' }, workspace);
     expect(result.isError).toBe(false);
     const data = insertedData();
     expect(data.status).toBe('draft');
@@ -143,7 +153,7 @@ describe('tracker_create honors the builtin schema contract (real schemas)', () 
 
   it('creates an idea with the schema default status, not an out-of-schema "to-do"', async () => {
     setupCreateQueue('idea');
-    const result = await handleTrackerCreate({ type: 'idea', title: 'An idea' }, '/tmp/ws');
+    const result = await handleTrackerCreate({ type: 'idea', title: 'An idea' }, workspace);
     expect(result.isError).toBe(false);
     const model = globalRegistry.get('idea');
     const statusOptions = model?.fields.find((f) => f.name === 'status')?.options?.map((o) => o.value) ?? [];
@@ -153,7 +163,7 @@ describe('tracker_create honors the builtin schema contract (real schemas)', () 
 
   it('still creates a task with status to-do', async () => {
     setupCreateQueue('task');
-    const result = await handleTrackerCreate({ type: 'task', title: 'A task' }, '/tmp/ws');
+    const result = await handleTrackerCreate({ type: 'task', title: 'A task' }, workspace);
     expect(result.isError).toBe(false);
     expect(insertedData().status).toBe('to-do');
   });

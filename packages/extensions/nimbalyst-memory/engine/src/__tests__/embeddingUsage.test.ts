@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,14 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0))
     rmSync(dir, { recursive: true, force: true }); });
 describe('physical embedding request ledger', () => {
+    it('emits counter changes, not reads or unchanged logging policy',()=>{
+        const dir=mkdtempSync(path.join(os.tmpdir(),'embedding-usage-events-'));dirs.push(dir);
+        const onChanged=vi.fn(),usage=new EmbeddingUsage(dir,'test:model:2',{onChanged});onChanged.mockClear();
+        usage.summary();usage.summary('all');usage.setLogging(false);expect(onChanged).not.toHaveBeenCalled();
+        const request=usage.start(2,10);expect(onChanged).toHaveBeenCalledTimes(1);
+        usage.finish(request,{state:'succeeded',tokens:8});expect(onChanged).toHaveBeenCalledTimes(2);
+        usage.setLogging(true);expect(onChanged).toHaveBeenCalledTimes(3);
+    });
     it('retains successful sub-batches of failed operations, persists, and rejects old-generation completions', () => {
         const dir = mkdtempSync(path.join(os.tmpdir(), 'embedding-usage-'));
         dirs.push(dir);

@@ -66,6 +66,7 @@ vi.mock('../backendPanelBadges', () => ({
 }));
 
 import { PrivilegedExtensionHost } from '../PrivilegedExtensionHost';
+import { BrowserWindow } from 'electron';
 import {
   clearBackendPanelGutterBadgesForModule,
   setBackendPanelGutterBadge,
@@ -195,6 +196,26 @@ describe('PrivilegedExtensionHost broker registerMcpTools', () => {
     const error = sent[0].error as { name?: string; message?: string };
     expect(error.name).toBe('CapabilityDeniedError');
     expect(error.message).toContain('mcp-server-register');
+  });
+});
+
+describe('Memory change notification broker', () => {
+  it('denies notifications from another extension even with the same module name',async()=>{
+    const send=vi.fn(),sent:unknown[]=[];
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([{isDestroyed:()=>false,webContents:{send}}] as any);
+    try{
+      await (new PrivilegedExtensionHost() as any).handleBrokerRequest(makeManaged(value=>sent.push(value)),{...ctx,extensionId:'untrusted.extension'},'denied','notifyMemoryChanged',{areas:['status']},'test');
+      expect(send).not.toHaveBeenCalled();expect(sent).toEqual([expect.objectContaining({kind:'broker-error'})]);
+    }finally{vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);}
+  });
+  it('broadcasts only sanitized invalidation areas for the host-bound workspace', async () => {
+    const send=vi.fn(),sent:unknown[]=[];
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([{isDestroyed:()=>false,webContents:{send}}] as any);
+    try {
+      await drive(new PrivilegedExtensionHost(),makeManaged(value=>sent.push(value)),{workspacePath:'/forged',areas:['status','sources','secret']},'notifyMemoryChanged');
+      expect(send).toHaveBeenCalledWith('memory:changed',{workspacePath:'/ws',areas:['status','sources']});
+      expect(sent).toEqual([expect.objectContaining({kind:'broker-response'})]);
+    } finally { vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]); }
   });
 });
 

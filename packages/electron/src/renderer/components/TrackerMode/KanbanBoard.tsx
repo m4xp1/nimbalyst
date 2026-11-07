@@ -63,6 +63,7 @@ interface KanbanBoardProps {
    *  exactly one item is selected. Callers omit this when the workspace
    *  has no team configured. */
   onCopyDeepLink?: (itemId: string) => void;
+  canCopyDeepLink?: (itemId: string) => boolean;
   /** Open a card's item as a document -- double-click and the card context menu. */
   onOpenDocument?: (itemId: string) => void;
   /** AI sessions already linked to a card's item, for the context menu submenu. */
@@ -106,6 +107,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
   onArchiveItems,
   onDeleteItems,
   onCopyDeepLink,
+  canCopyDeepLink,
   onOpenDocument,
   getLinkedSessions,
   onOpenSession,
@@ -670,7 +672,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
             </button>
           )}
 
-          {onCopyDeepLink && selectedIds.size === 1 && (
+          {onCopyDeepLink && selectedIds.size === 1 && (canCopyDeepLink?.([...selectedIds][0]) ?? true) && (
             <button
               className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-nim hover:bg-nim-tertiary cursor-pointer"
               onClick={() => {

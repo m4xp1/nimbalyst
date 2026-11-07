@@ -1,3 +1,4 @@
+import { FileTrackerStore } from '../../services/tracker/fileTrackerStore';
 import * as path from 'path';
 import { globalRegistry } from '@nimbalyst/tracker-schema';
 import type {
@@ -186,11 +187,15 @@ export async function handleTrackerListTypes(
       ? await getTrackerSchemaOwnershipDetails(workspacePath, items)
       : new Map();
 
+    const storage = workspacePath ? await new FileTrackerStore(workspacePath).config() : undefined;
     const structured = {
       action: "listed-types" as const,
+      storage: storage ? { mode: storage.mode, directories: storage.directories } : { mode: 'unknown' },
       count: items.length,
       items: items.map((model) => ({
         ...model,
+        storageMode: storage?.mode ?? 'unknown',
+        directory: storage?.mode === 'files' ? storage.directories[model.type] ?? null : undefined,
         builtin: isBuiltinTrackerSchema(model.type),
         owner: ownershipByType.get(model.type)?.owner
           ?? (model.sharing === 'team'
@@ -212,7 +217,7 @@ export async function handleTrackerListTypes(
           const owner = ownership?.owner
             ?? (model.sharing === 'team' ? 'team:your team' : builtin === 'builtin' ? 'builtin' : 'personal');
           const warning = ownership?.warning ? ` Warning: ${ownership.warning}` : '';
-          return `- ${model.type} (${builtin}, ${model.fields.length} fields, owner: ${owner}).${warning}`;
+          return `- ${model.type} (${builtin}, ${model.fields.length} fields, owner: ${owner}).${storage?.mode === 'files' ? ` File directory: ${storage.directories[model.type] ?? 'not configured'}.` : ''}${warning}`;
         }).join('\n')
       : 'No tracker types found matching the filters.';
 

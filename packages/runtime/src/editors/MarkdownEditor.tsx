@@ -30,6 +30,8 @@ import type { EditorHost } from '../extensions/editorHost';
 import { $getRoot, $setSelection } from 'lexical';
 
 export interface MarkdownEditorConfig {
+  /** File-backed hosts may retain source formatting when exporting edits. */
+  preserveMarkdownSource?: EditorConfig['preserveMarkdownSource'];
   /**
    * @deprecated Theme is now controlled at app level via CSS variables.
    * This prop is ignored. Theme is read from document root's data-theme attribute.
@@ -377,6 +379,7 @@ export function MarkdownEditor({
       initialContent: skipDiskOps ? undefined : initialContent,
       onDirtyChange: handleDirtyChange,
       onGetContent: handleGetContent,
+      preserveMarkdownSource: config.preserveMarkdownSource,
       onEditorReady: handleEditorReady,
 
       // Collaboration mode -- passed through to Editor.tsx
@@ -415,6 +418,7 @@ export function MarkdownEditor({
     }),
     [
       config.theme,
+      config.preserveMarkdownSource,
       config.editable,
       config.showToolbar,
       config.showTreeView,

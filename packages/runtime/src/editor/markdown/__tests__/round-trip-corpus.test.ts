@@ -14,6 +14,8 @@ import {
   $convertToEnhancedMarkdownString,
 } from '../EnhancedMarkdownExport';
 import {$convertFromEnhancedMarkdownString} from '../EnhancedMarkdownImport';
+import { $getFrontmatter, $setFrontmatter } from '../FrontmatterUtils';
+import { preserveMarkdownSource } from '../MarkdownSource';
 import {
   createTestEditor,
   MARKDOWN_TEST_TRANSFORMERS,
@@ -21,6 +23,7 @@ import {
 
 type RoundTripOptions = {
   includeFrontmatter?: boolean;
+  preserveSource?: boolean;
 };
 
 function createMarkdownEditor(): LexicalEditor {
@@ -38,6 +41,7 @@ function exportMarkdown(
       exported = $convertToEnhancedMarkdownString(MARKDOWN_TEST_TRANSFORMERS, {
         includeFrontmatter: options.includeFrontmatter ?? false,
         shouldPreserveNewLines: true,
+        preserveSource: options.preserveSource ? preserveMarkdownSource : undefined,
       });
     },
     {discrete: true},
@@ -249,5 +253,95 @@ planStatus:
     );
 
     expect(exported).toBe(markdown);
+  });
+});
+
+describe('file editor source preservation', () => {
+  const source = '---\r\n# Keep this comment\r\nupdated: 2026-11-07\r\ntitle: "Original"\r\n---\r\n\r\nFirst paragraph.\r\n\r\n| Name    | Value |\r\n| :------ | ----: |\r\n| alpha   | 12    |\r\n\r\nLast paragraph.\r\n';
+  const options = { includeFrontmatter: true, preserveSource: true };
+
+  it('keeps the exact file bytes on opening and repeated exports', () => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, source);
+    expect(exportMarkdown(editor, options)).toBe(source);
+    expect(exportMarkdown(editor, options)).toBe(source);
+    expect(editor.getEditorState().read(() => $convertToEnhancedMarkdownString(MARKDOWN_TEST_TRANSFORMERS, { ...options, preserveSource: preserveMarkdownSource }), { editor })).toBe(source);
+  });
+
+  it('keeps the canonical export when the host does not opt into source preservation', () => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, '_sample_');
+    expect(exportMarkdown(editor)).toBe('*sample*');
+    expect(exportMarkdown(editor, options)).toBe('_sample_');
+  });
+
+  it('changes a header field without expanding unrelated dates or rewriting the body', () => {
+    const editor = createMarkdownEditor();
+    const withBom = '\uFEFF' + source;
+    importMarkdown(editor, withBom);
+    editor.update(() => $setFrontmatter({ ...$getFrontmatter(), title: 'Edited' }), { discrete: true });
+    expect(exportMarkdown(editor, options)).toBe(withBom.replace('"Original"', '"Edited"'));
+  });
+
+  it('edits text without rewriting unrelated YAML, tables or CRLF', () => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, source);
+    editor.update(() => {
+      const text = $getRoot().getAllTextNodes().find(node => node.getTextContent() === 'First paragraph.')!;
+      text.setTextContent('First changed paragraph.');
+    }, { discrete: true });
+    expect(exportMarkdown(editor, options)).toBe(source.replace('First paragraph.', 'First changed paragraph.'));
+  });
+
+  it('preserves the header and unaffected table cells when a cell changes', () => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, source);
+    editor.update(() => {
+      const text = $getRoot().getAllTextNodes().find(node => node.getTextContent().trim() === 'alpha')!;
+      text.setTextContent(text.getTextContent().replace('alpha', 'beta'));
+    }, { discrete: true });
+    expect(exportMarkdown(editor, options)).toBe(source.replace('alpha', 'beta'));
+  });
+
+  it.each([
+    '_sample_',
+    'Before _sample_ after.\n',
+    '[sample](<https://example.test/path>)\n',
+    '- parent\n    - sample\n',
+    '| Name    | Value |\n| :------ | ----: |\n| sample  | 12    |\n',
+    '```ts\nconst sample = 12;\n```\n',
+    '> sample\n',
+    'Unicode: пример sample ёж 🐦\r\n',
+  ])('preserves unrelated source during a text edit in %j', (raw) => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, raw);
+    editor.update(() => {
+      const text = $getRoot().getAllTextNodes().find(node => node.getTextContent().includes('sample'))!;
+      text.setTextContent(text.getTextContent().replace('sample', 'revised'));
+    }, { discrete: true });
+    const changed = exportMarkdown(editor, options);
+    expect(changed).toBe(raw.replace('sample', 'revised'));
+    expect(roundTripOnce(changed)).toBe(exportMarkdown(editor));
+  });
+
+  it.each(['_sample_', '[sample](<https://example.test>)', '**sample**', '| Key | Value |\n| --- | --- |\n| sample | value |'])('keeps formatting edits effective in %j', (raw) => {
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, raw);
+    editor.update(() => {
+      const text = $getRoot().getAllTextNodes().find(node => node.getTextContent().includes('sample'))!;
+      text.toggleFormat('bold');
+    }, { discrete: true });
+    const changed = exportMarkdown(editor, options);
+    expect(roundTripOnce(changed)).toBe(exportMarkdown(editor));
+  });
+
+  it('edits a paragraph in a long file with many untouched CRLF tables', () => {
+    const raw = Array.from({ length: 150 }, (_, i) => `Section ${i}.\r\n\r\n| Name    | Value |\r\n| :------ | ----: |\r\n| row${i}   | ${i}    |\r\n\r\n`).join('');
+    const editor = createMarkdownEditor();
+    importMarkdown(editor, raw);
+    editor.update(() => {
+      $getRoot().getAllTextNodes().find(node => node.getTextContent() === 'Section 75.')!.setTextContent('Edited section 75.');
+    }, { discrete: true });
+    expect(exportMarkdown(editor, options)).toBe(raw.replace('Section 75.', 'Edited section 75.'));
   });
 });

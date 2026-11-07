@@ -12,6 +12,7 @@
  * appears with limits unavailable.
  */
 
+import { codexAccessAllowed, CODEX_ACCESS_DISABLED_MESSAGE } from '@nimbalyst/runtime/ai/codexAccessPolicy';
 import { readdir, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -127,6 +128,7 @@ class CodexUsageServiceImpl {
   private unsubscribeRateLimits: (() => void) | null = null;
 
   initialize(): void {
+    if (!codexAccessAllowed()) return;
     this.unsubscribeRateLimits ??= codexAuthService.onRateLimitsUpdated(() => {
       void this.refresh().catch((error) => {
         logger.main.warn('[CodexUsageService] Failed to refresh after rate-limit update:', error);
@@ -136,6 +138,7 @@ class CodexUsageServiceImpl {
   }
 
   async recordActivity(): Promise<void> {
+    if (!codexAccessAllowed()) return;
     this.lastActivityTime = Date.now();
 
     if (this.isSleeping) {
@@ -150,10 +153,14 @@ class CodexUsageServiceImpl {
   }
 
   getCachedUsage(): CodexUsageData | null {
+    if (!codexAccessAllowed()) return null;
     return this.cachedUsage;
   }
 
   async refresh(): Promise<CodexUsageData> {
+    if (!codexAccessAllowed()) {
+      return { limits: [], limitsAvailable: false, lastUpdated: Date.now(), error: CODEX_ACCESS_DISABLED_MESSAGE };
+    }
     try {
       try {
         const accountRateLimits = await codexAuthService.getRateLimits();

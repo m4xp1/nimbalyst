@@ -94,3 +94,20 @@ describe('live normalized session catalogue → actual Memory search',()=>{
     await catalog.setSessionsEnabled(false);expect(engine.expand('session:child',[])).toBeNull();expect(await sparse('КарточкаМаркер')).toHaveLength(1);
   });
 });
+
+
+it('reports a sanitized provider reason for failed session indexing',async()=>{
+  await setup();
+  const request=h.request.getMockImplementation()!;
+  h.request.mockImplementation(async(params:any)=>{
+    if(params.method==='ingestRecords')throw Object.assign(Error('OpenAI embedding request failed (401). sk-private-fixture private-session-text'),{status:401});
+    return request(params);
+  });
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  await expect(catalog.rebuildSessions(h.root)).rejects.toMatchObject({status:401});
+  expect(catalog.sessionIndexingError()).toContain('authentication');
+  expect(catalog.sessionIndexingError()).not.toContain('sk-private-fixture');
+  expect(catalog.sessionIndexingError()).not.toContain('private-session-text');
+  expect(warn.mock.calls.flat().join(' ')).toContain('authentication');
+  expect(warn.mock.calls.flat().join(' ')).not.toContain('private-session-text');
+});

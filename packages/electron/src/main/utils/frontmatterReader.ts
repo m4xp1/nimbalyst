@@ -12,77 +12,29 @@ const NON_YAML_FRONTMATTER_EXTENSIONS = new Set(['.astro']);
 /**
  * Reads only the frontmatter portion of a file using bounded reads
  * @param filePath Absolute path to the file
- * @param maxBytes Maximum bytes to read (default 4096 = 4KB)
+ * @param maxBytes Maximum bytes to read (default 16 KiB)
  * @returns The frontmatter string or null if not found
  */
-export async function readFrontmatterOnly(filePath: string, maxBytes: number = 4096): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    const stream = fs.createReadStream(filePath, {
-      encoding: 'utf8',
-      start: 0,
-      end: maxBytes - 1
-    });
-
-    let content = '';
-    let foundEnd = false;
-    let resolved = false;
-
-    const cleanup = () => {
-      if (!resolved) {
-        resolved = true;
-        stream.destroy();
-      }
-    };
-
-    stream.on('data', (chunk: string | Buffer) => {
-      const chunkStr = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      content += chunkStr;
-
-      // Check if we have the complete frontmatter
-      if (content.startsWith('---\n') || content.startsWith('---\r\n')) {
-        // Look for the closing ---
-        const endPattern = /\n---\s*(\n|$)/;
-        const match = endPattern.exec(content);
-
-        if (match) {
-          foundEnd = true;
-          const endIndex = match.index + match[0].length;
-          content = content.substring(0, endIndex);
-          cleanup();
-          resolve(content);
-        }
-      } else if (!content.startsWith('---')) {
-        // No frontmatter at all
-        cleanup();
-        resolve(null);
-      }
-    });
-
-    stream.on('end', () => {
-      if (!resolved) {
-        resolved = true;
-        if (foundEnd || (content.startsWith('---') && content.includes('\n---'))) {
-          resolve(content);
-        } else {
-          resolve(null);
-        }
-      }
-    });
-
-    stream.on('error', (error) => {
-      if (!resolved) {
-        resolved = true;
-        reject(error);
-      }
-    });
-
-    stream.on('close', () => {
-      if (!resolved) {
-        resolved = true;
-        resolve(null);
-      }
-    });
-  });
+export async function readFrontmatterOnly(filePath: string, maxBytes: number = 16 * 1024): Promise<string | null> {
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    // One extra byte distinguishes the configured boundary from EOF. Never
+    // read the body just to discover an oversized or unfinished YAML header.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const content = buffer.toString('utf8', 0, bytesRead);
+    if (!/^(?:\uFEFF)?---\r?\n/.test(content)) return null;
+    const match = /\r?\n---[ \t]*(?:\r?\n|$)/.exec(content);
+    if (match) {
+      const header = content.slice(0, match.index + match[0].length);
+      if (Buffer.byteLength(header, 'utf8') <= maxBytes) return header;
+    }
+    throw new Error(bytesRead > maxBytes
+      ? `Frontmatter exceeds the ${maxBytes} byte read limit`
+      : 'Frontmatter is missing its closing delimiter');
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -113,14 +65,14 @@ export async function extractFrontmatter(filePath: string): Promise<{
     // console.log(`[FrontmatterReader] Found frontmatter content (${frontmatterContent.length} chars) in: ${filePath}`);
 
     // Extract the YAML content between the --- markers
-    const yamlMatch = frontmatterContent.match(/^---\s*\n([\s\S]*?)\n---/);
+    const yamlMatch = frontmatterContent.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---/);
     if (!yamlMatch) {
       return { data: null, hash: null };
     }
 
     try {
       // Parse the YAML content
-      const data = yaml.load(yamlMatch[1]) as Record<string, unknown>;
+      const data = yaml.load(yamlMatch[1], { schema: yaml.JSON_SCHEMA }) as Record<string, unknown>;
 
       if (data && typeof data === 'object' && !Array.isArray(data)) {
         // Generate hash of the frontmatter data

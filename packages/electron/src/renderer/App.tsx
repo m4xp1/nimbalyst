@@ -143,6 +143,7 @@ import { initNotificationListeners } from './store/listeners/notificationListene
 import { initExtensionPermissionListeners } from './store/listeners/extensionPermissionListeners';
 import { initPanelGutterBadgeListeners } from './store/listeners/panelGutterBadgeListeners';
 import { initPermissionListeners } from './store/listeners/permissionListeners';
+import { initMemoryStatusListeners } from './store/listeners/memoryStatusListeners';
 import { initSoundListeners } from './store/listeners/soundListeners';
 import { initStytchAuthListeners } from './store/listeners/stytchAuthListeners';
 import { initSyncListeners } from './store/listeners/syncListeners';
@@ -439,6 +440,7 @@ export default function App() {
     const cleanupExtensionPermission = initExtensionPermissionListeners();
     const cleanupPanelGutterBadges = initPanelGutterBadgeListeners();
     const cleanupPermission = initPermissionListeners();
+    const cleanupMemoryStatus = initMemoryStatusListeners();
     const cleanupSound = initSoundListeners();
     const cleanupStytchAuth = initStytchAuthListeners();
     const cleanupSync = initSyncListeners();
@@ -493,6 +495,7 @@ export default function App() {
       cleanupExtensionPermission?.();
       cleanupPanelGutterBadges();
       cleanupPermission?.();
+      cleanupMemoryStatus();
       cleanupSound?.();
       cleanupStytchAuth?.();
       cleanupSync?.();

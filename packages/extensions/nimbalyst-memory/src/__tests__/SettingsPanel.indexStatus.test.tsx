@@ -1,16 +1,45 @@
 // @vitest-environment jsdom
 import { render,screen,fireEvent,waitFor,cleanup,act } from '@testing-library/react';import { describe,it,expect,vi,afterEach } from 'vitest';
 import { NimbalystMemorySettings } from '../components/SettingsPanel';
+import { memorySourceChanges } from '../../../../runtime/src/store/atoms/memorySources';
 afterEach(cleanup);
+
+it('does not repeatedly read idle Memory settings while no backend state changed',async()=>{
+ vi.useFakeTimers();
+ const call=vi.fn(async(name:string)=>name==='memory.status'?{ready:true,indexing:false,fileIndex:{state:'ready'}}:name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
+ try{
+  const view=render(<NimbalystMemorySettings workspacePath='/idle' theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+  call.mockClear();await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});
+  expect(call).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button',{name:'Refresh'})).toBeNull();
+  view.unmount();
+ }finally{vi.useRealTimers();}
+});
+
+it('suspends all settings snapshots while hidden and disposes subscriptions when closed',async()=>{
+ vi.useFakeTimers();let visibility:DocumentVisibilityState='hidden';
+ const state=vi.spyOn(document,'visibilityState','get').mockImplementation(()=>visibility);
+ const call=vi.fn(async(name:string)=>name==='memory.status'?{ready:true,indexing:false,fileIndex:{state:'ready'}}:name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
+ const update=()=>memorySourceChanges.publishStatus({workspacePath:'/hidden',areas:['status','sources','usage']});
+ try{
+  const view=render(<NimbalystMemorySettings workspacePath='/hidden' theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  await act(async()=>{update();await vi.advanceTimersByTimeAsync(10000);});expect(call).not.toHaveBeenCalled();
+  await act(async()=>{visibility='visible';document.dispatchEvent(new Event('visibilitychange'));await vi.advanceTimersByTimeAsync(1);});
+  expect(call).toHaveBeenCalledWith('memory.status');expect(call).toHaveBeenCalledWith('memory.get_embedding_usage',{period:'today'});expect(call).toHaveBeenCalledWith('memory.get_source_roots',{includeRules:true});
+  call.mockClear();await act(async()=>{visibility='hidden';document.dispatchEvent(new Event('visibilitychange'));update();await vi.advanceTimersByTimeAsync(10000);});expect(call).not.toHaveBeenCalled();
+  view.unmount();await act(async()=>{visibility='visible';document.dispatchEvent(new Event('visibilitychange'));update();await vi.advanceTimersByTimeAsync(10000);});expect(call).not.toHaveBeenCalled();
+ }finally{state.mockRestore();vi.useRealTimers();}
+});
 describe('Memory status UI',()=>{
- it('shows a partial index despite complete saved vectors and Refresh calls no rebuild',async()=>{
+ it('shows a partial index despite complete saved vectors and event reads do not rebuild',async()=>{
   const call=vi.fn(async(name:string)=>{
    if(name==='memory.status')return{ready:true,chunks:2,denseChunks:2,sourceFiles:1,indexedFiles:1,watching:false,chunksWithoutVectors:0,fileIndex:{state:'partial',phase:'index',discoveredFiles:4,completedFiles:1,failedFiles:1,error:{category:'quota',action:'Check provider quota, then use Rebuild.'}},retrieval:{mode:'hybrid',semantic:{available:true}}};
    if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return {};
   });
-  render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  render(<NimbalystMemorySettings workspacePath='/test' theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
   await screen.findByText('Needs attention');screen.getByText('Inactive');screen.getByText(/Available to search now/);
-  call.mockClear();fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.status'));
+  call.mockClear();act(()=>memorySourceChanges.publishStatus({workspacePath:'/test',areas:['status']}));await waitFor(()=>expect(call).toHaveBeenCalledWith('memory.status'));
   expect(call.mock.calls.every(([name])=>name==='memory.status')).toBe(true);
   expect(screen.queryByText('Ready')).toBeNull();
  });
@@ -31,7 +60,7 @@ describe('scoped Coverage',()=>{
    if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,models:[]};
    return{};
   });
-  render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  render(<NimbalystMemorySettings workspacePath='/test' theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
   await screen.findAllByText('33');
   const select=await screen.findByRole('combobox',{name:'Coverage source folder'});
   expect((select as HTMLSelectElement).selectedOptions[0].textContent).toBe('All');
@@ -52,11 +81,11 @@ describe('truthful live Coverage',()=>{
   let hold=false,release!:(v:unknown)=>void;
   const current={ready:true,indexing:true,chunks:9,denseChunks:9,sourceFiles:3,available:{chunks:4,sourceFiles:2,indexedFiles:2,bySourceClass:{docs:4}},operation:{kind:'rules',state:'running',totalFiles:7,completedFiles:2,remainingFiles:4,failedFiles:1},fileIndex:{state:'ready',discoveredFiles:20,completedFiles:20,failedFiles:0}};
   const call=vi.fn(async(name:string)=>name==='memory.status'?(hold?new Promise(r=>release=r):current):name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
-  render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  render(<NimbalystMemorySettings workspacePath='/test' theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
   await screen.findByText('Files available');
   expect(screen.queryByText('saved chunks with vectors')).toBeNull();
   expect(screen.getByText('2 processed · 4 remaining · 1 failed')).toBeDefined();
-  hold=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  hold=true;act(()=>memorySourceChanges.publishStatus({workspacePath:'/test',areas:['status']}));await waitFor(()=>expect(release).toBeTypeOf('function'));
   expect(screen.getByText('Files available')).toBeDefined();await act(async()=>release(current));
  });
 });
@@ -70,9 +99,9 @@ describe('scoped Coverage recovery UI',()=>{
    if(name==='memory.status')return{ready:true,available:{indexedFiles:1,sessions:0,trackers:0,chunks:1,sourceFiles:1,bySourceClass:{docs:1}},operation:{kind:'watch',state:'failed',error:issue.error},rebuildOperation:{id:1,state:'failed',error:issue.error},fileIndex:{state:recovered?'ready':'partial',phase:'done',discoveredFiles:1,completedFiles:1,failedFiles:0,error:recovered?null:issue.error,issues:[{...issue,state:recovered?'recovered':'active',resolvedAt:recovered?2:undefined}]}};
    if(name==='memory.get_sources')return{version:1,include:[],exclude:[]};if(name==='memory.list_facts')return{facts:[]};if(name==='memory.local_embeddings_status')return{enabled:false,supported:false,activeMode:'openai',selectedModelId:'bge-small',models:[]};return{};
   });
-  render(<NimbalystMemorySettings theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
+  render(<NimbalystMemorySettings workspacePath='/test' theme="light" storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);
   await screen.findByText('Needs attention');expect(screen.getByRole('alert').textContent).toContain('docs/a.md');expect(screen.getByRole('alert').textContent).toContain('EACCES');
-  recovered=true;fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await screen.findByText('Ready');expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Recovered source errors')).toBeDefined();
+  recovered=true;act(()=>memorySourceChanges.publishStatus({workspacePath:'/test',areas:['status']}));await screen.findByText('Ready');expect(screen.queryByRole('alert')).toBeNull();expect(screen.getByText('Recovered source errors')).toBeDefined();
  });
 });
 
@@ -95,7 +124,7 @@ it('retains unavailable source details and requires confirmation before scoped c
 it('updates idle Coverage when a background file becomes unavailable without a manual Refresh',async()=>{
  vi.useFakeTimers();let missing=false;
  const call=vi.fn(async(name:string)=>name==='memory.status'?{ready:true,indexing:false,fileIndex:{state:'ready',discoveredFiles:1,completedFiles:1,failedFiles:0},unavailableFiles:missing?[{sourcePath:'docs/background.md',relativePath:'docs/background.md',rootId:null,reason:'missing',firstSeenAt:1,updatedAt:1}]:[]}:name==='memory.get_sources'?{version:1,include:[],exclude:[]}:name==='memory.list_facts'?{facts:[]}:name==='memory.local_embeddings_status'?{models:[]}:[]);
- try{render(<NimbalystMemorySettings theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(1);});missing=true;await act(async()=>{await vi.advanceTimersByTimeAsync(3100);});expect(screen.getByText('docs/background.md')).toBeDefined();}
+ try{render(<NimbalystMemorySettings workspacePath='/test' theme='light' storage={{get:()=>undefined,set:vi.fn(),delete:vi.fn(),keys:()=>[]} as any} callBackendTool={call}/>);await act(async()=>{await vi.advanceTimersByTimeAsync(1);});missing=true;act(()=>memorySourceChanges.publishStatus({workspacePath:'/test',areas:['status']}));await act(async()=>{await vi.advanceTimersByTimeAsync(100);});expect(screen.getByText('docs/background.md')).toBeDefined();}
  finally{vi.useRealTimers();}
 });
 

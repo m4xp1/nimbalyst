@@ -167,6 +167,7 @@ export interface BackendServices {
   getApiKey(providerId: string): Promise<BrokerResults['getApiKey']>;
   embeddingDiagnostics(payload:BrokerPayloads['embeddingDiagnostics']):Promise<BrokerResults['embeddingDiagnostics']>;
   memorySourceRoots():Promise<BrokerResults['memorySourceRoots']>;
+  notifyMemoryChanged(payload:BrokerPayloads['notifyMemoryChanged']):Promise<void>;
   memorySessions(payload:BrokerPayloads['memorySessions']):Promise<BrokerResults['memorySessions']>;
 
   /**
@@ -377,6 +378,7 @@ function buildServices(ctx: BackendRuntimeContext, send: SendToHost): BackendSer
     },
     embeddingDiagnostics: payload => makeBrokerCall(send,'embeddingDiagnostics',payload),
     memorySourceRoots: () => makeBrokerCall(send,'memorySourceRoots',{}),
+    notifyMemoryChanged: payload => makeBrokerCall(send,'notifyMemoryChanged',payload),
     memorySessions: (payload) => makeBrokerCall(send,'memorySessions',payload),
 
     readWorkspaceFile: (path) => {

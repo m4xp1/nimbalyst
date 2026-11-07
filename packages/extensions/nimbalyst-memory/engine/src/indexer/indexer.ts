@@ -114,6 +114,9 @@ function pageRowFor(
   };
 }
 
+/** A file batch stops new provider requests after a shared failure, not local verification. */
+export interface FileIndexBatch { providerError?: unknown }
+
 export class Indexer {
   private unavailable=new Map<string,UnavailableFile>();
   private unavailableRoots=new Set<string|null>();
@@ -152,7 +155,7 @@ export class Indexer {
     const rootId=this.roots.find(root=>root.id && sourcePath.startsWith('@'+root.id+'/'))?.id??null;
     const record=[...this.fileRecords.values()].find(record=>record.id===sourcePath);
     const relativePath=record?.file.path??(rootId&&rootId!=='harness-memory'?sourcePath.slice(rootId.length+2):sourcePath);
-    this.failures.set(sourcePath,{sourcePath,relativePath,rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),projectionOnly:(error as {projectionOnly?:boolean})?.projectionOnly===true,stage:isProviderIndexFailure(error)||safeIndexError(error).category==='input'?'embeddings':'read',code:typeof (error as {code?:string})?.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined,updatedAt:Date.now()});
+    this.failures.set(sourcePath,{sourcePath,relativePath,...(Number.isInteger((error as {status?:number})?.status)&&(error as {status:number}).status>=400&&(error as {status:number}).status<=599?{httpStatus:(error as {status:number}).status}:{}),rootId:rootId==='harness-memory'?null:rootId,error:safeIndexError(error),projectionOnly:(error as {projectionOnly?:boolean})?.projectionOnly===true,stage:isProviderIndexFailure(error)||safeIndexError(error).category==='input'?'embeddings':'read',code:typeof (error as {code?:string})?.code==='string'&&/^[A-Z][A-Z0-9_]{1,63}$/.test((error as {code:string}).code)?(error as {code:string}).code:undefined,updatedAt:Date.now()});
     this.persistFailures();
   }
   private clearFailure(sourcePath:string):void { if(this.failures.delete(sourcePath))this.persistFailures(); }
@@ -272,12 +275,13 @@ export class Indexer {
     if(this.cancelled)return{indexed:0,files:files.length};
     for(const file of files)if(this.classify(file.sourcePath))this.knownFiles.add(file.sourcePath);
     onProgress?.({phase:'index',done:0,total:files.length,indexed:0,failed:0,sources:files});
-    let indexed=0,done=0,failed=0;
+    let indexed=0,done=0,failed=0;const batch:FileIndexBatch={};
     for(const file of files){if(this.cancelled)break;
-      try{if(this.classify(file.sourcePath))indexed+=await this.indexFile(file.sourcePath,file.sourceClass);else this.removeFile(file.sourcePath);
+      try{if(this.classify(file.sourcePath))indexed+=await this.indexFile(file.sourcePath,file.sourceClass,batch);else this.removeFile(file.sourcePath);
         if(this.cancelled)break;done++;onProgress?.({phase:'index',file:file.sourcePath,done,total:files.length,indexed,failed,success:true});
-      }catch(error){failed++;onProgress?.({phase:'index',file:file.sourcePath,done,total:files.length,indexed,failed,success:false});if(isProviderIndexFailure(error))throw error;}
+      }catch(error){failed++;onProgress?.({phase:'index',file:file.sourcePath,done,total:files.length,indexed,failed,success:false});if(isProviderIndexFailure(error))batch.providerError??=error;}
     }
+    if(batch.providerError)throw batch.providerError;
     return{indexed,files:files.length};
   }
 
@@ -331,13 +335,16 @@ export class Indexer {
         if (key && this.fileRecords.has(key)) this.store.deleteSource(sourcePath);
       } catch { /* An unrelated root's key is not ours to remove. */ }
     }
-    for (const record of this.fileRecords.values()) await this.indexFile(record.file.path, record.sourceClass);
+    const batch:FileIndexBatch={};let firstError:unknown;
+    const verify=async(file:string,sourceClass:string)=>{try{await this.indexFile(file,sourceClass,batch);}catch(error){firstError??=error;if(isProviderIndexFailure(error))batch.providerError??=error;}};
+    for (const record of this.fileRecords.values()) await verify(record.file.path, record.sourceClass);
     for (const [key, previous] of old) {
       if (!this.fileRecords.has(key)) {
         const hit = this.classify(previous.file.path);
-        if (hit) await this.indexFile(hit.sourcePath, hit.sourceClass);
+        if (hit) await verify(hit.sourcePath, hit.sourceClass);
       }
     }
+    if(firstError)throw firstError;
   }
 
   /** The configured roots, primary first. */
@@ -426,24 +433,24 @@ export class Indexer {
     onProgress?.({phase:'index',done:0,total:files.length,indexed:0,failed:0,sources:files});
 
     let indexed = 0, completed = 0, failed = 0;
+    const batch:FileIndexBatch={};
     for (let i = 0; i < files.length; i++) {
       if (this.cancelled) return { indexed, files: i };
       const f = files[i];
       try {
-        indexed += await this.indexFile(f.sourcePath, f.sourceClass);
+        indexed += await this.indexFile(f.sourcePath, f.sourceClass,batch);
         completed++;
         onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:true});
       } catch(error) {
         failed++;
         onProgress?.({phase:'index',file:f.sourcePath,done:completed,total:files.length,indexed,failed,success:false});
-        if(isProviderIndexFailure(error))throw error;
+        if(isProviderIndexFailure(error))batch.providerError??=error;
       }
     }
 
     if (this.cancelled) return { indexed, files: files.length };
-    // Drop files that no longer exist on disk. Only file-backed sources are
-    // considered — virtual records (trackers, sessions) are never pruned here,
-    // so a markdown re-index can't wipe the catalog.
+    // Missing files retain their vectors. Only explicit rule exclusions are pruned;
+    // virtual records (trackers, sessions) are reconciled by their own catalog.
     onProgress?.({ phase: 'prune', done: 0, total: 0 });
     for (const sourcePath of this.store.fileSourcePaths()) {
       if (!live.has(sourcePath)) {if(!this.classify(sourcePath))this.removeFile(sourcePath);else this.markUnavailable(sourcePath,this.unavailableRoots.has(parseSourcePath(this.roots,sourcePath).root.id)?'root-unavailable':'missing');}
@@ -452,15 +459,16 @@ export class Indexer {
     const liveFailures=new Set(files.map(f=>this.failureKey(f.sourcePath)));
     for(const key of this.failures.keys())if(!liveFailures.has(key))this.clearFailure(key);
     onProgress?.({ phase: 'done', done: completed, total: files.length,failed });
+    if(batch.providerError)throw batch.providerError;
     return { indexed, files: files.length };
   }
 
   /** Index a single file by `sourcePath`. Returns the number of chunks (re)embedded. */
-  async indexFile(sourcePath: string, sourceClass: string): Promise<number> {
+  async indexFile(sourcePath: string, sourceClass: string,batch?:FileIndexBatch): Promise<number> {
     this.knownFiles.add(sourcePath);
     const key = this.entityFileKey(sourcePath) ?? sourcePath;
     const previous = this.fileLanes.get(key) ?? Promise.resolve(0);
-    const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass));
+    const next = previous.catch(() => 0).then(() => this.indexFileNow(sourcePath, sourceClass,batch));
     this.fileLanes.set(key, next);
     try {
       const result=await next;
@@ -472,11 +480,11 @@ export class Indexer {
     } finally { if (this.fileLanes.get(key) === next) this.fileLanes.delete(key); }
   }
 
-  private async indexFileNow(sourcePath: string, sourceClass: string): Promise<number> {
+  private async indexFileNow(sourcePath: string, sourceClass: string,batch?:FileIndexBatch): Promise<number> {
     if(this.unavailableRoots.has(parseSourcePath(this.roots,sourcePath).root.id)){this.markUnavailable(this.failureKey(sourcePath),'root-unavailable');return 0;}
     const key = this.entityFileKey(sourcePath);
     const record = key ? this.fileRecords.get(key) : undefined;
-    if (record) return this.indexEntityFile(record);
+    if (record) return this.indexEntityFile(record,batch);
     let abs: string;
     let root: ResolvedRoot;
     try {
@@ -512,11 +520,11 @@ export class Indexer {
       sourcePath,
       sourceClass,
       raw,
-      root.id === null ? undefined : { refId: abs }
+      root.id === null ? undefined : { refId: abs },batch
     );
   }
 
-  private async indexEntityFile(record: FileRecord): Promise<number> {
+  private async indexEntityFile(record: FileRecord,batch?:FileIndexBatch): Promise<number> {
     if(this.cancelled)return 0;
     const abs = path.resolve(this.config.root, record.file.path.replace(/[\\/]/g, path.sep));
     const rel = path.relative(this.config.root, abs).split(path.sep).join('/');
@@ -540,7 +548,7 @@ export class Indexer {
         this.store.deleteSource(record.id);
         const hit = this.classifyDocument(rel);
         embedding = true;
-        return hit ? await this.indexContent(hit.sourcePath, hit.sourceClass, raw) : 0;
+        return hit ? await this.indexContent(hit.sourcePath, hit.sourceClass, raw,undefined,batch) : 0;
       }
       const metadata = Object.entries(record.file.fields).flatMap(([name,label]) => {
         const value = fields[name];
@@ -549,7 +557,7 @@ export class Indexer {
       const title = typeof fields.title === 'string' ? fields.title : record.title;
       const text = [title ? `# ${title}` : '', record.text, ...metadata, parsed.body].filter(Boolean).join('\n\n');
       embedding = true;
-      const count = await this.indexContent(record.id, record.sourceClass, text, {refType:record.refType,refId:record.refId});
+      const count = await this.indexContent(record.id, record.sourceClass, text, {refType:record.refType,refId:record.refId},batch);
       if(!this.cancelled)this.validatedFiles.add(record.id);
       return count;
     } catch (error) {
@@ -619,17 +627,40 @@ export class Indexer {
     sourcePath: string,
     sourceClass: string,
     raw: string,
-    ref?: { refType?: string; refId?: string }
+    ref?: { refType?: string; refId?: string },
+    batch?:FileIndexBatch
   ): Promise<number> {
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
     const p = this.prepareContent(sourcePath, sourceClass, raw, ref);
     if (p.unchanged) {this.clearUnavailable(sourcePath);return 0;}
-    const inputs=p.pending.map(t=>t.input);if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
-    if(inputs.length){try{const vectors=await this.embedder.embed(inputs,{...this.config.embeddingContext?.(),isCurrent:()=>!this.cancelled,sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'}))});validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;}catch(error){
-      // A failed auxiliary migration must not quarantine an unchanged, verified body.
-      if(!p.pending.length&&p.sourceRecord&&!this.cancelled){this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);const prior=error as {message?:string;code?:string;status?:number};throw Object.assign(new Error(prior?.message??String(error),{cause:error}),{projectionOnly:true,code:prior?.code,status:prior?.status});}
-      throw error;
-    }}
+    const inputs=p.pending.map(t=>t.input);
+    if(p.sourcePendingInput)inputs.push(p.sourcePendingInput);
+    if(inputs.length){
+      try{
+        if(batch?.providerError)throw batch.providerError;
+        const vectors=await this.embedder.embed(inputs,{
+          ...this.config.embeddingContext?.(),isCurrent:()=>!this.cancelled,
+          sources:inputs.map(()=>({sourcePath,kind:ref?.refType??'doc-file'})),
+        });
+        validateEmbeddingResponse(vectors,inputs.length,this.embedder.info.dims);
+        p.pending.forEach((t,i)=>{p.stored[t.idx].denseEmbedding=vectors[i]??null;});
+        if(p.sourceRecord&&p.sourcePendingInput)p.sourceRecord.denseEmbedding=vectors[vectors.length-1]??null;
+      }catch(error){
+        if(batch&&isProviderIndexFailure(error))batch.providerError??=error;
+        // The file was read: a provider failure is not evidence that it is missing.
+        // recordFailure still quarantines changed bodies before publishing the snapshot.
+        if(!this.cancelled)this.clearUnavailable(sourcePath);
+        // A failed auxiliary migration must not quarantine an unchanged, verified body.
+        if(!p.pending.length&&p.sourceRecord&&!this.cancelled){
+          this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);
+          const prior=error as {message?:string;code?:string;status?:number};
+          throw Object.assign(new Error(prior?.message??String(error),{cause:error}),{
+            projectionOnly:true,code:prior?.code,status:prior?.status,
+          });
+        }
+        throw error;
+      }
+    }
     if (this.cancelled && (!ref?.refType || ref.refType === 'doc-file' || this.entityIds.has(sourcePath))) return 0;
     this.store.writeSourceProjection(p.chunksUnchanged?undefined:p.stored,sourcePath,p.sourceRecord);
     this.clearUnavailable(sourcePath);

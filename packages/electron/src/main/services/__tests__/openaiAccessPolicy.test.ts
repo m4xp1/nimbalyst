@@ -36,3 +36,18 @@ it('withholds stored global and project keys without changing encrypted bytes', 
         allowed=true;expect(guarded.get('openai')).toBe('synthetic-global');expect(guarded.get('openai',{workspacePath:dir})).toBe('synthetic-project');
     } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 });
+
+describe('Codex account access policy', () => {
+  it('allows normal app launches and requires explicit opt-in in automation', async () => {
+    const { codexAccessAllowed } = await import('@nimbalyst/runtime/ai/codexAccessPolicy');
+    expect(codexAccessAllowed({})).toBe(true);
+    expect(codexAccessAllowed({ NODE_ENV: 'production' })).toBe(true);
+    for (const env of [{ VITEST: 'true' }, { PLAYWRIGHT: '1' }, { PLAYWRIGHT_TEST: '1' }, { NODE_ENV: 'test' }, { CI: 'true' }]) {
+      expect(codexAccessAllowed(env)).toBe(false);
+      expect(codexAccessAllowed({ ...env, NIMBALYST_ALLOW_CODEX_ACCESS: '1' })).toBe(true);
+    }
+    for (const value of ['0', 'yes', 'true', '']) expect(codexAccessAllowed({ NIMBALYST_ALLOW_CODEX_ACCESS: value })).toBe(false);
+    // Permission to use the paid API does not grant access to the Codex account.
+    expect(codexAccessAllowed({ PLAYWRIGHT: '1', NIMBALYST_ALLOW_OPENAI_API: '1' })).toBe(false);
+  });
+});

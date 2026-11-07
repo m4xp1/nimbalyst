@@ -24,7 +24,7 @@ export function canChangeTrackerSharing(
 }
 
 export function getTrackerStorageCopy(): string {
-  return `Local tracker config is stored in ${LOCAL_TRACKER_CONFIG_LOCATION}. Shared tracker config is stored in ${SHARED_TRACKER_CONFIG_LOCATION}.`;
+  return `Built-in types use application defaults. Local type overrides are stored in ${LOCAL_TRACKER_CONFIG_LOCATION}. Shared type config is stored in ${SHARED_TRACKER_CONFIG_LOCATION}. Project card storage and folders are saved in .nimbalyst/tracker-storage.yaml.`;
 }
 
 export function buildTrackerSharingConfirmOptions(

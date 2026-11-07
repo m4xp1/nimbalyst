@@ -19,9 +19,10 @@ import type { TrackerRecord } from '../../../core/TrackerRecord';
  */
 export declare function getTrackerFieldLayout(trackerType: string, labelFields?: readonly FieldDefinition[], options?: {
     singleValuedOnly?: boolean;
+    typeTags?: readonly string[];
 }): FieldDefinition[];
 /** Memoized `getTrackerFieldLayout` for component use. */
-export declare function useTrackerFieldLayout(trackerType: string, labelFields?: readonly FieldDefinition[]): FieldDefinition[];
+export declare function useTrackerFieldLayout(trackerType: string, labelFields?: readonly FieldDefinition[], typeTags?: readonly string[]): FieldDefinition[];
 /** Header text for a field: a label property's own label, else the formatted name. */
 export declare function trackerFieldDisplayLabel(field: FieldDefinition): string;
 /**

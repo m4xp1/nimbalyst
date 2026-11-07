@@ -1,6 +1,7 @@
 import {treePolicyIncludes,type MemoryTreePolicy} from '../../../../../extensions/nimbalyst-memory/engine/src/ruleProgram';
 import {memorySourceChangeAtom,sameMemoryWorkspace,store} from '@nimbalyst/runtime/store';
-import {memorySourceFoldersAtomFamily} from '@nimbalyst/runtime/store/atoms/memorySources';
+import {memorySourceFoldersAtomFamily,memorySourceChanges} from '@nimbalyst/runtime/store/atoms/memorySources';
+import {extensionPermissionHostStateVersionAtom} from '../atoms/extensionPermissions';
 import {memoryTreeAvailableAtom,memoryTreeIncludedPathsAtom,memoryTreePathKey,memoryTreeErrorsAtom,memoryTreeIndexingAtom} from '../atoms/memoryTree';
 import {rawFileTreeAtom,type RendererFileTreeItem} from '../atoms/fileTree';
 interface Context {workspacePath:string;disposed:boolean;epoch:number;busy:boolean;pending:boolean;revision?:string;policy?:MemoryTreePolicy;}
@@ -47,14 +48,18 @@ async function refresh(ctx:Context):Promise<void>{
  }catch{if(!ctx.disposed&&active===ctx&&epoch===ctx.epoch){ctx.revision=undefined;}}
  finally{ctx.busy=false;if(ctx.pending&&!ctx.disposed){ctx.pending=false;void refresh(ctx);}}
 }
-/** One workspace-scoped poll and tree invalidation subscription; never one request per icon. */
+/** One workspace-scoped snapshot on relevant changes; never a poll or request per icon. */
 export function initMemoryTreeListeners(workspacePath:string):()=>void{
  const ctx:Context={workspacePath,disposed:false,epoch:0,busy:false,pending:false};active=ctx;clear();
  const invalidate=()=>{ctx.epoch++;ctx.revision=undefined;if(ctx.policy)applyPolicy(ctx,ctx.policy);void refresh(ctx);};
  const stopTree=store.sub(rawFileTreeAtom,invalidate);
  const stopRules=store.sub(memorySourceChangeAtom,()=>{const change=store.get(memorySourceChangeAtom);if(sameMemoryWorkspace(change?.workspacePath,ctx.workspacePath)){ctx.epoch++;ctx.revision=undefined;if(change?.treePolicy)applyPolicy(ctx,change.treePolicy as MemoryTreePolicy);else void refresh(ctx);}});
- const timer=setInterval(()=>void refresh(ctx),2000);void refresh(ctx);
- return()=>{ctx.disposed=true;ctx.epoch++;clearInterval(timer);stopTree();stopRules();if(active===ctx){active=undefined;clear();}};
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ const schedule=()=>{if(ctx.disposed||timer)return;timer=setTimeout(()=>{timer=undefined;void refresh(ctx);},500);};
+ const stopStatus=memorySourceChanges.subscribeStatus(change=>{if(sameMemoryWorkspace(change.workspacePath,workspacePath)&&change.areas.some(area=>area==='sources'||area==='status'))schedule();});
+ const stopHost=store.sub(extensionPermissionHostStateVersionAtom,schedule);
+ void refresh(ctx);
+ return()=>{ctx.disposed=true;ctx.epoch++;if(timer)clearTimeout(timer);stopTree();stopRules();stopStatus();stopHost();if(active===ctx){active=undefined;clear();}};
 }
 export async function changeMemoryTreeRule(path:string,mode:'include'|'exclude'):Promise<void>{
  const ctx=active;if(!ctx||ctx.disposed||!store.get(memoryTreeAvailableAtom))throw Error('Memory is not available for this workspace.');

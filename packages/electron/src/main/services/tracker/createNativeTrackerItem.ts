@@ -31,6 +31,7 @@ export interface NativeTrackerCreatePayload {
   description?: string;
   owner?: string;
   tags?: string[];
+  typeTags?: string[];
   customFields?: Record<string, unknown>;
   content?: unknown;
   source?: string;
@@ -163,7 +164,7 @@ async function createRow(
   // read-time fallback. Mirrors the MCP create path (typeTags always includes
   // the primary type). The DB layer maps a JS array to TEXT[] on PGLite / a
   // JSON string on better-sqlite3.
-  const typeTags: string[] = [payload.type];
+  const typeTags: string[] = [...new Set([payload.type, ...(payload.typeTags ?? [])])];
 
   const statements: Array<{ sql: string; params: any[] }> = [
     {

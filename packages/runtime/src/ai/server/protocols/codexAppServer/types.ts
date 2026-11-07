@@ -227,6 +227,7 @@ export interface ThreadTokenUsageUpdatedNotification {
 export interface SkillsListResponse {
   data?: Array<{
     cwd?: string;
+    errors?: Array<{ path?: string; message?: string }>;
     skills?: Array<{
       name?: string;
       description?: string;

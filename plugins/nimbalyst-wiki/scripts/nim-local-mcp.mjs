@@ -7991,7 +7991,10 @@ var PAGE_TOOL_CONTRACT = [
       "labels",
       "linkedCommitSha",
       "typeTags",
-      "linkSession"
+      "linkSession",
+      // Portable file cards live only in the desktop workspace.
+      "id",
+      "content"
     ]
   },
   {
@@ -8028,7 +8031,9 @@ var PAGE_TOOL_CONTRACT = [
       "reporterId",
       "labels",
       "linkedCommitSha",
-      "typeTags"
+      "typeTags",
+      // Remote pages use description/applyCollabDocEdit for their body.
+      "content"
     ],
     remoteOnlyArgs: ["expectedRevision"]
   },

@@ -89,7 +89,8 @@ vi.mock('../../utils/ipcRegistry', () => ({
   safeOn: vi.fn(),
 }));
 
-vi.mock('../../../../../tracker-schema/src/TrackerDataModel', () => ({
+vi.mock('../../../../../tracker-schema/src/TrackerDataModel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../../tracker-schema/src/TrackerDataModel')>()),
   globalRegistry: {
     get: mockGlobalRegistryGet,
     // The policy resolver reads by explicit workspace (NIM-3702). These tests
@@ -527,7 +528,7 @@ describe('createTrackerItem sync status policy', () => {
 
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN query
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
-    mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-local', sync_status: 'local' })] }); // SELECT
+    mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-local', workspace: tempDir, sync_status: 'local' })] }); // SELECT
 
     await service.createTrackerItem({
       id: 'bug-local',
@@ -535,7 +536,7 @@ describe('createTrackerItem sync status policy', () => {
       title: 'Local bug',
       status: 'to-do',
       priority: 'high',
-      workspace: WORKSPACE,
+      workspace: tempDir,
     });
 
     // INSERT is the second query (index 1) after kanbanSortOrder; sync_status
@@ -554,7 +555,7 @@ describe('createTrackerItem sync status policy', () => {
 
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN query
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
-    mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-shared', sync_status: 'pending' })] }); // SELECT
+    mockQuery.mockResolvedValueOnce({ rows: [makeTrackerRow({ id: 'bug-shared', workspace: tempDir, sync_status: 'pending' })] }); // SELECT
 
     await service.createTrackerItem({
       id: 'bug-shared',
@@ -562,7 +563,7 @@ describe('createTrackerItem sync status policy', () => {
       title: 'Shared bug',
       status: 'to-do',
       priority: 'high',
-      workspace: WORKSPACE,
+      workspace: tempDir,
     });
 
     // INSERT is the second query (index 1) after kanbanSortOrder; sync_status
@@ -582,7 +583,7 @@ describe('createTrackerItem sync status policy', () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
     mockQuery.mockResolvedValueOnce({
-      rows: [makeTrackerRow({ id: 'bug-local', sync_status: 'local', local_key: null })],
+      rows: [makeTrackerRow({ id: 'bug-local', workspace: tempDir, sync_status: 'local', local_key: null })],
     }); // read-back
 
     const created = await service.createTrackerItem({
@@ -591,7 +592,7 @@ describe('createTrackerItem sync status policy', () => {
       title: 'Local bug',
       status: 'to-do',
       priority: 'high',
-      workspace: WORKSPACE,
+      workspace: tempDir,
     });
 
     expect(mockAssignLocalKeysToRows).toHaveBeenCalledWith(
@@ -611,7 +612,7 @@ describe('createTrackerItem sync status policy', () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ min_key: null }] }); // kanbanSortOrder MIN
     mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT
     mockQuery.mockResolvedValueOnce({
-      rows: [makeTrackerRow({ id: 'bug-plain', sync_status: 'local', local_key: null })],
+      rows: [makeTrackerRow({ id: 'bug-plain', workspace: tempDir, sync_status: 'local', local_key: null })],
     }); // read-back
 
     const created = await service.createTrackerItem({
@@ -620,7 +621,7 @@ describe('createTrackerItem sync status policy', () => {
       title: 'Plain bug',
       status: 'to-do',
       priority: 'high',
-      workspace: WORKSPACE,
+      workspace: tempDir,
     });
 
     expect(mockAssignLocalKeysToRows).not.toHaveBeenCalled();

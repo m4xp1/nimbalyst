@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { globalRegistry } from '../models';
 import {
   isSingleValuedField,
+  resolveFields,
   type FieldDefinition,
   type TrackerSchemaRole,
 } from '@nimbalyst/tracker-schema';
@@ -58,12 +59,13 @@ const CHIP_UNSUPPORTED_FIELD_TYPES = new Set(['multiselect', 'object']);
 export function getTrackerFieldLayout(
   trackerType: string,
   labelFields: readonly FieldDefinition[] = [],
-  options: { singleValuedOnly?: boolean } = {},
+  options: { singleValuedOnly?: boolean; typeTags?: readonly string[] } = {},
 ): FieldDefinition[] {
   const model = globalRegistry.get(trackerType);
   if (!model) return [];
 
-  const byName = new Map(model.fields.map((field) => [field.name, field]));
+  const fields = resolveFields([trackerType, ...(options.typeTags ?? [])]);
+  const byName = new Map(fields.map((field) => [field.name, field]));
   const ordered: FieldDefinition[] = [];
   const seen = new Set<string>();
   const add = (field: FieldDefinition | undefined): void => {
@@ -85,7 +87,7 @@ export function getTrackerFieldLayout(
     const name = model.roles?.[role] ?? CONVENTIONAL_ROLE_FIELDS[role];
     add(name ? byName.get(name) : undefined);
   }
-  for (const field of model.fields) add(field);
+  for (const field of fields) add(field);
   // Properties the item's labels bring follow the type's own fields.
   for (const field of labelFields) add(field);
   return ordered;
@@ -95,8 +97,10 @@ export function getTrackerFieldLayout(
 export function useTrackerFieldLayout(
   trackerType: string,
   labelFields: readonly FieldDefinition[] = NO_FIELDS,
+  typeTags: readonly string[] = [],
 ): FieldDefinition[] {
-  return useMemo(() => getTrackerFieldLayout(trackerType, labelFields), [trackerType, labelFields]);
+  const typeTagsKey = typeTags.join('\u0000');
+  return useMemo(() => getTrackerFieldLayout(trackerType, labelFields, { typeTags: typeTagsKey ? typeTagsKey.split('\u0000') : [] }), [trackerType, labelFields, typeTagsKey]);
 }
 
 const NO_FIELDS: readonly FieldDefinition[] = [];

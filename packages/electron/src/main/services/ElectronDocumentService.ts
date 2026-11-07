@@ -16,7 +16,11 @@ import type {
 } from '@nimbalyst/runtime';
 import crypto from 'crypto';
 import { getCurrentIdentity } from './TrackerIdentityService';
-import { createNativeTrackerItem, type NativeTrackerCreatePayload } from './tracker/createNativeTrackerItem';
+import { createNativeTrackerItem, TrackerCreationCommittedError, type NativeTrackerCreatePayload } from './tracker/createNativeTrackerItem';
+import { FileTrackerStore, FILE_TRACKER_HEADER_BYTES, type StoredFileTracker } from './tracker/fileTrackerStore';
+import { isPortableTrackerRow, projectPortableTracker } from './tracker/portableTrackerProjection';
+import { encodeWorkspaceLocalId, decodeWorkspaceLocalId, isPortableTrackerSourceId, mapPortableTrackerRelationshipIds } from './tracker/portableTrackerIdentity';
+import { createPortableTrackerWatch, type PortableTrackerWatch } from './tracker/portableTrackerWatch';
 import { assertTrackerItemFitsRoom, pushSharedTrackerItem } from './tracker/trackerItemShareGate';
 import { fileTrackerItemRowUpdateRefusal } from './tracker/fileTrackerItemSizeGate';
 import { applyCommentMutation, type CommentMutation } from './tracker/commentMutations';
@@ -70,7 +74,7 @@ import {
   buildFullDocumentTrackerId,
   parseFullDocumentTrackerId,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
-import { globalRegistry } from '@nimbalyst/tracker-schema';
+import { globalRegistry, resolveFields } from '@nimbalyst/tracker-schema';
 import { database } from '../database/PGLiteDatabaseWorker';
 import { isExcludedFromTrackerProjection, shouldExcludeDir, shouldExcludePath } from '../utils/fileFilters';
 import { isInLocalWikiFolder, localWikiFolderWithin } from './localWiki/localWikiLocation';
@@ -234,7 +238,8 @@ function resolveFullDocumentFrontmatter(
   return null;
 }
 
-export function getCanonicalTrackerItemIdFromRow(row: { id: string; type: string; source?: string | null; source_ref?: string | null }): string {
+export function getCanonicalTrackerItemIdFromRow(row: { id: string; type: string; source?: string | null; source_ref?: string | null; data?: unknown }): string {
+  if (isPortableTrackerRow(row)) return row.id;
   if (row.source === 'frontmatter' && typeof row.source_ref === 'string' && row.source_ref.length > 0) {
     return buildFullDocumentTrackerId(row.type, row.source_ref);
   }
@@ -423,6 +428,11 @@ export class ElectronDocumentService implements DocumentService {
   // Metadata cache
   private metadataCache: Map<string, DocumentMetadataEntry> = new Map();
   private metadataByPath: Map<string, DocumentMetadataEntry> = new Map();
+  private portableProjectionMetadata = new Map<string, string>();
+  private portableTrackerWatch: PortableTrackerWatch | null = null;
+  private portableTrackerWatchPending: Promise<void> | null = null;
+  private portableTrackerWatchGeneration = 0;
+  private portableTrackerWatchIds = new Set<string>();
   private metadataWatchers: Map<string, (change: MetadataChangeEvent) => void> = new Map();
   private fileStateCache: Map<string, { mtime: number; size: number; hash?: string }> = new Map();
   /**
@@ -459,20 +469,20 @@ export class ElectronDocumentService implements DocumentService {
 
   /**
    * Quick check if a markdown file contains tracker-relevant frontmatter
-   * This reads only the first ~4KB of the file for performance
+   * Uses the same bounded header size as metadata extraction.
    */
   private async hasTrackerFrontmatter(fullPath: string): Promise<boolean> {
     try {
       const fh = await fs.open(fullPath, 'r');
       try {
-        const buffer = Buffer.alloc(4096);
-        const { bytesRead } = await fh.read(buffer, 0, 4096, 0);
+        const buffer = Buffer.alloc(FILE_TRACKER_HEADER_BYTES);
+        const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
         const content = buffer.toString('utf-8', 0, bytesRead);
 
         // Check for YAML frontmatter with tracker content
         // Look for planStatus:, decisionStatus:, automationStatus:, trackerStatus:,
         // or inline tracker items like #bug[, #task[, etc.
-        const hasTrackerFrontmatter = /^---[\s\S]*?(planStatus|decisionStatus|automationStatus|trackerStatus):/m.test(content);
+        const hasTrackerFrontmatter = /^(?:\uFEFF)?---[\s\S]*?(planStatus|decisionStatus|automationStatus|trackerStatus):/m.test(content);
         const hasInlineTracker = /#([a-z][\w-]*)\[/.test(content);
 
         return hasTrackerFrontmatter || hasInlineTracker;
@@ -533,6 +543,7 @@ export class ElectronDocumentService implements DocumentService {
 
   // Public method to trigger a full refresh (for tracker panel initialization, etc.)
   async refreshWorkspaceData() {
+    this.portableProjectionMetadata.clear();
     if (!this.initializationPromise) {
       this.initializationPromise = this.refreshDocuments();
       await this.initializationPromise;
@@ -1359,6 +1370,23 @@ export class ElectronDocumentService implements DocumentService {
       const resolved = resolveFullDocumentFrontmatter(metadata.frontmatter);
       if (!resolved) continue;
 
+      if (metadata.frontmatter.trackerFormat === 1) {
+        const version = `${metadata.hash ?? ''}:${metadata.lastIndexed?.getTime() ?? 0}`;
+        if (this.portableProjectionMetadata.get(metadata.path) === version) continue;
+        try {
+          const item = await this.ensureFrontmatterProjectionRow(metadata.path, resolved.trackerType);
+          if (item) {
+            items.push(item);
+            this.portableProjectionMetadata.set(metadata.path, version);
+          }
+        } catch (error) {
+          // Keep the last projection and the rest of the board available. An
+          // unavailable or malformed source is never permission to delete it.
+          console.warn(`[DocumentService] File tracker unavailable: ${metadata.path}`, error instanceof Error ? error.message : String(error));
+        }
+        continue;
+      }
+
       const model = globalRegistry.get(resolved.trackerType);
       if (!model?.modes?.fullDocument) continue;
 
@@ -1424,6 +1452,7 @@ export class ElectronDocumentService implements DocumentService {
   }
 
   private async listMergedTrackerItems(): Promise<TrackerItem[]> {
+    const metadataItems = await this.listFullDocumentTrackerItemsFromMetadata();
     // `deleted_at IS NULL` because a tombstone is a row, not an absence: both a
     // teammate's delta (`applyRemoteItem`) and our own queued offline delete
     // (`applyOptimistic`) mark the row rather than removing it. Without this
@@ -1435,7 +1464,6 @@ export class ElectronDocumentService implements DocumentService {
     );
     await this.assignLocalKeysFrom(result.rows);
     const dbItems = result.rows.map(row => this.rowToTrackerItem(row));
-    const metadataItems = await this.listFullDocumentTrackerItemsFromMetadata();
 
     const merged = new Map<string, TrackerItem>();
     for (const item of metadataItems) {
@@ -1479,9 +1507,16 @@ export class ElectronDocumentService implements DocumentService {
   ): Promise<any | null> {
     // A Local wiki item has no row, and no write path may give it one.
     if (isLocalWikiItemId(itemId)) return null;
+    // Reject IDs from another worktree before any row can be mutated. A raw
+    // file ID is a portable reference resolved only inside this workspace.
+    decodeWorkspaceLocalId(this.workspacePath, itemId);
+    if (isPortableTrackerSourceId(itemId)) {
+      const portable = await database.query<any>('SELECT * FROM tracker_items WHERE id = $1 AND workspace = $2', [encodeWorkspaceLocalId(this.workspacePath, itemId), this.workspacePath]);
+      if (portable.rows[0]) return portable.rows[0];
+    }
     const direct = await database.query<any>(
-      `SELECT * FROM tracker_items WHERE id = $1`,
-      [itemId]
+      `SELECT * FROM tracker_items WHERE id = $1 AND workspace = $2`,
+      [itemId, this.workspacePath]
     );
     if (direct.rows.length > 0) {
       return direct.rows[0];
@@ -1560,12 +1595,20 @@ export class ElectronDocumentService implements DocumentService {
     relativePath: string,
     expectedType?: string,
   ): Promise<TrackerItem | null> {
+    relativePath = relativePath.replace(/\\/g, '/');
     if (isExcludedFromTrackerProjection(relativePath)) return null;
     if (isInLocalWikiFolder(relativePath, localWikiFolderWithin(this.workspacePath))) return null;
     const fullPath = await resolveFileTrackerPath(this.workspacePath, { source_ref: relativePath });
 
     const { data: frontmatter } = await extractFrontmatter(fullPath);
     if (!frontmatter) return null;
+
+    if (frontmatter.trackerFormat === 1) {
+      const store = new FileTrackerStore(this.workspacePath);
+      const card = await store.read(relativePath);
+      if (expectedType && card.type !== expectedType) return null;
+      return this.projectPortableCard(card, store);
+    }
 
     const resolved = resolveFullDocumentFrontmatter(frontmatter);
     if (!resolved) return null;
@@ -1675,6 +1718,11 @@ export class ElectronDocumentService implements DocumentService {
   ): Promise<void> {
     if (isExcludedFromTrackerProjection(relativePath)) return;
     if (isInLocalWikiFolder(relativePath, localWikiFolderWithin(this.workspacePath))) return;
+    if (frontmatter.trackerFormat === 1) {
+      const item = await this.ensureFrontmatterProjectionRow(relativePath);
+      if (item) this.trackerItemWatchers.forEach(callback => callback({ added: [], updated: [item], removed: [], timestamp: new Date() }));
+      return;
+    }
     try {
       const resolved = resolveFullDocumentFrontmatter(frontmatter);
       if (!resolved) return; // not a tracker document -> nothing to do (no DB hit)
@@ -1867,6 +1915,7 @@ export class ElectronDocumentService implements DocumentService {
    * gating, so a draft item would otherwise leak.
    */
   private shouldSyncItemNow(item: TrackerItem): boolean {
+    if (item.customFields?.trackerFormat === 1) return false;
     const workspace = item.workspace || this.workspacePath;
     const policy = getEffectiveTrackerSharingPolicy(workspace, item.type);
     return shouldSyncTrackerItem(policy, item);
@@ -2197,23 +2246,33 @@ export class ElectronDocumentService implements DocumentService {
    * `updateTrackerItem`, never by re-entering this method.
    */
   async propagateInverseForUpdate(
-    source: { id: string; type: string; issueKey?: string; title?: string },
+    source: { id: string; type: string; typeTags?: string[]; issueKey?: string; title?: string },
     changedFields: Record<string, unknown>,
     oldData: Record<string, unknown>,
     sharing?: 'personal' | 'team',
     draftByDefault?: boolean,
   ): Promise<void> {
+    const sourceRow = source.id.startsWith('p:')
+      ? (await database.query<any>('SELECT data FROM tracker_items WHERE id = $1 AND workspace = $2', [source.id, this.workspacePath])).rows[0] : null;
+    if (isPortableTrackerRow(sourceRow)) {
+      // IPC/tool inputs may contain portable IDs; the saved projection is the
+      // canonical local namespace used by inverse lookups and oldData.
+      const saved = parseJsonColumn<Record<string, unknown>>(sourceRow.data) ?? {};
+      changedFields = Object.fromEntries(Object.keys(changedFields).map(key => [key, saved[key]]));
+    }
     await propagateInverseRelationships(
       source,
       changedFields,
       oldData,
       {
+        getModel: (type) => globalRegistry.getForWorkspace(this.workspacePath, type),
         loadItem: async (id) => {
-          const row = await database.query<any>(`SELECT id, type, data FROM tracker_items WHERE id = $1`, [id]);
+          const row = await database.query<any>(`SELECT id, type, type_tags, data FROM tracker_items WHERE id = $1 AND workspace = $2`, [id, this.workspacePath]);
           if (!row.rows[0]) return null;
           return {
             id: row.rows[0].id,
             type: row.rows[0].type,
+            typeTags: parseJsonColumn<string[]>(row.rows[0].type_tags),
             data: parseJsonColumn<Record<string, unknown>>(row.rows[0].data) ?? {},
           };
         },
@@ -2227,7 +2286,7 @@ export class ElectronDocumentService implements DocumentService {
               await this.updateTrackerItemSyncStatus(target.id, 'pending');
             }
           }
-          const targetDefs = globalRegistry.get(target.type)?.fields ?? [];
+          const targetDefs = resolveFields([target.type, ...(target.typeTags ?? [])], type => globalRegistry.getForWorkspace(this.workspacePath, type));
           const targetData = await database.query<any>(`SELECT data, updated FROM tracker_items WHERE id = $1`, [target.id]);
           const td = parseJsonColumn<Record<string, unknown>>(targetData.rows[0]?.data) ?? {};
           const updatedAt = targetData.rows[0]?.updated
@@ -2256,6 +2315,7 @@ export class ElectronDocumentService implements DocumentService {
     if (!row) {
       throw new Error(`Tracker item not found: ${itemId}`);
     }
+    if (isPortableTrackerRow(row)) throw new Error('This card is stored in project files. Share it through Git; room publication would change its storage mode.');
     const shareFlag = published
       ? { status: 'team', body: 'team' }
       : { status: 'private', body: 'private' };
@@ -2407,7 +2467,8 @@ export class ElectronDocumentService implements DocumentService {
       if (expectedBodyVersion !== undefined && !expectedFileVersion) {
         throw new Error('Read the file version before changing a file-backed tracker body.');
       }
-      await this.updateTrackerItemInFile(itemId, { description: content }, expectedFileVersion);
+      if (isPortableTrackerRow(row)) await this.updatePortableCard(row, {}, expectedFileVersion, content);
+      else await this.updateTrackerItemInFile(itemId, { description: content }, expectedFileVersion);
       return;
     }
     const contentJson = content != null ? JSON.stringify(content) : null;
@@ -2628,6 +2689,7 @@ export class ElectronDocumentService implements DocumentService {
     if (!row) {
       throw new Error(`Tracker item not found: ${itemId}`);
     }
+    if (isPortableTrackerRow(row)) return this.updatePortableCard(row, { archived: archive, archivedAt: archive ? new Date().toISOString() : null });
 
     // For inline/frontmatter items, write archived state back to the source file
     const documentPath = row.document_path || row.source_ref;
@@ -2702,6 +2764,13 @@ export class ElectronDocumentService implements DocumentService {
     const row = await this.resolveTrackerRowForPublicId(itemId);
     const rowId = row?.id || itemId;
 
+    if (isPortableTrackerRow(row)) {
+      this.assertWorkspace(row.workspace);
+      const store = new FileTrackerStore(this.workspacePath);
+      const card = await store.read(row.source_ref);
+      await store.remove(card.relativePath, card.version);
+    }
+
     // For inline items, remove the line from the source file before deleting from DB
     if (row) {
       const { source, document_path: documentPath } = row;
@@ -2757,8 +2826,9 @@ export class ElectronDocumentService implements DocumentService {
    * Update a file-backed tracker item by writing field changes back to the file.
    * Handles both frontmatter-based items (YAML) and inline items (#type[...]).
    */
-  async updateTrackerItemInFile(itemId: string, updates: Record<string, any>, expectedFileVersion?: string): Promise<TrackerItem> {
+  async updateTrackerItemInFile(itemId: string, updates: Record<string, any>, expectedFileVersion?: string, body?: string): Promise<TrackerItem> {
     const row = await this.resolveTrackerRowForPublicId(itemId);
+    if (isPortableTrackerRow(row)) return this.updatePortableCard(row, updates, expectedFileVersion, body);
     const parsed = parseFullDocumentTrackerId(itemId);
     const identity = row ?? (parsed ? { source: 'frontmatter', source_ref: parsed.relativePath, type: parsed.trackerType } : null);
     if (!identity || (!isFileTracker(identity) && identity.source !== 'inline')) throw new Error('This tracker has no editable file source.');
@@ -3124,11 +3194,189 @@ export class ElectronDocumentService implements DocumentService {
   }
 
   async createTrackerItem(payload: NativeTrackerCreatePayload): Promise<TrackerItem> {
+    this.assertWorkspace(payload.workspace);
+    const store = new FileTrackerStore(this.workspacePath);
+    if ((await store.config()).mode === 'files') {
+      const localId = encodeWorkspaceLocalId(this.workspacePath, payload.id);
+      const nativeCollision = (await database.query<any>('SELECT id FROM tracker_items WHERE id = $1 AND workspace = $2', [payload.id, this.workspacePath])).rows[0];
+      if (nativeCollision) throw new Error('This ID belongs to an existing database or legacy card; choose a new creation ID');
+      const previous = (await database.query<any>('SELECT * FROM tracker_items WHERE id = $1', [localId])).rows[0];
+      if (previous) {
+        this.assertWorkspace(previous.workspace);
+        if (!isPortableTrackerRow(previous)) throw new Error('This ID belongs to an existing database or legacy card; no automatic migration is performed');
+        // Unavailable does not mean absent. A retry must never recreate a card
+        // whose previous source is temporarily inaccessible.
+        await store.read(previous.source_ref);
+      }
+      const model = globalRegistry.getForWorkspace(this.workspacePath, payload.type);
+      if (!model || model.creatable === false) throw new Error(`Tracker type '${payload.type}' does not allow creation`);
+      if (payload.content != null && typeof payload.content !== 'string') throw new Error('File tracker content must be Markdown text');
+      const fields: Record<string, unknown> = {
+        title: payload.title, status: payload.status, priority: payload.priority,
+        key: `${payload.type}-${payload.id}`.toUpperCase(), typeTags: payload.typeTags ?? [payload.type],
+        authorIdentity: getCurrentIdentity(this.workspacePath), ...payload.customFields,
+      };
+      if (payload.description !== undefined) fields.description = payload.description;
+      if (payload.owner !== undefined) fields.owner = payload.owner;
+      if (payload.tags !== undefined) fields.tags = payload.tags;
+      const fieldDefs = this.portableFieldDefinitions(payload.type, fields.typeTags);
+      // UI creation must seed the same hidden schema identifiers as the tools
+      // (planId/decisionId), so the file can be validated after a fresh restore.
+      for (const def of fieldDefs) {
+        if (def.required && def.type === 'string' && def.displayInline === false && fields[def.name] === undefined) fields[def.name] = payload.id;
+      }
+      const portableFields = mapPortableTrackerRelationshipIds(this.workspacePath, fields, fieldDefs, 'toPortable');
+      const relWrite = applyRelationshipFieldWrites(portableFields, fieldDefs, payload.id);
+      if (!relWrite.ok) throw new Error(`Invalid relationship field '${relWrite.field}': ${relWrite.errors.join('; ')}`);
+      const card = await store.create({ id: payload.id, type: payload.type, fields: portableFields, body: typeof payload.content === 'string' ? payload.content : '' }, previous?.source_ref);
+      try {
+        const item = await this.projectPortableCard(card, store);
+        // Replaying creation can finish a previously failed inverse write. The
+        // target writer is idempotent and never triggers inverse propagation.
+        await this.propagateInverseForUpdate({ id: item.id, type: item.type, typeTags: item.typeTags, issueKey: item.issueKey, title: item.title }, portableFields, {});
+        this.trackerItemWatchers.forEach(callback => callback({ added: [item], updated: [], removed: [], timestamp: new Date() }));
+        return item;
+      } catch (error) {
+        throw new TrackerCreationCommittedError(localId, false, error);
+      }
+    }
     return createNativeTrackerItem(payload, {
       assignLocalKeysFrom: (rows) => this.assignLocalKeysFrom(rows),
       rowToTrackerItem: (row) => this.rowToTrackerItem(row),
       notify: (change) => this.trackerItemWatchers.forEach((callback) => callback(change)),
     });
+  }
+
+  async getTrackerStorage(workspacePath: string) {
+    this.assertWorkspace(workspacePath);
+    return new FileTrackerStore(this.workspacePath).configSnapshot();
+  }
+
+  async setTrackerStorage(workspacePath: string, config: unknown, expectedVersion: string) {
+    this.assertWorkspace(workspacePath);
+    return new FileTrackerStore(this.workspacePath).saveConfig(config, expectedVersion);
+  }
+
+  private trackPortableComments(portableId: string): void {
+    if (this.disposed) return;
+    this.portableTrackerWatchIds.add(portableId);
+    if (this.portableTrackerWatch) { this.portableTrackerWatch.track(portableId); return; }
+    if (this.portableTrackerWatchPending) return;
+    const generation = this.portableTrackerWatchGeneration;
+    const current = () => !this.disposed && generation === this.portableTrackerWatchGeneration;
+    this.portableTrackerWatchPending = createPortableTrackerWatch(this.workspacePath,
+      (id, watchCurrent) => this.refreshPortableComments(id, () => current() && watchCurrent()),
+      (error, id) => { if (current()) console.error('[DocumentService] Failed to refresh portable comments:', id, error); },
+    ).then(watch => {
+      if (!current()) { watch.dispose(); return; }
+      this.portableTrackerWatch = watch;
+      for (const id of this.portableTrackerWatchIds) watch.track(id);
+    }).catch(error => {
+      if (current()) console.error('[DocumentService] Failed to subscribe to portable comments:', error);
+    }).finally(() => { if (current()) this.portableTrackerWatchPending = null; });
+  }
+
+  private async refreshPortableComments(portableId: string, isCurrent: () => boolean, attempt = 0): Promise<void> {
+    if (!isCurrent()) return;
+    const id = encodeWorkspaceLocalId(this.workspacePath, portableId);
+    const find = async () => (await database.query<any>('SELECT * FROM tracker_items WHERE id = $1 AND workspace = $2 AND deleted_at IS NULL', [id, this.workspacePath])).rows[0];
+    const previous = await find();
+    if (!isCurrent() || !isPortableTrackerRow(previous)) return;
+    const store = new FileTrackerStore(this.workspacePath);
+    let card: StoredFileTracker;
+    try { card = await store.read(previous.source_ref); }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return; throw error; }
+    if (!isCurrent() || card.id !== portableId) return;
+    const comments = await store.readComments(card);
+    if (!isCurrent()) return;
+    try { if ((await store.read(card.relativePath)).id !== portableId || !isCurrent()) return; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return; throw error; }
+    const row = await find();
+    if (!isCurrent() || !isPortableTrackerRow(row) || row.source_ref !== card.relativePath) return;
+    const before = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+    if (JSON.stringify(before?.comments ?? []) === JSON.stringify(comments)) return;
+    // Project only the sidecar. An UPDATE with an expected snapshot cannot
+    // recreate a removed row or overwrite a concurrent local/card mutation.
+    const expected = typeof row.data === 'string' ? row.data : JSON.stringify(row.data);
+    const saved = await database.query<any>(`UPDATE tracker_items SET data = $1
+      WHERE id = $2 AND workspace = $3 AND data = $4 AND source_ref = $5 AND deleted_at IS NULL RETURNING *`,
+    [JSON.stringify({ ...before, comments }), id, this.workspacePath, expected, card.relativePath]);
+    if (!isCurrent()) return;
+    if (!saved.rows[0]) {
+      if (attempt < 2) await this.refreshPortableComments(portableId, isCurrent, attempt + 1);
+      else throw new FileTrackerConflictError();
+      return;
+    }
+    const item = this.rowToTrackerItem(saved.rows[0]);
+    this.trackerItemWatchers.forEach(callback => callback({ added: [], updated: [item], removed: [], timestamp: new Date() }));
+  }
+
+  private portableFieldDefinitions(primary: string, tags: unknown) {
+    const typeTags = [primary, ...(Array.isArray(tags) ? tags : [])];
+    if (typeTags.some(tag => typeof tag !== 'string' || !globalRegistry.getForWorkspace(this.workspacePath, tag))) throw new Error('Type tags must name registered tracker types');
+    return resolveFields([...new Set(typeTags)], type => globalRegistry.getForWorkspace(this.workspacePath, type));
+  }
+
+  private async projectPortableCard(card: StoredFileTracker, store = new FileTrackerStore(this.workspacePath)): Promise<TrackerItem> {
+    const previous = (await database.query<any>('SELECT * FROM tracker_items WHERE id = $1 AND workspace = $2', [encodeWorkspaceLocalId(this.workspacePath, card.id), this.workspacePath])).rows[0];
+    if (previous?.source_ref && previous.source_ref !== card.relativePath) {
+      try {
+        await store.read(previous.source_ref);
+        throw new Error(`Duplicate tracker ID ${card.id}: ${previous.source_ref} and ${card.relativePath}`);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+    const fieldDefs = this.portableFieldDefinitions(card.type, card.fields.typeTags);
+    const row = await projectPortableTracker(database, this.workspacePath, card, await store.readComments(card), fieldDefs);
+    await reindexItemRelationshipsAfterWrite(this.workspacePath, row.id,
+      typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
+      fieldDefs, trackerRowUpdatedToIso(row.updated), undefined, card.body);
+    this.trackPortableComments(card.id);
+    return this.rowToTrackerItem(row);
+  }
+
+  private async updatePortableCard(row: any, updates: Record<string, any>, expectedVersion?: string, body?: string): Promise<TrackerItem> {
+    this.assertWorkspace(row.workspace);
+    const onlyLocal = new Set(['activity', 'linkedSessions', 'agentSessions', 'revisions', 'kanbanSortOrder', 'metaAgent']);
+    if (body === undefined && Object.keys(updates).length > 0 && Object.keys(updates).every(key => onlyLocal.has(key))) {
+      const previous = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+      await database.query('UPDATE tracker_items SET data = $1 WHERE id = $2', [JSON.stringify({ ...previous, ...updates }), row.id]);
+      const saved = (await database.query<any>('SELECT * FROM tracker_items WHERE id = $1', [row.id])).rows[0];
+      const item = this.rowToTrackerItem(saved);
+      this.trackerItemWatchers.forEach(callback => callback({ added: [], updated: [item], removed: [], timestamp: new Date() }));
+      return item;
+    }
+    const fullPath = await resolveFileTrackerPath(this.workspacePath, row);
+    await prepareFileTrackerEditor(this.workspacePath, fullPath);
+    const store = new FileTrackerStore(this.workspacePath);
+    const current = await store.read(row.source_ref);
+    if (expectedVersion && current.version !== expectedVersion) throw new FileTrackerConflictError();
+    const { comments, activity, linkedSessions, agentSessions, revisions, kanbanSortOrder, metaAgent, ...fields } = updates;
+    if (fields.typeTags !== undefined) {
+      if (!Array.isArray(fields.typeTags)) throw new Error('Type tags must name registered tracker types');
+      fields.typeTags = [...new Set([row.type, ...fields.typeTags])];
+    }
+    const fieldDefs = this.portableFieldDefinitions(row.type, fields.typeTags ?? current.fields.typeTags);
+    const portableFields = mapPortableTrackerRelationshipIds(this.workspacePath, fields, fieldDefs, 'toPortable');
+    const relationshipWrite = applyRelationshipFieldWrites(portableFields, fieldDefs, current.id);
+    if (!relationshipWrite.ok) throw new Error(`Invalid relationship field '${relationshipWrite.field}': ${relationshipWrite.errors.join('; ')}`);
+    if (comments !== undefined) {
+      // A comment is one JSONL-file mutation. Never partially commit a mixed
+      // YAML+comment transaction. Comment authors/timestamps live in JSONL;
+      // adding a comment does not rewrite the card's Markdown metadata.
+      if (body !== undefined || Object.keys(fields).some(key => key !== 'lastModifiedBy')) throw new Error('Update comments separately from card fields or content');
+      delete fields.lastModifiedBy;
+      delete portableFields.lastModifiedBy;
+      const before = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+      await store.writeComments(current, comments, before?.comments ?? []);
+    }
+    const changed = comments === undefined ? await store.update(current.relativePath, portableFields, expectedVersion ?? current.version, body) : current;
+    const local = { activity, linkedSessions, agentSessions, revisions, kanbanSortOrder, metaAgent };
+    const old = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+    for (const [key, value] of Object.entries(local)) if (value !== undefined) old[key] = value;
+    if (Object.values(local).some(value => value !== undefined)) await database.query('UPDATE tracker_items SET data = $1 WHERE id = $2', [JSON.stringify(old), row.id]);
+    const item = await this.projectPortableCard(changed, store);
+    this.trackerItemWatchers.forEach(callback => callback({ added: [], updated: [item], removed: [], timestamp: new Date() }));
+    return item;
   }
 
   /**
@@ -3640,6 +3888,11 @@ export class ElectronDocumentService implements DocumentService {
 
   destroy() {
     this.disposed = true;
+    this.portableTrackerWatchGeneration++;
+    this.portableTrackerWatch?.dispose();
+    this.portableTrackerWatch = null;
+    this.portableTrackerWatchPending = null;
+    this.portableTrackerWatchIds.clear();
     if (this.watchInterval) {
       clearInterval(this.watchInterval);
       this.watchInterval = null;
@@ -3677,6 +3930,11 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
     return;
   }
   handlersRegistered = true;
+
+  safeHandle('document-service:tracker-storage:get', (event, payload: { workspacePath: string }) =>
+    requireDocumentService(event).getTrackerStorage(payload.workspacePath));
+  safeHandle('document-service:tracker-storage:set', (event, payload: { workspacePath: string; config: unknown; expectedVersion: string }) =>
+    requireDocumentService(event).setTrackerStorage(payload.workspacePath, payload.config, payload.expectedVersion));
 
   safeHandle('document-service:list', async (event) => {
     try {
@@ -4005,7 +4263,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       // uses, so the two can't drift — NIM-1305 Defect A).
       try {
         await svc.propagateInverseForUpdate(
-          { id: item.id, type: item.type, issueKey: item.issueKey, title: item.title },
+          { id: item.id, type: item.type, typeTags: item.typeTags, issueKey: item.issueKey, title: item.title },
           updates,
           oldData,
           payload.sharing,
@@ -4241,7 +4499,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
       // Collection chip looked like it worked but only wrote the member side.
       try {
         await svc.propagateInverseForUpdate(
-          { id: item.id, type: item.type, issueKey: item.issueKey, title: item.title },
+          { id: item.id, type: item.type, typeTags: item.typeTags, issueKey: item.issueKey, title: item.title },
           payload.updates,
           oldData,
         );
@@ -4452,7 +4710,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
         await requireDocumentService(event).updateTrackerItemInFile(payload.itemId, { comments, lastModifiedBy: authorIdentity, activity: data.activity });
       }
 
-      await database.query(
+      if (!isPortableTrackerRow(row.rows[0])) await database.query(
         `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
         [JSON.stringify(data), payload.itemId]
       );
@@ -4532,7 +4790,7 @@ export function setupDocumentServiceHandlers(resolver: DocumentServiceResolver) 
         await requireDocumentService(event).updateTrackerItemInFile(payload.itemId, { comments: result.comments, lastModifiedBy: actor, activity: data.activity });
       }
 
-      await database.query(
+      if (!isPortableTrackerRow(row.rows[0])) await database.query(
         `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
         [JSON.stringify(data), payload.itemId]
       );

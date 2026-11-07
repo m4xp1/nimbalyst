@@ -16,6 +16,7 @@ import { getDatabase } from '../../database/initialize';
 import { logger } from '../../utils/logger';
 import { flattenDataForRead } from './relationshipFieldStorage';
 import { isFileTracker, readFileTrackerBody } from './fileTrackerBody';
+import { encodeWorkspaceLocalId, isPortableTrackerSourceId } from './portableTrackerIdentity';
 import {
   BODY_LINK_FIELD_PREFIX,
   bodyLinkHomeScope,
@@ -138,17 +139,27 @@ async function resolveLinkTargets(
 ): Promise<Map<string, ResolvedLinkTarget>> {
   const resolved = new Map<string, ResolvedLinkTarget>();
   if (keys.length === 0) return resolved;
-  const placeholders = keys.map((_, index) => `$${index + 2}`).join(', ');
+  const lookupKeys = [...new Set([...keys, ...keys.filter(isPortableTrackerSourceId).map(key => encodeWorkspaceLocalId(workspace, key))])];
+  const placeholders = lookupKeys.map((_, index) => `$${index + 2}`).join(', ');
   const result = await db.query(
-    `SELECT id, type, issue_key FROM tracker_items
+    `SELECT id, type, issue_key, data FROM tracker_items
      WHERE workspace = $1 AND deleted_at IS NULL
        AND (id IN (${placeholders}) OR issue_key IN (${placeholders}))`,
-    [workspace, ...keys],
+    [workspace, ...lookupKeys],
   );
   for (const row of rowsOf(result)) {
     const target = { itemId: row.id, type: row.type };
     resolved.set(row.id, target);
     if (row.issue_key) resolved.set(row.issue_key, target);
+  }
+  // Explicit native IDs and issue keys retain precedence over a portable alias.
+  for (const row of rowsOf(result)) {
+    const data = parseMeta(row.data);
+    const portableId = data.portableId;
+    if (data.trackerFormat === 1 && typeof portableId === 'string' && isPortableTrackerSourceId(portableId)
+      && row.id === encodeWorkspaceLocalId(workspace, portableId) && keys.includes(portableId) && !resolved.has(portableId)) {
+      resolved.set(portableId, { itemId: row.id, type: row.type });
+    }
   }
   return resolved;
 }

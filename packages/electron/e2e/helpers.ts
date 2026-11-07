@@ -1,3 +1,4 @@
+import { isolatedAgentEnvironment } from './isolatedAgentEnvironment';
 import { _electron, chromium } from '@playwright/test';
 import type { Browser, ElectronApplication, Page } from 'playwright';
 import { spawn, type ChildProcess } from 'child_process';
@@ -192,7 +193,7 @@ export function buildTestEnv(
     delete testEnv.ENABLE_SESSION_RESTORE;
   }
 
-  return testEnv;
+  return isolatedAgentEnvironment(path.join(testEnv.NIMBALYST_USER_DATA_DIR, 'agent-home'), testEnv);
 }
 
 async function waitForCdpEndpoint(port: string, timeoutMs = TEST_TIMEOUTS.SIDEBAR_LOAD): Promise<void> {

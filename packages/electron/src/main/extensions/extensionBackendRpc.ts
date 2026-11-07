@@ -176,6 +176,7 @@ export type BrokerMethodName =
   | 'getApiKey'
   | 'memorySessions'
   | 'memorySourceRoots'
+  | 'notifyMemoryChanged'
   | 'embeddingDiagnostics'
   | 'readWorkspaceFile'
   | 'writeWorkspaceFile'
@@ -189,6 +190,7 @@ export type BrokerMethodName =
 export interface BrokerPayloads {
   embeddingDiagnostics: {op:"get"|"set";enabled?:boolean};
   memorySourceRoots: Record<string, never>;
+  notifyMemoryChanged: {areas:Array<'status'|'sources'|'usage'>};
   memorySessions: {op:'rebuild'} | {op:'read';sessionId:string;cursor?:string;maxChars?:number};
   logRaw: {
     direction: 'inbound' | 'outbound';
@@ -257,6 +259,7 @@ export interface BrokerPayloads {
 export interface BrokerResults {
   embeddingDiagnostics: {developerMode:boolean;loggingEnabled:boolean;openaiAllowed:boolean};
   memorySourceRoots: import('../utils/workspaceSearchRoots').WorkspaceSearchRoot[];
+  notifyMemoryChanged: void;
   memorySessions: {ok:true} | import('../services/MemorySessionReader').MemorySessionReadResult;
   logRaw: { id: number };
   getApiKey: { key: string | null };

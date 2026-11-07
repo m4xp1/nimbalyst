@@ -186,7 +186,7 @@ export class ModelRegistry {
         return OpenAIProvider.getModels(apiKey);
       case 'openai-codex':
         const { OpenAICodexProvider } = await import('./providers/OpenAICodexProvider');
-        return OpenAICodexProvider.getModels(apiKey);
+        return OpenAICodexProvider.getModels(apiKey, undefined, workspacePath);
       case 'openai-codex-acp':
         const { OpenAICodexACPProvider } = await import('./providers/OpenAICodexACPProvider');
         return OpenAICodexACPProvider.getModels(apiKey);
@@ -219,7 +219,7 @@ export class ModelRegistry {
     baseUrl: string | undefined,
   ): string {
     // Claude providers read project/local `.claude/settings*.json` for custom models.
-    if (provider === 'opencode' || isClaudeCodeFamily(provider)) {
+    if (provider === 'opencode' || provider === 'openai-codex' || isClaudeCodeFamily(provider)) {
       return JSON.stringify([provider, workspacePath ?? null]);
     }
     if (provider === 'lmstudio') {

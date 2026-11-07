@@ -5,6 +5,7 @@ import type { Provider } from '@lexical/yjs';
 import type { Doc } from 'yjs';
 import type { CommentsConfig } from './commenting/types';
 import type { DecisionsConfig } from './decisions/types';
+import type { MarkdownSourcePreserver } from './markdown/MarkdownSourceSnapshot';
 
 /**
  * Configuration interface for the Nimbalyst component.
@@ -118,6 +119,8 @@ export interface EditorConfig {
   onDirtyChange?: (isDirty: boolean) => void;
 
   onGetContent?: (getContentFn: () => string) => void;
+  /** Disk-backed hosts preserve unchanged Markdown bytes with their file writer. */
+  preserveMarkdownSource?: MarkdownSourcePreserver;
   onEditorReady?: (editor: any) => void;
   onSaveRequest?: () => void;
   initialContent?: string; // Pre-loaded content to set in editor

@@ -1,4 +1,6 @@
-import { globalRegistry, scopeValidationToChanges } from '@nimbalyst/tracker-schema';
+import { FileTrackerStore } from '../../services/tracker/fileTrackerStore';
+import { isPortableTrackerRow } from '../../services/tracker/portableTrackerProjection';
+import { globalRegistry, getRoleField, resolveFields, scopeValidationToChanges } from '@nimbalyst/tracker-schema';
 import type { TrackerItem } from '@nimbalyst/runtime';
 import { getCurrentIdentity } from '../../services/TrackerIdentityService';
 import {
@@ -29,6 +31,7 @@ import { nestRelationshipFieldsIntoCustomFields, readStoredFieldValue, writeStor
 import { reindexItemRelationshipsAfterWrite } from '../../services/tracker/trackerRelationshipIndexStore';
 import {
   isRelationshipField,
+  normalizeRelationshipValue,
   matchesFilterSet,
   isUntriaged,
   priorityOptionsFor,
@@ -194,7 +197,7 @@ export function readLinkedTrackerItemIds(rawMetadata: unknown): string[] {
  * Returns true if any link was actually created (vs already existing).
  */
 async function persistFileSessionLinks(row: any, publicId: string, linkedSessions: string[]): Promise<void> {
-  if (!isFileTracker(row)) return;
+  if (!isFileTracker(row) || isPortableTrackerRow(row)) return;
   const { docService } = await getDocumentServiceForWorkspace(row.workspace);
   if (!docService) throw new Error('The file tracker workspace is unavailable.');
   // Save the authoritative frontmatter before mutating either database link.
@@ -226,7 +229,7 @@ export async function createBidirectionalLink(
         data.linkedSessions = linkedSessions;
         await persistFileSessionLinks(row, trackerId, linkedSessions);
         await db.query(
-          `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
+          `UPDATE tracker_items SET data = $1${isPortableTrackerRow(row) ? '' : ', updated = NOW()'} WHERE id = $2`,
           [JSON.stringify(data), trackerRowId]
         );
         changed = true;
@@ -234,7 +237,7 @@ export async function createBidirectionalLink(
     } else if (data.linkedSessions !== undefined) {
       delete data.linkedSessions;
       await db.query(
-        `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
+        `UPDATE tracker_items SET data = $1${isPortableTrackerRow(row) ? '' : ', updated = NOW()'} WHERE id = $2`,
         [JSON.stringify(data), trackerRowId]
       );
       changed = true;
@@ -296,7 +299,7 @@ export async function removeBidirectionalLink(
           delete data.linkedSessions;
         }
         await db.query(
-          `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
+          `UPDATE tracker_items SET data = $1${isPortableTrackerRow(row) ? '' : ', updated = NOW()'} WHERE id = $2`,
           [JSON.stringify(data), trackerRowId]
         );
         changed = true;
@@ -304,7 +307,7 @@ export async function removeBidirectionalLink(
     } else if (data.linkedSessions !== undefined) {
       delete data.linkedSessions;
       await db.query(
-        `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
+        `UPDATE tracker_items SET data = $1${isPortableTrackerRow(row) ? '' : ', updated = NOW()'} WHERE id = $2`,
         [JSON.stringify(data), trackerRowId]
       );
       changed = true;
@@ -359,6 +362,10 @@ export function normalizeTypeTags(rawTypeTags: unknown, fallbackType: string): s
   return parsed && parsed.length > 0 ? parsed : [fallbackType];
 }
 
+function primaryFirstTypeTags(type: string, rawTypeTags: unknown): string[] {
+  return [...new Set([type, ...normalizeTypeTags(rawTypeTags, type).filter(tag => typeof tag === 'string')])];
+}
+
 /**
  * `content` is stored as JSON.stringify(markdown) (see updateTrackerItemContent /
  * tracker_create). Undo that encoding on read; legacy/plain rows without JSON
@@ -378,7 +385,7 @@ export function rowToTrackerItem(row: any): any {
   // type_tags comes from the DB column; fall back to [type] for backward compat.
   const typeTags: string[] = normalizeTypeTags(row.type_tags, row.type);
   const result: any = {
-    id: row.source === 'frontmatter' && row.source_ref
+    id: !isPortableTrackerRow(row) && row.source === 'frontmatter' && row.source_ref
       ? buildFullDocumentTrackerId(row.type, row.source_ref)
       : row.id,
     issueNumber: row.issue_number ?? undefined,
@@ -664,7 +671,7 @@ export const trackerToolSchemas = [
       properties: {
         id: {
           type: "string",
-          description: "The tracker item ID or issue key (e.g. NIM-123)",
+          description: "The returned tracker ID, portable file ID scoped to this workspace, or issue key (e.g. NIM-123)",
         },
       },
       required: ["id"],
@@ -673,10 +680,18 @@ export const trackerToolSchemas = [
   {
     name: "tracker_create",
     description:
-      "Create a new tracker item (bug, task, plan, idea, decision, or any custom type).\n\nBy default, the new item is NOT linked to the current session. Pass linkSession: true to link it, or call tracker_link_session afterward.\n\nIMPORTANT: Never create an item already marked 'done' or 'completed'. Use 'to-do', 'in-progress', or 'in-review'.",
+      "Create a new tracker item (bug, task, plan, idea, decision, or any custom type). Consult tracker_list_types for the project storage mode, paths and effective field schema. Files mode saves a Markdown card at the configured path; supply a stable id and reuse it with the same draft on retries. Do not also write a second card manually.\n\nBy default, the new item is NOT linked to the current session. Pass linkSession: true to link it, or call tracker_link_session afterward.\n\nIMPORTANT: Never create an item already marked 'done' or 'completed'. Use 'to-do', 'in-progress', or 'in-review'.",
     inputSchema: {
       type: "object" as const,
       properties: {
+        id: {
+          type: 'string',
+          description: 'Stable portable item ID; required in Files mode. Generate once (letters, digits, underscore or hyphen, 4-101 characters) and reuse the same ID and payload on creation retries.',
+        },
+        content: {
+          type: 'string',
+          description: 'Markdown body for a new Files-mode card; use description for a short frontmatter summary (at most 500 characters).',
+        },
         type: {
           type: "string",
           description:
@@ -689,7 +704,7 @@ export const trackerToolSchemas = [
         description: {
           type: "string",
           description:
-            "Plain text or markdown description (stored as rich content)",
+            "Files mode: short frontmatter summary (at most 500 characters), with full Markdown in content. Database mode: plain text or Markdown description.",
         },
         status: {
           type: "string",
@@ -766,9 +781,10 @@ export const trackerToolSchemas = [
     inputSchema: {
       type: "object" as const,
       properties: {
+        content: { type: 'string', description: 'For a new Files-mode card, replace the Markdown body. description separately edits its short YAML summary; legacy cards retain their description/body behavior.' },
         id: {
           type: "string",
-          description: "The tracker item ID or issue key to update",
+          description: "The returned tracker ID, portable file ID scoped to this workspace, or issue key to update",
         },
         linkSession: {
           type: "boolean",
@@ -789,7 +805,7 @@ export const trackerToolSchemas = [
         },
         description: {
           type: "string",
-          description: "New description content (replaces existing content)",
+          description: "Files-mode cards: replace the short YAML summary (at most 500 characters); use content to replace the Markdown body. Database and legacy cards retain their existing description/content behavior.",
         },
         tags: {
           type: "array",
@@ -867,7 +883,7 @@ export const trackerToolSchemas = [
   {
     name: "tracker_list_types",
     description:
-      "List available tracker types and their schemas, including owner (builtin, personal, or team:<name>), lastChangedBy, schema activity, and any git-tracked team-file warning. Returns built-in and custom tracker types unless filtered.",
+      "List available tracker types and their schemas, including the project's new-card storage policy and configured per-type file folders, owner (builtin, personal, or team:<name>), lastChangedBy, schema activity, and any git-tracked team-file warning. Returns built-in and custom tracker types unless filtered. Consult this before creating a card; an unconfigured Files-mode folder is an error, not permission to choose another storage route.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1358,6 +1374,7 @@ export async function handleTrackerList(
       .slice(0, limit)
       .map((item) => ({
         id: item.id,
+        ...(item.customFields?.portableId ? { portableId: item.customFields.portableId } : {}),
         issueNumber: item.issueNumber ?? undefined,
         issueKey: getAssignedIssueKey(item),
         localKey: item.localKey ?? undefined,
@@ -1459,6 +1476,7 @@ export async function handleTrackerList(
       count: items.length,
       items: items.map((item: any) => ({
         id: item.id,
+        ...(item.customFields?.portableId ? { portableId: item.customFields.portableId } : {}),
         issueNumber: item.issueNumber,
         issueKey: item.issueKey,
         localKey: item.localKey,
@@ -1672,6 +1690,7 @@ export async function handleTrackerGet(
 
     let item: TrackerItem | null = null;
     if (docService) {
+      await docService.ensureFileTrackerProjections?.();
       item = await docService.getTrackerItemById(args.id);
       if (!item && args.id) {
         const all = await docService.listTrackerItems();
@@ -1799,6 +1818,7 @@ export async function handleTrackerGet(
       action: "retrieved" as const,
       item: {
         id: item.id,
+        ...(item.customFields?.portableId ? { portableId: item.customFields.portableId } : {}),
         issueNumber: item.issueNumber ?? undefined,
         issueKey: assignedIssueKey,
         localKey: item.localKey ?? undefined,
@@ -1912,7 +1932,12 @@ export async function handleTrackerCreate(
     const humanOnly = rejectHumanOnlyStatus(args, args.type);
     if (humanOnly) return humanOnly;
 
-    const issueOverlayResult = await handleGithubIssueOverlayCreate(
+    const storageConfig = await new FileTrackerStore(workspacePath).config();
+    if (storageConfig.mode === 'files' && (typeof args.id !== 'string' || !args.id.trim())) {
+      return { content: [{ type: 'text', text: 'File tracker creation requires a stable id. Choose one ID and reuse it with the same draft on retries.' }], isError: true };
+    }
+
+    const issueOverlayResult = storageConfig.mode === 'files' ? undefined : await handleGithubIssueOverlayCreate(
       args,
       workspacePath,
       Boolean(sessionId && args.linkSession === true),
@@ -1929,7 +1954,14 @@ export async function handleTrackerCreate(
     const db = getDatabase();
 
     // Check if this type allows creation
-    const model = globalRegistry.get(args.type);
+    const model = storageConfig.mode === 'files'
+      ? globalRegistry.getForWorkspace(workspacePath, args.type)
+      : globalRegistry.get(args.type);
+    const typeTags = primaryFirstTypeTags(args.type, args.typeTags);
+    const effectiveFileModel = storageConfig.mode === 'files' && model
+      ? { ...model, fields: resolveFields(typeTags, type => globalRegistry.getForWorkspace(workspacePath, type)) }
+      : undefined;
+    const createDefs = effectiveFileModel?.fields ?? model?.fields ?? [];
     if (model && model.creatable === false) {
       return {
         content: [
@@ -1964,7 +1996,9 @@ export async function handleTrackerCreate(
     // (title, status, priority, etc.) are placed at the correct field name
     // for the target schema. E.g., a schema with roles: { title: 'name' }
     // will store args.title in data.name.
-    const rf = (role: string, fallback: string) => getTrackerRoleField(args.type, role as any) ?? fallback;
+    const rf = (role: string, fallback: string) => (storageConfig.mode === 'files'
+      ? model && getRoleField(model, role as any)
+      : getTrackerRoleField(args.type, role as any)) ?? fallback;
     const titleField = rf('title', 'title');
     const statusField = rf('workflowStatus', 'status');
     const priorityField = rf('priority', 'priority');
@@ -2016,23 +2050,23 @@ export async function handleTrackerCreate(
     // ever supplies. These are non-inline string fields; seed them with the
     // item id so they're stable and unique. Without this, full-document types
     // fail schema validation and cannot be created via tracker_create at all.
-    for (const f of model?.fields ?? []) {
+    for (const f of createDefs) {
       if (f.required && f.type === 'string' && f.displayInline === false && data[f.name] === undefined) {
         data[f.name] = id;
       }
     }
 
     // Canonicalize + validate relationship fields (Epic C) before persistence.
-    const relWrite = applyRelationshipFieldWrites(data, globalRegistry.get(args.type)?.fields ?? [], id);
+    const relWrite = applyRelationshipFieldWrites(data, createDefs, id);
     if (!relWrite.ok) {
       return {
         content: [{ type: 'text', text: `Invalid relationship field "${relWrite.field}": ${relWrite.errors.join('; ')}` }],
         isError: true,
       };
     }
-    await pinCitedRevisions(db, workspacePath, id, data, globalRegistry.get(args.type)?.fields ?? []);
+    if (storageConfig.mode !== 'files') await pinCitedRevisions(db, workspacePath, id, data, globalRegistry.get(args.type)?.fields ?? []);
 
-    const validationResult = globalRegistry.validate(args.type, data);
+    const validationResult = globalRegistry.validate(args.type, data, effectiveFileModel);
     if (!validationResult.valid) {
       return buildTrackerSchemaValidationError('tracker_create', args.type, validationResult.errors);
     }
@@ -2064,14 +2098,6 @@ export async function handleTrackerCreate(
         ? args.origin.filePath
         : null;
 
-    // Build type_tags: always includes primary type + any additional tags
-    const typeTags: string[] = [args.type];
-    if (args.typeTags?.length) {
-      for (const tag of args.typeTags) {
-        if (!typeTags.includes(tag)) typeTags.push(tag);
-      }
-    }
-
     // Normalize literal \n sequences to real newlines (MCP tool args may contain escaped sequences)
     const descriptionText = typeof args.description === 'string'
       ? args.description.replace(/\\n/g, '\n')
@@ -2079,6 +2105,35 @@ export async function handleTrackerCreate(
     const contentJson = descriptionText !== null
       ? JSON.stringify(descriptionText)
       : null;
+
+    if (storageConfig.mode === 'files') {
+      const { docService } = await getDocumentServiceForWorkspace(workspacePath);
+      if (!docService) throw new Error('Open this workspace before creating a file tracker card.');
+      if (args.content !== undefined && typeof args.content !== 'string') throw new Error('File tracker content must be Markdown text.');
+      const { created: _created, activity: _activity, linkedSessions: _sessions, agentSessions: _agents, ...portableFields } = data;
+      const createdItem = await docService.createTrackerItem({
+        id, creationRequestId: id, type: args.type, workspace: workspacePath,
+        title: data[titleField], status: data[statusField], priority: data[priorityField],
+        description: data.description, owner: args.owner, tags: data[rf('tags', 'tags')],
+        typeTags, customFields: portableFields,
+        content: args.content ?? descriptionText ?? '',
+      });
+      const sessionLink = sessionId && args.linkSession === true
+        ? await handleTrackerLinkSession({ trackerId: createdItem.id }, sessionId, workspacePath)
+        : undefined;
+      trackMcpTrackerMutation('created', createdItem.id, createdItem.type, false);
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          structured: { action: 'created', storage: 'files', item: {
+            id: createdItem.id, portableId: id, type: createdItem.type, typeTags, title: createdItem.title,
+            status: createdItem.status, priority: createdItem.priority,
+            issueKey: getAssignedIssueKey(createdItem), sourceRef: createdItem.sourceRef,
+          }, ...(sessionLink?.isError ? { sessionLink } : {}) },
+          summary: `Saved file tracker ${createdItem.id} at ${createdItem.sourceRef}. Reuse portable ID ${id} and the same draft if retrying creation.${sessionLink?.isError ? ' The card was saved, but linking the session failed.' : ''}`,
+        }) }],
+        isError: false,
+      };
+    }
 
     const creationStatements = [{
       sql: `INSERT INTO tracker_items (
@@ -2309,7 +2364,8 @@ export async function handleTrackerUpdate(
             isError: true,
           };
         }
-        if (args.primaryType !== undefined || args.typeTags !== undefined) {
+        const portable = isPortableTrackerRow(row);
+        if (args.primaryType !== undefined || (args.typeTags !== undefined && !portable)) {
           return {
             content: [
               {
@@ -2321,8 +2377,18 @@ export async function handleTrackerUpdate(
           };
         }
 
-        const rf = (role: string, fallback: string) => getTrackerRoleField(item.type, role as any) ?? fallback;
+        const fileWorkspace = row?.workspace ?? workspacePath ?? item.workspace;
+        const fileTypeTags = primaryFirstTypeTags(item.type, args.typeTags ?? row?.type_tags ?? item.typeTags);
+        const fileModel = portable ? globalRegistry.getForWorkspace(fileWorkspace, item.type) : undefined;
+        const fileDefs = portable
+          ? resolveFields(fileTypeTags, type => globalRegistry.getForWorkspace(fileWorkspace, type))
+          : globalRegistry.get(item.type)?.fields ?? [];
+        const effectiveFileModel = fileModel ? { ...fileModel, fields: fileDefs } : undefined;
+        const rf = (role: string, fallback: string) => (portable
+          ? fileModel && getRoleField(fileModel, role as any)
+          : getTrackerRoleField(item.type, role as any)) ?? fallback;
         const data = typeof row?.data === 'string' ? JSON.parse(row.data) : (row?.data || {});
+        const oldFileData = structuredClone(data);
         const titleField = rf('title', 'title');
         const statusField = rf('workflowStatus', 'status');
         const priorityField = rf('priority', 'priority');
@@ -2352,6 +2418,8 @@ export async function handleTrackerUpdate(
 
         const changes: Record<string, { from: any; to: any }> = {};
         const fileUpdates: Record<string, any> = {};
+        if (portable && args.typeTags !== undefined) fileUpdates.typeTags = fileTypeTags;
+        if (portable && args.content !== undefined && typeof args.content !== 'string') throw new Error('File tracker content must be Markdown text.');
         if (args.tags !== undefined && !Array.isArray(args.tags)) {
           args.tags = [];
         }
@@ -2431,8 +2499,19 @@ export async function handleTrackerUpdate(
           }
         }
 
+        if (portable) {
+          // Public tools accept the stable file ID as well as the local row ID.
+          // Compare both before persistence, without remapping native targets.
+          const selfIds = new Set([publicTrackerId, row?.id, data.portableId].filter((id): id is string => typeof id === 'string'));
+          const selfLink = fileDefs.find(def => isRelationshipField(def) && !def.allowSelfLink && def.name in fileUpdates
+            && normalizeRelationshipValue(fileUpdates[def.name]).some(value => selfIds.has(value.itemId)));
+          if (selfLink) return { content: [{ type: 'text', text: `Invalid relationship field "${selfLink.name}": An item cannot link to itself on this field` }], isError: true };
+          const relWrite = applyRelationshipFieldWrites(fileUpdates, fileDefs, publicTrackerId);
+          if (!relWrite.ok) return { content: [{ type: 'text', text: `Invalid relationship field "${relWrite.field}": ${relWrite.errors.join('; ')}` }], isError: true };
+          for (const def of fileDefs) if (isRelationshipField(def) && def.name in fileUpdates) data[def.name] = fileUpdates[def.name];
+        }
         const validationResult = scopeValidationToChanges(
-          globalRegistry.validate(item.type, data),
+          globalRegistry.validate(item.type, data, effectiveFileModel),
           [...Object.keys(changes), ...Object.keys(fileUpdates)],
         );
         if (!validationResult.valid) {
@@ -2453,12 +2532,14 @@ export async function handleTrackerUpdate(
 
         const tooLarge = row ? sharedTrackerItemTooLarge(rowToTrackerItem({ ...row, data: JSON.stringify(data) }), workspacePath) : null;
         if (tooLarge) return tooLargeToShareToolResult('tracker_update', tooLarge);
-        if (Object.keys(fileUpdates).length > 0) {
-          await docService.updateTrackerItemInFile(publicTrackerId, { ...fileUpdates, activity: data.activity, lastModifiedBy: modifierIdentity });
+        if (Object.keys(fileUpdates).length > 0 || (portable && args.content !== undefined)) {
+          const changesToWrite = { ...fileUpdates, activity: data.activity, lastModifiedBy: modifierIdentity };
+          if (portable && args.content !== undefined) await docService.updateTrackerItemInFile(publicTrackerId, changesToWrite, undefined, args.content);
+          else await docService.updateTrackerItemInFile(publicTrackerId, changesToWrite);
         }
 
         row = await resolveTrackerRowByReference(db, publicTrackerId, workspacePath);
-        if (row) {
+        if (row && !portable) {
           await db.query(
             `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
             [JSON.stringify(data), row.id]
@@ -2468,6 +2549,24 @@ export async function handleTrackerUpdate(
         if (args.archived !== undefined) {
           await docService.archiveTrackerItem(publicTrackerId, args.archived);
           row = await resolveTrackerRowByReference(db, publicTrackerId, workspacePath);
+        }
+
+        if (portable && row) {
+          // The file service's projection resolves raw portable references into
+          // local row IDs and preserves real native targets. Propagate that
+          // canonical value, not an unqualified ID from the tool arguments.
+          const projectedData = typeof row.data === 'string' ? JSON.parse(row.data) : row.data ?? {};
+          const relChangedFields = Object.fromEntries(fileDefs
+            .filter(def => isRelationshipField(def) && def.name in fileUpdates)
+            .map(def => [def.name, readStoredFieldValue(projectedData, def.name)]));
+          if (Object.keys(relChangedFields).length) {
+            try {
+              await docService.propagateInverseForUpdate(
+                { id: row?.id ?? publicTrackerId, type: item.type, typeTags: fileTypeTags, issueKey: row?.issue_key ?? item.issueKey, title: data[titleField] },
+                relChangedFields, oldFileData, fileModel?.sharing, fileModel?.draftByDefault,
+              );
+            } catch (error) { console.error('[MCP Server] tracker_update file inverse propagation failed:', error); }
+          }
         }
 
         const refreshedItem =
@@ -2495,7 +2594,7 @@ export async function handleTrackerUpdate(
           await notifyTrackerItemUpdated(workspacePath, row.id);
         }
 
-        if (row && workspacePath) {
+        if (row && workspacePath && !portable) {
           const sharingPolicy = getEffectiveTrackerSharingPolicy(workspacePath, refreshedItem.type, globalRegistry.get(refreshedItem.type));
           if (shouldSyncTrackerItem(sharingPolicy, refreshedItem)) {
             const pushed = { ...refreshedItem, workspace: workspacePath };
@@ -2534,6 +2633,7 @@ export async function handleTrackerUpdate(
                 structured: {
                   action: "updated" as const,
                   id: refreshedItem.id,
+                  ...(refreshedItem.customFields?.portableId ? { portableId: refreshedItem.customFields.portableId } : {}),
                   issueNumber: refreshedItem.issueNumber ?? undefined,
                   issueKey: getAssignedIssueKey(refreshedItem),
                   localKey: refreshedItem.localKey ?? undefined,
@@ -2676,15 +2776,21 @@ export async function handleTrackerUpdate(
         primaryTypeChanged = true;
       }
 
-      // Canonicalize + validate relationship fields (Epic C) before persistence.
-      const relWrite = applyRelationshipFieldWrites(data, globalRegistry.get(row.type)?.fields ?? [], row.id);
+      // Relationship selection, validation, inverse writes and indexing use the
+      // same primary-first fields, including the current/new secondary tags.
+      const previousSecondary = primaryTypeChanged
+        ? normalizeTypeTags(row.type_tags, oldType).filter(type => type !== oldType)
+        : row.type_tags;
+      const updateTypeTags = primaryFirstTypeTags(row.type, args.typeTags ?? previousSecondary);
+      const updateDefs = resolveFields(updateTypeTags, type => globalRegistry.getForWorkspace(row.workspace, type));
+      const relWrite = applyRelationshipFieldWrites(data, updateDefs, row.id);
       if (!relWrite.ok) {
         return {
           content: [{ type: 'text', text: `Invalid relationship field "${relWrite.field}": ${relWrite.errors.join('; ')}` }],
           isError: true,
         };
       }
-      await pinCitedRevisions(db, row.workspace, row.id, data, globalRegistry.get(row.type)?.fields ?? []);
+      await pinCitedRevisions(db, row.workspace, row.id, data, updateDefs);
 
       // A new type's schema applies to every field; otherwise the update answers
       // only for what it writes, so an item that predates a required field can
@@ -2702,7 +2808,6 @@ export async function handleTrackerUpdate(
       // source's relationship writes into data.customFields (the durable synced
       // shape) so they survive sync re-serialization and the inverse read finds
       // them (NIM-1305). Non-relationship custom fields are left as-is.
-      const updateDefs = globalRegistry.get(row.type)?.fields ?? [];
       const relChangedFields: Record<string, unknown> = {};
       for (const def of updateDefs) {
         if (!isRelationshipField(def)) continue;
@@ -2885,6 +2990,7 @@ export async function handleTrackerUpdate(
             {
               id: row.id,
               type: row.type,
+              typeTags: primaryFirstTypeTags(row.type, refreshedRow?.type_tags ?? updateTypeTags),
               issueKey: row.issue_key ?? undefined,
               title: (data[rf('title', 'title')] as string) ?? row.title,
             },
@@ -2925,7 +3031,7 @@ export async function handleTrackerUpdate(
         row.workspace,
         row.id,
         data,
-        globalRegistry.get(row.type)?.fields ?? [],
+        updateDefs,
         new Date().toISOString(),
         undefined,
         args.description !== undefined ? args.description.replace(/\\n/g, '\n') : undefined,
@@ -3426,7 +3532,7 @@ export async function handleTrackerAddComment(
       if (!docService) throw new Error('The file tracker workspace is unavailable.');
       await docService.updateTrackerItemInFile(item?.id || row.id, { comments, lastModifiedBy: authorIdentity, activity: data.activity });
     }
-    await db.query(
+    if (!isPortableTrackerRow(row)) await db.query(
       `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
       [JSON.stringify(data), row.id]
     );
@@ -3436,7 +3542,7 @@ export async function handleTrackerAddComment(
 
     // Trigger sync
     try {
-      if (workspacePath) {
+      if (workspacePath && !isPortableTrackerRow(row)) {
         const sharingPolicy = getEffectiveTrackerSharingPolicy(workspacePath, row.type);
         if (shouldSyncTrackerItem(sharingPolicy, data)) {
           if (isTrackerSyncActive(workspacePath)) {

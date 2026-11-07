@@ -514,8 +514,11 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       return () => cancelAnimationFrame(rafId);
     }, [value, userSetHeight]);
 
+    const slashRequestGeneration = useRef(0);
+
     // Fetch slash commands from IPC (SDK commands + local commands)
     const fetchSlashCommands = useCallback(async () => {
+      const generation = ++slashRequestGeneration.current;
       if (remoteSession) { setAllSlashCommands(remoteCommands ?? []); return; }
       if (!enableSlashCommands || !workspacePath) return;
       try {
@@ -524,16 +527,17 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
           sessionId,
           provider: currentProvider ?? provider ?? null,
         });
-        setAllSlashCommands(commands);
+        if (generation === slashRequestGeneration.current) setAllSlashCommands(commands);
       } catch (error) {
         console.error('[AIInput] Failed to load slash commands:', error);
-        setAllSlashCommands([]);
+        if (generation === slashRequestGeneration.current) setAllSlashCommands([]);
       }
     }, [workspacePath, sessionId, enableSlashCommands, currentProvider, provider, remoteSession, remoteCommands]);
 
     // Fetch on mount and when workspace/session changes
     useEffect(() => {
       fetchSlashCommands();
+      return () => { slashRequestGeneration.current++; };
     }, [fetchSlashCommands]);
 
     // Filter and sort slash commands based on query

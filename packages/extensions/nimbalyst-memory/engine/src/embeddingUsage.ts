@@ -66,7 +66,7 @@ export class EmbeddingUsage {
     private queue: Promise<void> = Promise.resolve();
     private queued = 0;
     private dropped = 0;
-    constructor(private directory: string, identity: string,options:{preserveIdentity?:boolean}={}) {
+    constructor(private directory: string, identity: string,private options:{preserveIdentity?:boolean;onChanged?:()=>void}={}) {
         this.file = path.join(directory, 'embedding-usage.json');
         this.state = this.fresh(identity);
         try {
@@ -93,8 +93,8 @@ export class EmbeddingUsage {
     private fresh(identity: string): Saved { return { version: 1, identity, epoch: randomUUID(), since: Date.now(), totals: empty(), days: {}, reasons: {}, dayReasons: {}, pending: {} }; }
     reset(identity: string): void { if (this.state.identity === identity)
         return; this.state = this.fresh(identity); this.save(); }
-    setLogging(enabled: boolean): void { this.logging = enabled; }
-    private save(): void { if (this.readOnly)
+    setLogging(enabled: boolean): void { if(this.logging===enabled)return;this.logging = enabled;this.options.onChanged?.(); }
+    private save(): void { this.options.onChanged?.();if (this.readOnly)
         return; try {
         fs.mkdirSync(this.directory, { recursive: true });
         fs.writeFileSync(this.file + '.tmp', JSON.stringify(this.state) + '\n');
@@ -153,6 +153,7 @@ export class EmbeddingUsage {
     private log(event: unknown): void { if (!this.logging)
         return; if (this.queued >= 1024) {
         this.dropped++;
+        this.options.onChanged?.();
         return;
     } this.queued++; const line = JSON.stringify(event) + '\n'; this.queue = this.queue.then(async () => { const file = path.join(this.directory, 'embedding-requests.jsonl'); let size = 0; try {
         size = (await fsp.stat(file)).size;
@@ -169,6 +170,6 @@ export class EmbeddingUsage {
                     throw error;
             }
         }
-    } await fsp.appendFile(file, line); }).catch(() => { this.dropped++; this.logError = 'Embedding request log could not be written.'; }).finally(() => { this.queued--; }); }
+    } await fsp.appendFile(file, line); }).catch(() => { this.dropped++; this.logError = 'Embedding request log could not be written.'; this.options.onChanged?.(); }).finally(() => { this.queued--; }); }
     async close(): Promise<void> { await this.queue; }
 }

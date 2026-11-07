@@ -58,6 +58,7 @@ interface TrackerPayload {
   orgId: string;
   workspacePath: string;
   view?: TrackerDeepLinkView;
+  scope?: 'files';
 }
 
 interface OrgFeedbackRequestPayload {
@@ -111,7 +112,7 @@ function applySharedFolderPayload(data: SharedFolderPayload): void {
 }
 
 function applyTrackerPayload(data: TrackerPayload): void {
-  if (!data?.trackerId || !data?.orgId || !data?.workspacePath) {
+  if (!data?.trackerId || (!data?.orgId && data?.scope !== 'files') || !data?.workspacePath) {
     throw new Error('Tracker deep-link payload requires trackerId, orgId, and workspacePath');
   }
   if (data.view !== undefined && data.view !== 'document') {

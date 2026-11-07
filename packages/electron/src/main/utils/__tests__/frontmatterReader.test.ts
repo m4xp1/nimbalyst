@@ -57,15 +57,21 @@ ${fields}
 Content after frontmatter`;
 
       await fs.writeFile(testFile, largeFrontmatter);
-      const result = await readFrontmatterOnly(testFile, 1024);
+      await expect(readFrontmatterOnly(testFile, 1024)).rejects.toThrow(/frontmatter.*1024/i);
+    });
 
-      // Should return partial content or null if frontmatter end not found in first 1024 bytes
-      if (result) {
-        expect(result.length).toBeLessThanOrEqual(1024);
-      } else {
-        // If the closing --- wasn't found in first 1024 bytes, result should be null
-        expect(result).toBeNull();
-      }
+    it('reports an oversized header instead of silently dropping its tracker identity', async () => {
+      const file = path.join(tempDir, 'oversized.md');
+      await fs.writeFile(file, `---\ntrackerFormat: 1\nnotes: ${'я'.repeat(9000)}\n---\nbody`);
+      const result = await extractFrontmatter(file);
+      expect(result.data).toBeNull();
+      expect(result.parseErrors?.[0]).toMatch(/frontmatter.*16384/i);
+    });
+
+    it('accepts UTF-8 BOM and preserves date-only values as strings', async () => {
+      const file = path.join(tempDir, 'bom.md');
+      await fs.writeFile(file, '\uFEFF---\r\nupdated: 2026-11-07\r\n---\r\nbody');
+      expect((await extractFrontmatter(file)).data).toEqual({ updated: '2026-11-07' });
     });
   });
 

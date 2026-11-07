@@ -1,3 +1,4 @@
+import { isolatedAgentEnvironment } from './isolatedAgentEnvironment';
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
@@ -21,7 +22,7 @@ for (const marketplace of [true, false]) {
    const main = process.env.NIMBALYST_E2E_MAIN_PATH ?? path.join(root, 'packages/electron/out/main/index.js');
    const isolate = path.join(temp, 'isolate.cjs');
    await fs.writeFile(isolate, 'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(main))+');require('+JSON.stringify(main)+');');
-   const { ELECTRON_RUN_AS_NODE, NODE_PATH, ELECTRON_RENDERER_URL, NIMBALYST_RELEASE_CHANNEL, ...clean } = process.env;
+   const clean = isolatedAgentEnvironment(path.join(temp, 'agent-home')); delete clean.NIMBALYST_RELEASE_CHANNEL; delete clean.ELECTRON_RENDERER_URL;
    for(const key of Object.keys(clean))if(key.startsWith('GIT_'))delete clean[key];
    app = await _electron.launch({ ...(process.env.NIMBALYST_E2E_APP_PATH ? {executablePath:process.env.NIMBALYST_E2E_APP_PATH} : {}),
     args: [...(process.env.NIMBALYST_E2E_APP_PATH ? ['--user-data-dir='+path.join(temp,'user')] : [isolate]), '--workspace', workspace], cwd:root,timeout:45000,

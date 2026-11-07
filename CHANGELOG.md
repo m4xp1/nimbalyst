@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.11] - 2026-11-07
+
+### Added
+- Store new tracker cards as portable Markdown with project-defined folders, stable identities and JSONL comments; restore their fields and relationships from Git on another computer.
+
+### Fixed
+- Recover readable Memory files using saved vectors even when the embedding provider fails, and show actionable provider and session errors.
+- Update Memory settings from background events without a blinking Refresh control or idle UI polling.
+- Load connected Codex skills and the available model catalog before the first turn; isolate automated app launches from personal agent accounts.
+- Preserve Markdown tables and YAML formatting when opening files and making unrelated edits; remove empty change badges.
+- Keep tracker titles visible beside long metadata, move Open in Editor into the header, and show usable type choices and schema resync results.
+
 ## [0.81.7+m4xp1.10] - 2026-11-01
 
 ### Fixed

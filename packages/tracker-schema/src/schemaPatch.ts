@@ -70,6 +70,8 @@ export interface TrackerSchemaPatch {
   creatable?: boolean;
   primaryCapable?: boolean;
   supportsTags?: boolean;
+  /** Preserve a project's legacy file/inline recognition without copying fields. */
+  modes?: Partial<TrackerDataModel['modes']>;
   /** Replaces the whole layout when present (it's a positional array). */
   statusBarLayout?: StatusBarLayoutRow[];
 
@@ -220,6 +222,12 @@ export function resolveTrackerSchemaPatch(
   if (patch.creatable !== undefined) resolved.creatable = patch.creatable;
   if (patch.primaryCapable !== undefined) resolved.primaryCapable = patch.primaryCapable;
   if (patch.supportsTags !== undefined) resolved.supportsTags = patch.supportsTags;
+  if (patch.modes !== undefined) {
+    if (!isPlainObject(patch.modes) || Object.entries(patch.modes).some(([key, value]) => !['inline', 'fullDocument'].includes(key) || typeof value !== 'boolean')) {
+      throw new Error('Tracker modes patch must contain boolean inline/fullDocument values');
+    }
+    resolved.modes = { ...seed.modes, ...patch.modes };
+  }
   if (patch.statusBarLayout !== undefined) resolved.statusBarLayout = patch.statusBarLayout;
   if (patch.sharing !== undefined) resolved.sharing = patch.sharing;
   if (patch.draftByDefault !== undefined) resolved.draftByDefault = patch.draftByDefault;
@@ -310,6 +318,8 @@ export function diffTrackerSchema(
     'archived',
   ];
   const patchRecord = patch as unknown as Record<string, unknown>;
+  const modes = Object.fromEntries(Object.entries(target.modes).filter(([key, value]) => seed.modes[key as keyof typeof seed.modes] !== value));
+  if (Object.keys(modes).length) patch.modes = modes;
   for (const key of scalarKeys) {
     if (seed[key] !== target[key]) {
       patchRecord[key] = target[key];

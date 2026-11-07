@@ -13,6 +13,7 @@
  * When the bridge is absent (older host) it degrades to informational copy.
  */
 import { EmbeddingUsageCard } from './EmbeddingUsageCard';
+import { subscribeMemoryUpdates } from './memoryUpdates';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { selectableSourceFolders, type SourceFolder } from './sourceFolders';
 import type { ReactNode } from 'react';
@@ -145,7 +146,6 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const [clearingUnavailable,setClearingUnavailable]=useState(false);
   const [unavailableLimit,setUnavailableLimit]=useState(100);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [loadingStatus, setLoadingStatus] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [coverageRootId,setCoverageRootId]=useState<string|null|undefined>(undefined);
   useEffect(()=>{setCleanupFiles(null);setUnavailableLimit(100);},[workspacePath,coverageRootId]);
@@ -156,7 +156,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const statusRequests=useRef(new Map<string,Promise<IndexStatus>>());
   const live=useRef(true);
   const workspace=useRef(workspacePath);workspace.current=workspacePath;
-  useEffect(()=>{statusGeneration.current++;statusCache.current.clear();statusRequests.current.clear();rootSignature.current='';coverageSelection.current=undefined;setCoverageRootId(undefined);setCoverageRoots([]);setStatus(null);void refreshStatus();},[workspacePath]);
+  useEffect(()=>{statusGeneration.current++;statusCache.current.clear();statusRequests.current.clear();rootSignature.current='';coverageSelection.current=undefined;setCoverageRootId(undefined);setCoverageRoots([]);setStatus(null);},[workspacePath]);
   useEffect(()=>{live.current=true;return()=>{live.current=false;statusGeneration.current++;};},[]);
   const [coverageRoots,setCoverageRoots]=useState<SourceFolder[]>([]);
   const selectCoverageRoot=(id:string|null|undefined)=>{coverageSelection.current=id;statusGeneration.current++;setStatus(statusCache.current.get(id===undefined?'all':id??'primary')??null);setCoverageRootId(id);};
@@ -197,38 +197,36 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   const [savingEmbeddingSettings, setSavingEmbeddingSettings] = useState(false);
   const [embeddingSettingsError, setEmbeddingSettingsError] = useState<string | null>(null);
 
-  useEffect(() => {
+  useEffect(() => subscribeMemoryUpdates(workspacePath,[],async isCurrent=>{
     const api = (window as { electronAPI?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } })
       .electronAPI;
     if (!api?.invoke) return;
-    void api
+    await api
       .invoke('semantic-search:get-index-sessions')
-      .then((v) => setIndexSessions(v === true))
+      .then((v) => {if(isCurrent())setIndexSessions(v === true);})
       .catch(() => {});
-  }, []);
+  }), [workspacePath]);
 
-  const refreshStatus = useCallback(async () => {
-    if (!callBackendTool) return;
+  const refreshStatus = useCallback(async (isCurrent:()=>boolean=()=>true) => {
+    if (!callBackendTool || document.visibilityState==='hidden') return;
     const generation=statusGeneration.current,id=coverageSelection.current,key=id===undefined?'all':id??'primary',requestedWorkspace=workspacePath;
-    setLoadingStatus(true);
     setStatusError(null);
     try {
       let request=statusRequests.current.get(key);
       if(!request){request=(id===undefined?callBackendTool('memory.status'):callBackendTool('memory.status',{rootId:id})) as Promise<IndexStatus>;statusRequests.current.set(key,request);void request.finally(()=>{if(statusRequests.current.get(key)===request)statusRequests.current.delete(key);}).catch(()=>{});}
-      const s=await request;if(workspace.current!==requestedWorkspace)return;statusCache.current.set(key,s);
-      if(!live.current||generation!==statusGeneration.current)return;
+      const s=await request;if(!isCurrent()||!live.current||workspace.current!==requestedWorkspace)return;
+      statusCache.current.set(key,s);
+      if(generation!==statusGeneration.current)return;
       setStatus(s);
       const api = (window as { electronAPI?: { invoke?: (c: string) => Promise<unknown> } }).electronAPI;
       if (api?.invoke) {
         try {
           const error = await api.invoke('semantic-search:get-session-indexing-error');
-          setSessionsError(typeof error === 'string' ? error : null);
+          if(isCurrent()&&live.current&&generation===statusGeneration.current)setSessionsError(typeof error === 'string' ? error : null);
         } catch { /* Older hosts do not expose reconciliation errors. */ }
       }
     } catch (err) {
-      if(live.current&&generation===statusGeneration.current)setStatusError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if(live.current&&generation===statusGeneration.current)setLoadingStatus(false);
+      if(isCurrent()&&live.current&&generation===statusGeneration.current)setStatusError(err instanceof Error ? err.message : String(err));
     }
   }, [callBackendTool,workspacePath]);
 
@@ -238,9 +236,8 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     rootSignature.current=signature;setCoverageRoots(next);
     const id=coverageSelection.current;
     if(id!==undefined && (next.length<=1 || !next.some(root=>root.id===id)))selectCoverageRoot(undefined);
-    else void refreshStatus();
   };
-  useEffect(()=>{void refreshStatus();},[coverageRootId,refreshStatus]);
+  useEffect(()=>subscribeMemoryUpdates(workspacePath,['status'],refreshStatus),[coverageRootId,refreshStatus,workspacePath]);
 
   const toggleIndexSessions = useCallback(async (next: boolean) => {
     const api = (window as { electronAPI?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } })
@@ -263,21 +260,22 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
   }, [refreshStatus]);
 
 
-  const refreshEmbeddingSettings = useCallback(async () => {
-    if (!callBackendTool) return;
+  const refreshEmbeddingSettings = useCallback(async (isCurrent:()=>boolean=()=>true) => {
+    if (!callBackendTool || document.visibilityState==='hidden') return;
     setLoadingEmbeddingSettings(true);
     setEmbeddingSettingsError(null);
     try {
       const next = (await callBackendTool(
         'memory.local_embeddings_status'
       )) as LocalEmbeddingsStatus;
+      if(!isCurrent()||!live.current)return;
       setEmbeddingSettings(next);
       setEmbeddingSource(next.enabled ? 'local' : 'openai');
       setSelectedLocalModel(next.selectedModelId);
     } catch (err) {
-      setEmbeddingSettingsError(err instanceof Error ? err.message : String(err));
+      if(isCurrent()&&live.current)setEmbeddingSettingsError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoadingEmbeddingSettings(false);
+      if(isCurrent()&&live.current)setLoadingEmbeddingSettings(false);
     }
   }, [callBackendTool]);
 
@@ -291,25 +289,22 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     finally{setClearingUnavailable(false);}
   }
 
-  const refreshFacts = useCallback(async () => {
-    if (!callBackendTool) return;
+  const refreshFacts = useCallback(async (isCurrent:()=>boolean=()=>true) => {
+    if (!callBackendTool || document.visibilityState==='hidden') return;
     setFactsError(null);
     try {
       const res = (await callBackendTool('memory.list_facts', { limit: 500 })) as {
         facts?: FactRow[];
       };
-      setFacts(Array.isArray(res?.facts) ? res.facts : []);
+      if(isCurrent()&&live.current)setFacts(Array.isArray(res?.facts) ? res.facts : []);
     } catch (err) {
-      setFactsError(err instanceof Error ? err.message : String(err));
-      setFacts([]);
+      if(isCurrent()&&live.current){setFactsError(err instanceof Error ? err.message : String(err));setFacts([]);}
     }
   }, [callBackendTool]);
 
-  useEffect(() => {
-    void refreshStatus();
-    void refreshFacts();
-    void refreshEmbeddingSettings();
-  }, [refreshStatus, refreshFacts, refreshEmbeddingSettings]);
+  useEffect(() => subscribeMemoryUpdates(workspacePath,[],async isCurrent=>{
+    await Promise.all([refreshFacts(isCurrent),refreshEmbeddingSettings(isCurrent)]);
+  }), [workspacePath, refreshFacts, refreshEmbeddingSettings]);
 
   const applyEmbeddingSettings = useCallback(async () => {
     if (!callBackendTool || !embeddingSettings) return;
@@ -337,12 +332,6 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
     refreshEmbeddingSettings,
     refreshStatus,
   ]);
-
-  // Read the lightweight snapshot while mounted, including background changes at idle.
-  useEffect(() => {
-    const id = setInterval(() => void refreshStatus(), 3000);
-    return () => clearInterval(id);
-  }, [refreshStatus]);
 
   const rebuild = useCallback(async () => {
     if (!callBackendTool) return;
@@ -753,16 +742,6 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               type="button"
-              onClick={() => void refreshStatus()}
-              disabled={!callBackendTool || loadingStatus}
-              className="nimbalyst-memory-refresh"
-              title="Read status only; does not scan files or request embeddings"
-              style={btnStyle(isDark)}
-            >
-              {loadingStatus ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <button
-              type="button"
               onClick={() => void rebuild()}
               disabled={!callBackendTool || rebuilding || status?.indexing}
               className="nimbalyst-memory-rebuild"
@@ -804,6 +783,7 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
             {!!status.sourceProjection?.pendingFiles&&<p>Search metadata update: {status.sourceProjection.pendingFiles} files pending. Available indexed content remains searchable.</p>}
             {!!status.sourceProjection?.warnings.length&&<ul aria-label="Document metadata warnings">{status.sourceProjection.warnings.map(warning=><li key={warning.sourcePath}><code>{warning.relativePath}</code> — Invalid YAML frontmatter; searching the literal text without field priority.</li>)}</ul>}
             {!!activeIssues.length&&<ul className="nimbalyst-memory-observer-errors" aria-label="Current source observation errors">{activeIssues.map(issue=><li key={issue.id} role="alert"><strong>{issueScope(issue)}</strong>{issue.relativePath&&<> / <code>{issue.relativePath}</code></>} — {issue.stage} · {issue.error.category}{issue.code? ' · '+issue.code:''} · Active error, last observed {new Date(issue.updatedAt).toLocaleString()}<p>{issue.stage==='discovery'||issue.stage==='watch'?'Check access and source settings. The error clears after this scope is successfully verified.':errorAction(issue.error)}</p></li>)}</ul>}
+            {!activeIssues.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
             {recoveredGroups.size>0&&<details className="nimbalyst-memory-recovered-errors"><summary>Recovered source errors</summary>
               {[...recoveredGroups].map(([key,group])=><details key={key}><summary>{issueScope(group[0])} — {group[0].stage} · {group.length} records</summary>
                 <ul>{group.map(issue=><li key={issue.id}><code>{issue.relativePath??'Scope unknown'}</code> — {issue.error.category}{issue.code?' · '+issue.code:''}
@@ -817,12 +797,11 @@ export function NimbalystMemorySettings({ theme, callBackendTool,workspacePath }
               {unavailableFiles.length>unavailableLimit&&<button onClick={()=>setUnavailableLimit(value=>value+100)}>Show more unavailable files</button>}
               {cleanupFiles&&<div role="group" aria-label="Confirm unavailable index cleanup"><p>Remove saved index entries for {cleanupFiles.length} unavailable files in this source selection? Returning files will need embeddings again. Restored or changed entries will be skipped.</p><button disabled={clearingUnavailable} onClick={()=>void clearUnavailable()}>Confirm cleanup</button> <button disabled={clearingUnavailable} onClick={()=>setCleanupFiles(null)}>Cancel cleanup</button></div>}
             </section>}
-            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
+            {!!problems.length && <div><strong>{status.fileIndex?.failureCount??problems.length} sources need attention</strong><ul className="nimbalyst-memory-source-errors" aria-label="Source indexing errors">{problems.map(f=><li key={f.sourcePath}><code>{f.relativePath??f.sourcePath}</code> — {f.stage??'read'}{f.code? ' · '+f.code:''}{f.httpStatus?' · HTTP '+f.httpStatus:''} · {new Date(f.updatedAt).toLocaleString()} — {errorAction(f.error)}</li>)}
               {(status.fileIndex?.failureCount??0)>100 && <li>Showing the first 100 of {status.fileIndex?.failureCount} errors.</li>}
             </ul></div>}
             {status.sourceUpdate?.error&&<p role="alert" style={ERR}>Source rules are saved, but the background update failed. {errorAction(status.sourceUpdate.error)}</p>}
             {legacyRebuildError&&<p role="alert" style={ERR}>{errorAction(legacyRebuildError)}</p>}
-            {!activeIssues.length&&!problems.length&&status.fileIndex?.error&&<p role="alert" style={ERR}>{errorAction(status.fileIndex.error)}</p>}
             {!activeIssues.length&&!problems.length&&!status.fileIndex?.error&&!status.sourceUpdate?.error&&historicalOperationError&&<p role="alert" style={ERR}>{errorAction(historicalOperationError)}</p>}
             {status.embeddingError&&<p role="alert" style={ERR}>Semantic matching is unavailable. {errorAction(status.embeddingError)}</p>}
             {!status.indexing&&needsAttention&&!unavailableFiles.length&&!problems.length&&!status.fileIndex?.error&&!operation?.error&&!status.sourceUpdate?.error&&!status.embeddingError&&!status.sourceRootErrors?.length&&<p role="alert">Indexing stopped before all files were processed. Use Rebuild to continue.</p>}

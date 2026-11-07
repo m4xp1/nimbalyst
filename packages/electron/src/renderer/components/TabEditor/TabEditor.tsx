@@ -60,6 +60,7 @@ import { SearchReplaceStateManager, isLexicalSearchEditor } from '@nimbalyst/run
 import { hasEditorFind, registerEditorFindHandler } from './editorFindCommand';
 import { hasEditorReveal, registerEditorRevealHandler } from './editorRevealCommand';
 import { revealMarkdownLine } from '@nimbalyst/runtime/editor/markdown/revealMarkdownLine';
+import { preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
 import { useSuppressedDocumentHeaderProviderIds } from './DocumentHeaderSuppressionContext';
 import { createCollectionItem } from '../TrackerMode/createCollectionItem';
 import { loadTrackerTeamMembers } from '../TrackerMode/useTrackerTeamMembers';
@@ -1846,8 +1847,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               let preDispatchMarkdown = '';
               try {
                 preDispatchMarkdown = editorRef.current.getEditorState().read(() => {
-                  return $convertToEnhancedMarkdownString(transformers);
-                });
+                  return $convertToEnhancedMarkdownString(transformers, { preserveSource: preserveMarkdownSource });
+                }, { editor: editorRef.current });
               } catch (err) {
                 diffTrace('TabEditor pre-dispatch read failed', err);
               }
@@ -2255,14 +2256,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
 
           // Get the APPROVED content (normal export - what's actually in the editor)
           const approvedContent = editorRef.current.getEditorState().read(() => {
-            return $convertToEnhancedMarkdownString(transformers);
-          });
+            return $convertToEnhancedMarkdownString(transformers, { preserveSource: preserveMarkdownSource });
+          }, { editor: editorRef.current });
 
           // Get the REJECTED content (what-if we rejected all remaining diffs)
           // This becomes the baseline for comparing remaining diffs
           const rejectedContent = editorRef.current.getEditorState().read(() => {
-            return $convertToEnhancedMarkdownString(transformers, { rejectMode: true });
-          });
+            return $convertToEnhancedMarkdownString(transformers, { rejectMode: true, preserveSource: preserveMarkdownSource });
+          }, { editor: editorRef.current });
 
           // A partial resolve rotates the tag rather than ending the session, so
           // it does not go through the model's resolution transaction -- but it
@@ -2359,8 +2360,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             const transformers = getEditorTransformers();
 
             const currentContent = editorRef.current.getEditorState().read(() => {
-              return $convertToEnhancedMarkdownString(transformers);
-            });
+              return $convertToEnhancedMarkdownString(transformers, { preserveSource: preserveMarkdownSource });
+            }, { editor: editorRef.current });
 
             if (!(await resolveReviewThroughModel(true, {
               finalContent: currentContent,
@@ -3511,6 +3512,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                   config={{
                     theme,
                     onRenameDocument,
+                    preserveMarkdownSource,
                     onSwitchToAgentMode,
                     onOpenSessionInChat,
                     onToggleMarkdownMode: () => editorHost.toggleSourceMode?.(),

@@ -676,6 +676,16 @@ describe('classifyTrackerSchemaDrift (pure)', () => {
     expect(hasSchemaDrift(entries)).toBe(false);
   });
 
+  it('ignores locally retained activity when comparing a schema after resync', () => {
+    const model = { type: 'epic', displayName: 'Epic', fields: [] } as any;
+    const stored = { ...model, activity: [{ timestamp: 100, action: 'updated', authorIdentity: { displayName: 'Owner' } }] };
+    expect(classifyTrackerSchemaDrift([model], [{ type: 'epic', source: 'yaml', model: JSON.stringify(stored) }]))
+      .toEqual([{ type: 'epic', status: 'in-sync', source: 'yaml' }]);
+    const changed = { ...model, displayName: 'Changed Epic' };
+    expect(classifyTrackerSchemaDrift([changed], [{ type: 'epic', source: 'yaml', model: JSON.stringify(stored) }])[0].status)
+      .toBe('drifted');
+  });
+
   it('reports drifted when the definitions differ', () => {
     const yaml = model('epic', { displayName: 'Epic' });
     const dbModel = model('epic', { displayName: 'Changed' });

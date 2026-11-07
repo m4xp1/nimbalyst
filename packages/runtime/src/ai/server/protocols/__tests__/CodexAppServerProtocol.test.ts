@@ -7,6 +7,10 @@ import {setCodexShellTrackingHost} from '../codexAppServer/shellTracking';
 // shape and notification translation that future codex upgrades might break.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Only the fake SDK/JSON-RPC peer may run in this unit fixture.
+beforeEach(() => vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'));
+afterEach(() => vi.unstubAllEnvs());
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
@@ -151,6 +155,79 @@ describe('CodexAppServerProtocol', () => {
   afterEach(() => {
     setCodexShellTrackingHost(undefined);
     if (!child.killed) child.kill();
+  });
+
+  it('discovers all model pages without creating a thread or a turn', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.discoverModels({ workspacePath: '/worktree' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const first = await nextWrittenMatching(child, 'model/list');
+    child.emitLine({ id: first.id, result: { data: [{ model: 'fixture-one' }], nextCursor: 'page-two' } });
+    await vi.waitFor(() => expect(child.writtenLines.filter((line: any) => line.method === 'model/list')).toHaveLength(2));
+    const second = child.writtenLines.filter((line: any) => line.method === 'model/list')[1] as any;
+    expect(second.params.cursor).toBe('page-two');
+    child.emitLine({ id: second.id, result: { data: [{ model: 'fixture-new-model' }], nextCursor: null } });
+    expect(await pending).toEqual([{ model: 'fixture-one' }, { model: 'fixture-new-model' }]);
+    expect(spawnMock.mock.calls[0][2]).toMatchObject({ cwd: '/worktree', windowsHide: true });
+    expect(child.writtenLines.some((line: any) => /^(thread|turn)\//.test(line.method))).toBe(false);
+    expect(child.killed).toBe(true);
+  });
+
+  it('discovers enabled plugin skills before the first turn in the requested workspace', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.discoverSkills({ workspacePath: '/worktree' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const roots = await nextWrittenMatching(child, 'skills/extraRoots/set');
+    child.emitLine({ id: roots.id, result: {} });
+    const list = await nextWrittenMatching(child, 'skills/list');
+    expect(list.params).toEqual({ cwds: ['/worktree'], forceReload: true });
+    child.emitLine({ id: list.id, result: { data: [{ cwd: '/worktree', skills: [
+      { name: 'plugin:available', enabled: true }, { name: 'plugin:disabled', enabled: false },
+      { name: 'project-skill' }, { name: 'plugin:available' },
+    ] }] } });
+    expect(await pending).toEqual(['plugin:available', 'project-skill']);
+    expect(child.writtenLines.some((line: any) => /^(thread|turn)\//.test(line.method))).toBe(false);
+    expect(child.killed).toBe(true);
+  });
+
+  it('reports skill discovery errors and always closes the metadata process', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.discoverSkills({ workspacePath: '/worktree' });
+    const rejected = expect(pending).rejects.toThrow(/skills unavailable/);
+    const init = await nextWrittenMatching(child, 'initialize'); child.emitLine({ id: init.id, result: {} });
+    const roots = await nextWrittenMatching(child, 'skills/extraRoots/set'); child.emitLine({ id: roots.id, result: {} });
+    const list = await nextWrittenMatching(child, 'skills/list');
+    child.emitLine({ id: list.id, error: { code: -32000, message: 'skills unavailable' } });
+    await rejected;
+    expect(child.killed).toBe(true);
+  });
+
+  it('rejects repeated pagination rather than returning a truncated model catalog', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.discoverModels({ workspacePath: '/worktree' });
+    const rejected = expect(pending).rejects.toThrow(/repeated.*cursor/);
+    const init = await nextWrittenMatching(child, 'initialize'); child.emitLine({ id: init.id, result: {} });
+    const first = await nextWrittenMatching(child, 'model/list');
+    child.emitLine({ id: first.id, result: { data: [], nextCursor: 'same' } });
+    await vi.waitFor(() => expect(child.writtenLines.filter((line: any) => line.method === 'model/list')).toHaveLength(2));
+    const second = child.writtenLines.filter((line: any) => line.method === 'model/list')[1] as any;
+    child.emitLine({ id: second.id, result: { data: [], nextCursor: 'same' } });
+    await rejected;
+    expect(child.killed).toBe(true);
+  });
+
+  it('does not present an incomplete skill catalog as a successful empty result', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.discoverSkills({ workspacePath: '/worktree' });
+    const rejected = expect(pending).rejects.toThrow(/could not load 1 skill source/);
+    const init = await nextWrittenMatching(child, 'initialize'); child.emitLine({ id: init.id, result: {} });
+    const roots = await nextWrittenMatching(child, 'skills/extraRoots/set'); child.emitLine({ id: roots.id, result: {} });
+    const list = await nextWrittenMatching(child, 'skills/list');
+    child.emitLine({ id: list.id, result: { data: [{ cwd: '/worktree', skills: [], errors: [{ message: 'invalid skill' }] }] } });
+    await rejected;
+    expect(child.killed).toBe(true);
   });
 
   it.each(['start','resume'])('binds host hooks to %s and trusts only the exact session hook hashes',async(kind)=>{

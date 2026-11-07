@@ -34,6 +34,20 @@ const model: TrackerDataModel = {
 };
 
 describe('getTrackerChipFieldSections', () => {
+  it('includes secondary fields without changing primary roles or duplicate definitions', () => {
+    globalRegistry.register(model);
+    globalRegistry.register({ ...model, type: 'secondaryChipFieldSpec', fields: [
+      { name: 'state', type: 'text' },
+      { name: 'linkedEvidence', type: 'reference' },
+      { name: 'extraPayload', type: 'object' },
+    ], roles: { workflowStatus: 'linkedEvidence' } });
+    const sections = getTrackerChipFieldSections(model.type, [], [], { typeTags: [model.type, 'secondaryChipFieldSpec'] });
+    expect(sections.chipFields.find(field => field.name === 'state')?.type).toBe('select');
+    expect(sections.chipFields[0].name).toBe('state');
+    expect(sections.chipFields.map(field => field.name)).toContain('linkedEvidence');
+    expect(sections.overflowFields.map(field => field.name)).toContain('extraPayload');
+  });
+
   it('chips the layout fields and overflows the ones no chip can carry', () => {
     globalRegistry.register(model);
 

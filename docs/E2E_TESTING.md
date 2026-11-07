@@ -2,6 +2,18 @@
 
 This repository uses [Playwright](https://playwright.dev) for automated end-to-end coverage across the web playground and the Electron desktop shell.
 
+## Offline account isolation for the fork gates
+
+The mandatory built and packaged fork scenarios use artificial workspaces and fake providers. A separate Electron userData/database is not enough: CLI tools otherwise inherit the user's Codex auth store, session logs and Codex Desktop routing variables.
+
+Use `isolatedAgentEnvironment` (also applied by `buildTestEnv`) to place HOME/USERPROFILE, CODEX_HOME, CLAUDE_CONFIG_DIR and GitHub CLI config under the fixture. It removes inherited credentials and Codex Desktop context and forces both `NIMBALYST_ALLOW_OPENAI_API=0` and `NIMBALYST_ALLOW_CODEX_ACCESS=0`, including session-restore tests that clear PLAYWRIGHT. Test helpers do not accept a live-account opt-in.
+
+Automated launches deny Codex account access by default at the auth, quota, model/skill discovery and app-server/legacy SDK boundaries. They use the offline model catalog and never read personal Codex session logs as a quota fallback. Unit protocol fixtures opt in only behind a fake SDK or a mocked subprocess. MCP integration tests call real Nimbalyst tools through a synthetic client and verify their files/state; this does not prove a real model will independently choose the correct tool.
+
+A separately requested live-agent acceptance run requires `NIMBALYST_ALLOW_CODEX_ACCESS=1` in its own runner and a separately configured test account/home. It is not part of the build gates and must not inherit or copy the working account's credentials. Permission for the paid OpenAI API is independent. Ordinary installed application launches retain normal Codex access.
+
+The fork release gate uses `playwright.search.config.ts`, one spec per process, serially for both built and packaged applications. This gate deliberately has no video recording; screenshots and traces are retained on failure. That configuration takes precedence over the generic visual-reporting instructions below.
+
 ## AI Agent Guidelines for E2E Tests
 
 **IMPORTANT**: These guidelines are for AI agents running E2E tests in this codebase.

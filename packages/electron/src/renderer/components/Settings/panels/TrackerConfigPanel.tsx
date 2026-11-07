@@ -39,6 +39,7 @@ import {
 } from '../../common/TrackerOwnershipChip';
 import type { TrackerOwnership } from '../../TrackerMode/trackerNavigationTree';
 import { useTrackerTeamOwnership, type TrackerTeam } from '../../TrackerMode/useTrackerTeamMembers';
+import { TrackerStoragePanel } from './TrackerStoragePanel';
 
 // ============================================================================
 // Types
@@ -449,11 +450,11 @@ const TEAM_GROUP_DESCRIPTION =
   'Everyone on the team sees the same fields, items, and numbers. Changing this tracker\'s fields changes them for the whole team; the YAML file in .nimbalyst/trackers is a local copy of the team\'s definition.';
 
 const PERSONAL_GROUP_DESCRIPTION =
-  'These trackers stay on this machine. They never sync, and nobody on your team can see them.';
+  'These trackers do not sync through a team. File cards can be shared separately through Git.';
 
 /** Solo workspaces get no ownership vocabulary at all — there is nothing to contrast with. */
 const SOLO_GROUP_DESCRIPTION =
-  'Each tracker keeps its own fields and items, defined in .nimbalyst/trackers and stored on this machine.';
+  'Built-in trackers inherit application defaults. Workspace type overrides customize their fields; card storage is configured above.';
 
 // ============================================================================
 // Issue Key Prefix Input
@@ -994,11 +995,12 @@ export function TrackerConfigPanel({ workspacePath }: TrackerConfigPanelProps) {
         <p className="provider-panel-description text-[13px] leading-relaxed text-[var(--nim-text-muted)]">
           {team
             ? 'Each tracker owns its fields, its items and its numbering, and is either yours or your team\'s.'
-            : 'Each tracker owns its fields and its items. Everything here stays on this machine.'}
+            : 'Configure tracker fields, numbering, card storage and agent access for this project.'}
         </p>
       </div>
 
       <TrackerStorageInfoBanner />
+      <TrackerStoragePanel workspacePath={workspacePath} types={trackers.map(({ model }) => model)} />
 
       <AgentAccessSection
         enabled={agentAccessEnabled}

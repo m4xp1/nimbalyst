@@ -6,6 +6,7 @@ import path from 'node:path';
 import { MemoryEngine } from '../engine.js';
 import type { FileRecord, EngineConfig, Embedder } from '../types.js';
 import { FakeEmbedder } from './fakeEmbedder.js';
+import { defaultSources } from '../sources.js';
 
 const roots: string[] = [];
 const engines: MemoryEngine[] = [];
@@ -33,6 +34,25 @@ async function sparse(engine: MemoryEngine, query: string, classes?: string[]) {
   return (await engine.search(query,100,classes ? {sourceClasses:classes} : undefined)).filter(hit => hit.signals?.sparse);
 }
 describe('canonical file entity search', () => {
+  it('does not re-embed unchanged file cards on refresh/restart or index local tracker backups by default', async () => {
+    const root = fixture(); writeFileSync(path.join(root, 'docs/card.md'), markdown('stablefilemarker'));
+    const backup = path.join(root, 'nimbalyst-local/tracker-backups/stable-card'); mkdirSync(backup, { recursive: true });
+    writeFileSync(path.join(backup, 'previous.snapshot'), markdown('privatebackupmarker'));
+    const config = { sources: defaultSources('facts', root).filter(source => !source.root) };
+    const engine = open(root, config);
+    const embed = vi.spyOn((engine as unknown as { embedder: Embedder }).embedder, 'embed');
+    await engine.syncFileRecords([record()]); expect(embed).toHaveBeenCalled(); embed.mockClear();
+    await engine.syncFileRecords([record()]); await engine.indexAll();
+    expect(embed).not.toHaveBeenCalled();
+    await engine.close(); engines.splice(engines.indexOf(engine), 1);
+    const restarted = open(root, config);
+    const afterRestart = vi.spyOn((restarted as unknown as { embedder: Embedder }).embedder, 'embed');
+    await restarted.syncFileRecords([record()]); await restarted.indexAll();
+    expect(afterRestart).not.toHaveBeenCalled();
+    expect(await sparse(restarted, 'privatebackupmarker')).toEqual([]);
+    const hits = await sparse(restarted, 'stablefilemarker');
+    expect(hits).toHaveLength(1); expect(hits[0].refType).toBe('tracker');
+  });
   it('filters one or multiple roots before candidate limits and keeps virtual records in the primary workspace',async()=>{
     const main=fixture(),link=fixture(),second=fixture();
     writeFileSync(path.join(main,'docs/a.md'),'# Primary\nКорневойМаркер');

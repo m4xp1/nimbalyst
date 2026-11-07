@@ -105,6 +105,14 @@ describe('tracker deep-link routing', () => {
     resetCommentPanelRequests();
   });
 
+  it('opens a project file card without team authentication after host resolution', () => {
+    cleanup = initDeepLinkListeners();
+    handlers['deep-link:open-tracker']({ trackerId: 'p:host-resolved:card', orgId: '', scope: 'files', workspacePath: '/workspace/target' });
+    expect(store.get(activeWorkspacePathAtom)).toBe('/workspace/target');
+    expect(store.get(windowModeAtom)).toBe('tracker');
+    expect(store.get(trackerModeLayoutAtom).selectedItemId).toBe('p:host-resolved:card');
+  });
+
   it('binds a shared-document link to the workspace scope selected by the desktop host', async () => {
     cleanup = initDeepLinkListeners();
 

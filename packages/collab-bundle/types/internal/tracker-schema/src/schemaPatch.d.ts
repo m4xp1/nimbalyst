@@ -56,6 +56,8 @@ export interface TrackerSchemaPatch {
     creatable?: boolean;
     primaryCapable?: boolean;
     supportsTags?: boolean;
+    /** Preserve a project's legacy file/inline recognition without copying fields. */
+    modes?: Partial<TrackerDataModel['modes']>;
     /** Replaces the whole layout when present (it's a positional array). */
     statusBarLayout?: StatusBarLayoutRow[];
     sharing?: TrackerSharing;

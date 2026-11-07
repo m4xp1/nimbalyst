@@ -1,3 +1,6 @@
+import { documentServices } from '../window/WindowManager';
+import { FileTrackerStore } from './tracker/fileTrackerStore';
+import { isPortableTrackerRow } from './tracker/portableTrackerProjection';
 /**
  * CommitTrackerLinker — Links git commits to tracker items.
  *
@@ -48,13 +51,13 @@ export interface IssueKeyMatch {
  * - Fixes NIM-123, Closes NIM-123, Resolves NIM-123 (closing keywords)
  * - fix: NIM-123, fixed NIM-123, close NIM-123, etc.
  */
-export function parseIssueKeys(commitMessage: string, prefix?: string): IssueKeyMatch[] {
+export function parseIssueKeys(commitMessage: string, prefix?: string, indexedKeys: string[] = []): IssueKeyMatch[] {
   const matches: IssueKeyMatch[] = [];
   const seen = new Set<string>();
 
   // Match issue keys with optional closing keyword prefix
   // Closing keywords: fix, fixes, fixed, close, closes, closed, resolve, resolves, resolved
-  const closingPattern = /(?:(fix(?:es|ed)?|close[sd]?|resolve[sd]?)[\s:]+)?([A-Z]+-\d+)/gi;
+  const closingPattern = /(?:(fix(?:es|ed)?|close[sd]?|resolve[sd]?)[\s:]+)?([A-Z]+-\d+)(?![A-Z0-9_-])/gi;
 
   let match: RegExpExecArray | null;
   while ((match = closingPattern.exec(commitMessage)) !== null) {
@@ -81,6 +84,18 @@ export function parseIssueKeys(commitMessage: string, prefix?: string): IssueKey
       issueKey,
       shouldClose: !!closingKeyword,
     });
+  }
+
+  // Portable keys are not necessarily numeric. Only accept their exact values
+  // from this workspace's index, never interpret arbitrary prose as a card ID.
+  const known = new Set(indexedKeys.map((key) => key.toUpperCase()));
+  const portablePattern = /\b(?:(fix(?:es|ed)?|close[sd]?|resolve[sd]?)[\s:]+)?([A-Z][A-Z0-9_-]*-[A-Z0-9_-]+)(?![A-Z0-9_-])/gi;
+  while ((match = portablePattern.exec(commitMessage)) !== null) {
+    const issueKey = match[2].toUpperCase();
+    if (!known.has(issueKey) || seen.has(issueKey) || isLocalIssueKey(issueKey)) continue;
+    if (prefix && !issueKey.startsWith(prefix.toUpperCase() + '-')) continue;
+    seen.add(issueKey);
+    matches.push({ issueKey, shouldClose: !!match[1] });
   }
 
   return matches;
@@ -262,9 +277,9 @@ export class CommitTrackerLinker {
           .filter((match) => match.shouldClose)
           .map((match) => match.issueKey),
       );
-      if (closingKeys.size === 0) return { closedItemIds: [] };
+      if (closingKeys.size === 0 && !/\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)[\s:]+/i.test(commitMessage)) return { closedItemIds: [] };
 
-      const closedItemIds = await this.resolveClosableIds(trackerIds, closingKeys, workspacePath);
+      const closedItemIds = await this.resolveClosableIds(trackerIds, closingKeys, workspacePath, commitMessage);
       for (const itemId of closedItemIds) {
         await this.closeTrackerItem(itemId, commitHash, workspacePath);
       }
@@ -309,15 +324,13 @@ export class CommitTrackerLinker {
       `SELECT DISTINCT issue_key
        FROM tracker_items
        WHERE workspace = $1 AND issue_key IS NOT NULL
-       ORDER BY issue_key ASC
-       LIMIT 25`,
+       ORDER BY issue_key ASC`,
       [event.workspacePath]
     );
-    const prefix = prefixResult.rows
-      .map((row: { issue_key?: string | null }) => getIssueKeyPrefix(row.issue_key))
-      .find((value: string | undefined): value is string => Boolean(value));
-
-    const matches = parseIssueKeys(event.commitMessage, prefix);
+    const indexedKeys = prefixResult.rows
+      .map((row: { issue_key?: string | null }) => row.issue_key)
+      .filter((key: unknown): key is string => typeof key === 'string');
+    const matches = parseIssueKeys(event.commitMessage, undefined, indexedKeys);
     if (matches.length === 0) return;
 
     const commit: LinkedCommit = {
@@ -330,7 +343,7 @@ export class CommitTrackerLinker {
       try {
         // Look up tracker item by issue_key
         const itemResult = await db.query(
-          `SELECT id, data FROM tracker_items WHERE issue_key = $1 AND workspace = $2`,
+          `SELECT id, data FROM tracker_items WHERE UPPER(issue_key) = $1 AND workspace = $2`,
           [match.issueKey, event.workspacePath]
         );
 
@@ -364,12 +377,14 @@ export class CommitTrackerLinker {
     if (!db) return;
 
     const result = await db.query(
-      `SELECT data FROM tracker_items WHERE id = $1 AND workspace = $2`,
+      `SELECT data, source_ref FROM tracker_items WHERE id = $1 AND workspace = $2`,
       [itemId, workspacePath]
     );
     if (result.rows.length === 0) return;
 
-    const data = typeof result.rows[0].data === 'string'
+    const portable = isPortableTrackerRow(result.rows[0]);
+    const card = portable ? await new FileTrackerStore(workspacePath).read(result.rows[0].source_ref) : undefined;
+    const data = card ? card.fields : typeof result.rows[0].data === 'string'
       ? JSON.parse(result.rows[0].data)
       : result.rows[0].data || {};
 
@@ -378,7 +393,9 @@ export class CommitTrackerLinker {
     // Deduplicate by SHA
     if (linkedCommits.some((c: LinkedCommit) => c.sha === commit.sha)) return;
 
-    linkedCommits.push(commit);
+    // A session link is machine-local even when the commit itself is portable.
+    const { sessionId: _sessionId, ...portableCommit } = commit;
+    linkedCommits.push(portable ? portableCommit : commit);
 
     // Cap at 50 (remove oldest)
     if (linkedCommits.length > 50) {
@@ -389,6 +406,13 @@ export class CommitTrackerLinker {
 
     // Also keep linkedCommitSha in sync for backward compat (most recent)
     data.linkedCommitSha = commit.sha;
+
+    if (card) {
+      const service = documentServices.get(workspacePath);
+      if (!service) throw new Error('The file tracker workspace is unavailable.');
+      await service.updateTrackerItemInFile(itemId, { linkedCommits, linkedCommitSha: commit.sha }, card.version);
+      return;
+    }
 
     await db.query(
       `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,
@@ -407,6 +431,7 @@ export class CommitTrackerLinker {
     trackerIds: string[],
     closingKeys: Set<string>,
     workspacePath: string,
+    commitMessage?: string,
   ): Promise<string[]> {
     const db = this.getDb();
     if (!db) return [];
@@ -417,6 +442,11 @@ export class CommitTrackerLinker {
        WHERE workspace = $1 AND id IN (${placeholders})`,
       [workspacePath, ...trackerIds]
     );
+
+    if (commitMessage) {
+      const indexedKeys = result.rows.map((row: { issue_key?: string }) => row.issue_key).filter((key: unknown): key is string => typeof key === 'string');
+      for (const match of parseIssueKeys(commitMessage, undefined, indexedKeys)) if (match.shouldClose) closingKeys.add(match.issueKey);
+    }
 
     return (result.rows as Array<{ id: string; issue_key?: string | null }>)
       .filter((row) => typeof row.issue_key === 'string' && closingKeys.has(row.issue_key.toUpperCase()))
@@ -441,14 +471,15 @@ export class CommitTrackerLinker {
     if (!db) return;
 
     const result = await db.query(
-      `SELECT type, data FROM tracker_items WHERE id = $1 AND workspace = $2`,
+      `SELECT type, data, source_ref FROM tracker_items WHERE id = $1 AND workspace = $2`,
       [itemId, workspacePath]
     );
     if (result.rows.length === 0) return;
 
-    const data = typeof result.rows[0].data === 'string'
-      ? JSON.parse(result.rows[0].data)
-      : result.rows[0].data || {};
+    const portable = isPortableTrackerRow(result.rows[0]);
+    const card = portable ? await new FileTrackerStore(workspacePath).read(result.rows[0].source_ref) : undefined;
+    const cached = typeof result.rows[0].data === 'string' ? JSON.parse(result.rows[0].data) : result.rows[0].data || {};
+    const data = card ? { ...card.fields, activity: cached.activity } : cached;
 
     const type = String(result.rows[0].type ?? data.type ?? '');
     const statusField = getWorkflowStatusFieldName(type);
@@ -481,6 +512,13 @@ export class CommitTrackerLinker {
       newValue: closingStatus,
       note: `Closed via commit ${commitHash.slice(0, 7)}`,
     });
+
+    if (card) {
+      const service = documentServices.get(workspacePath);
+      if (!service) throw new Error('The file tracker workspace is unavailable.');
+      await service.updateTrackerItemInFile(itemId, { [statusField]: closingStatus, activity: data.activity }, card.version);
+      return;
+    }
 
     await db.query(
       `UPDATE tracker_items SET data = $1, updated = NOW() WHERE id = $2`,

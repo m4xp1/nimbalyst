@@ -110,6 +110,7 @@ interface TrackerGridViewProps {
   onNewItem?: (type: TrackerItemType) => void;
   /** Copy a shareable deep link (team workspaces only). */
   onCopyDeepLink?: (itemId: string) => void;
+  canCopyDeepLink?: (itemId: string) => boolean;
   /** Open a row's item as a document -- double-click and the row context menu. */
   onOpenDocument?: (itemId: string) => void;
   /** AI sessions already linked to a row's item, for the context menu submenu. */
@@ -154,6 +155,7 @@ export function TrackerGridView({
   preserveItemOrder = false,
   onNewItem,
   onCopyDeepLink,
+  canCopyDeepLink,
   onOpenDocument,
   getLinkedSessions,
   onOpenSession,
@@ -969,6 +971,7 @@ export function TrackerGridView({
         onSetPriority={handleBulkPriorityUpdate}
         onAddToCollection={handleAddSelectionToCollection}
         onCopyDeepLink={onCopyDeepLink}
+        canCopyDeepLink={canCopyDeepLink}
         onOpenDocument={onOpenDocument}
         getLinkedSessions={getLinkedSessions}
         onOpenSession={onOpenSession}
