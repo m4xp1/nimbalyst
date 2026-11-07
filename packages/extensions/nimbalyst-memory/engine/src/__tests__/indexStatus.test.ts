@@ -85,7 +85,7 @@ describe('source failure recovery', () => {
 
 
 describe('scoped diagnostics and provider failures',()=>{
- it('separates attached-root counts and leaves remaining files on a global error',async()=>{
+ it('separates attached-root counts and verifies unchanged files after a provider error',async()=>{
   const {root,embedder,engine}=setup();
   const attached=mkdtempSync(path.join(tmpdir(),'memory-status-attached-'));roots.push(attached);
   writeFileSync(path.join(root,'docs/a.md'),'# Main\nPRIMARYPROBE624');
@@ -100,7 +100,7 @@ describe('scoped diagnostics and provider failures',()=>{
   const spy=vi.spyOn(embedder,'embed').mockRejectedValue(Object.assign(new Error('provider refused PRIVATE_BODY'),{status:400}));
   await expect(engine.indexAll()).rejects.toThrow();
   expect(spy).toHaveBeenCalledTimes(1);
-  expect(engine.status().fileIndex).toMatchObject({failedFiles:1,remainingFiles:2,error:{category:'other'}});
+  expect(engine.status().fileIndex).toMatchObject({completedFiles:1,failedFiles:2,remainingFiles:0,error:{category:'other'}});
   expect(engine.status().watching).toBe(true);
  });
 });

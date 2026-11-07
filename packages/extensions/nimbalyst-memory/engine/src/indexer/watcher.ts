@@ -25,7 +25,7 @@ import fg from 'fast-glob';
 import { type IndexIssueScope, isProviderIndexFailure } from '../indexStatus.js';
 import type { EngineConfig, SourceSet } from '../types.js';
 import { locateAbsolute, rootForSet, type ResolvedRoot } from '../roots.js';
-import type { Indexer, IndexProgress } from './indexer.js';
+import type { FileIndexBatch, Indexer, IndexProgress } from './indexer.js';
 
 const DEBOUNCE_MS = 400;
 
@@ -276,23 +276,20 @@ export class IndexWatcher {
     const batch = Array.from(this.pending.entries()).sort(([,a],[,b])=>a===b?0:a==='remove'?-1:1);
     this.pending.clear();
     this.timer = null;
-    const indexer=this.indexer,generation=this.generation;let done=0,failed=0;
+    const indexer=this.indexer,generation=this.generation;let done=0,failed=0;const providerBatch:FileIndexBatch={};
     this.onProgress?.({phase:'index',done,total:batch.length,failed,sources:batch.map(([sourcePath])=>({sourcePath,sourceClass:indexer.classify(sourcePath)?.sourceClass??'unknown'}))});
-    for (const [sourcePath, op] of batch) {
+    for (const [sourcePath] of batch) {
       if(this.stopped||generation!==this.generation)break;
       try {
-        if (op === "remove") {
-          indexer.markUnavailable(sourcePath,'missing');
-        } else {
-          const sourceClass =
-            indexer.classify(sourcePath)?.sourceClass ?? "unknown";
-          await indexer.indexFile(sourcePath, sourceClass);
-        }
+        // An unlink/discovery miss may already be stale (atomic saves, transient I/O).
+        // Verify the current file before marking it unavailable; keep saved vectors.
+        const sourceClass = indexer.classify(sourcePath)?.sourceClass ?? "unknown";
+        await indexer.indexFile(sourcePath, sourceClass,providerBatch);
         if(generation!==this.generation)break;done++;this.onProgress?.({phase:'index',file:sourcePath,done,total:batch.length,failed,success:true});
       } catch (error) {
         if(generation!==this.generation)break;failed++;this.onProgress?.({phase:'index',file:sourcePath,done,total:batch.length,failed,success:false});
         this.onError(error,sourcePath);
-        if(isProviderIndexFailure(error))break;
+        if(isProviderIndexFailure(error))providerBatch.providerError??=error;
         // Best-effort; a failed file is retried on its next change event.
       }
     }

@@ -18,6 +18,7 @@ import type {
 } from '@nimbalyst/runtime';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { readMemorySessionContent, invalidateMemorySessionContent } from './sessionMemoryContent';
+import { safeIndexError } from '../../../../extensions/nimbalyst-memory/engine/src/indexStatus';
 import { watchSessionMemoryChanges, registerSessionMemoryRebuilder, invalidateSessionMemoryReads, type SessionMemoryChange } from './sessionMemoryEvents';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import { runWhenFirstUsable } from './startupMaintenanceGate';
@@ -288,7 +289,7 @@ export class SemanticCatalogService {
           const previous=this.sessionOperations.get(workspace)??Promise.resolve();
           const operation=previous.catch(()=>{}).then(()=>this.updateSessions(workspace,generation,ids));
           this.sessionOperations.set(workspace,operation);
-          return operation.catch(()=>{this.sessionErrors.set(workspace,'Session content could not be indexed. Retry Rebuild.');});
+          return operation.catch(error=>{if(this.sessionPassCurrent(workspace,generation))this.reportSessionIndexingError(workspace,error);});
         });
       },FLUSH_DEBOUNCE_MS);
       pending.timer.unref?.();
@@ -335,7 +336,7 @@ export class SemanticCatalogService {
       void this.refreshReadiness(handle.workspacePath, generation);
       const reconcile=()=>{
         if(this.currentGeneration(handle.workspacePath)!==generation)return;
-        return this.reconcileSessions(handle.workspacePath).catch(()=>console.error('[SemanticCatalog] session reconciliation failed'));
+        return this.reconcileSessions(handle.workspacePath).catch(()=>{}); // The reconciler records a sanitized reason.
       };
       if(this.sessionsEnabled())runWhenFirstUsable('memory-session-backfill',reconcile);
       else void reconcile();
@@ -662,6 +663,13 @@ export class SemanticCatalogService {
     return getAppSetting<boolean>(SESSIONS_SETTING_KEY) === true;
   }
 
+  private reportSessionIndexingError(workspacePath:string,error:unknown):void {
+    const safe=safeIndexError(error);
+    const message=`Session indexing failed: ${safe.category}. ${safe.action}`;
+    this.sessionErrors.set(workspacePath,message);
+    console.warn('[SemanticCatalog] '+message);
+  }
+
   sessionIndexingError(): string | null {
     return this.sessionErrors.size ? [...this.sessionErrors.values()][0] : null;
   }
@@ -696,7 +704,7 @@ export class SemanticCatalogService {
         if (this.sessionGenerations.get(workspacePath) === generation) this.sessionErrors.delete(workspacePath);
       } catch (err) {
         if (this.sessionGenerations.get(workspacePath) === generation) {
-          this.sessionErrors.set(workspacePath, 'Session indexing could not be reconciled. Retry the session option; saved session chunks may still be present.');
+          this.reportSessionIndexingError(workspacePath,err);
         }
         throw err;
       }

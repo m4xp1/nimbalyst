@@ -28,7 +28,7 @@ import { SqliteStore } from './store/sqliteStore.js';
 import { resolveInRoots, resolveRoots, locateAbsolute, type ResolvedRoot } from './roots.js';
 import {validateEmbeddingResponse} from './embeddingInput.js';
 import { isInsideRealRoot } from './sourceRules.js';
-import { Indexer, type IndexProgress } from './indexer/indexer.js';
+import { type FileIndexBatch, Indexer, type IndexProgress } from './indexer/indexer.js';
 import { IndexWatcher } from './indexer/watcher.js';
 import { FileWork } from './indexer/fileWork.js';
 import { Retriever } from './retrieval/retriever.js';
@@ -141,10 +141,10 @@ export class MemoryEngine {
     this.updateFileRootOwners();this.invalidateView();
     if(recovering.size)void this.fileWork.run(async()=>{
       if(this.closed)return;
-      const files=this.indexer.unavailableFiles().filter(file=>recovering.has(file.rootId));
+      const files=this.indexer.unavailableFiles().filter(file=>recovering.has(file.rootId));const batch:FileIndexBatch={};
       for(const file of files){if(this.closed||!this.sourceRootAllowed(file.sourcePath))continue;
-        try{await this.indexer.indexFile(file.sourcePath,this.indexer.classify(file.sourcePath)?.sourceClass??'unknown');}
-        catch(error){this.config.onLog?.('warn','[memory] recovered source verification: '+safeIndexError(error).category);if(isProviderIndexFailure(error))break;}
+        try{await this.indexer.indexFile(file.sourcePath,this.indexer.classify(file.sourcePath)?.sourceClass??'unknown',batch);}
+        catch(error){this.config.onLog?.('warn','[memory] recovered source verification: '+safeIndexError(error).category);if(isProviderIndexFailure(error))batch.providerError??=error;}
       }
       this.refreshSnapshot();
     }).catch(error=>this.config.onLog?.('warn','[memory] source recovery failed: '+safeIndexError(error).category));
@@ -381,7 +381,6 @@ export class MemoryEngine {
       passError=error;
       const scope=(error as {memoryIndexContext?:IndexIssueScope})?.memoryIndexContext;if(scope&&generation===this.policyGeneration)this.issues.record(error,scope);
       this.fileIndex.error=safeIndexError(error);
-      this.fileIndex.failedFiles=this.indexer.failuresForStatus().length;
       this.fileIndex.state=this.store.count()>0 ? 'partial' : 'failed';
       throw error;
     } finally {
