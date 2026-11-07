@@ -555,16 +555,16 @@ export function classifyTrackerSchemaDrift(
     if (yaml && db) {
       let dbCanon: string;
       try {
-        dbCanon = canonicalize(withoutDeclaredForm(JSON.parse(db.model)));
+        dbCanon = canonicalize(schemaWithoutActivity(JSON.parse(db.model)));
       } catch {
         dbCanon = '';
       }
       // A resync only reaches a team-owned row when the file differs from the
       // last projected shared model; anything else materialize returns early on.
       const resyncWouldApply = !teamOwned || (
-        db.synced_model != null && !sameModel(db.synced_model, yaml)
+        db.synced_model != null && !sameModel(schemaWithoutActivity(db.synced_model), schemaWithoutActivity(yaml))
       );
-      const status: SchemaDriftStatus = canonicalize(yaml) === dbCanon
+      const status: SchemaDriftStatus = canonicalize(schemaWithoutActivity(yaml)) === dbCanon
         ? 'in-sync'
         : resyncWouldApply ? 'drifted' : 'team-owned';
       entries.push({ type, status, source: db.source });

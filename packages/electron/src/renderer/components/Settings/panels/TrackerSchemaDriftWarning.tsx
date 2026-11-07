@@ -9,7 +9,7 @@
  * whose work would be discarded on the way in.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 
 /** Mirror of SchemaDriftEntry from the main-process trackerTypeDefStore. */
@@ -51,10 +51,17 @@ function describeDriftStatus(status: SchemaDriftStatus): string {
 export function TrackerSchemaDriftWarning({ workspacePath }: { workspacePath?: string }) {
   const [drift, setDrift] = useState<WorkspaceSchemaDrift | null>(null);
   const [resyncing, setResyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const resyncPending = useRef(false);
 
   const refresh = useCallback(async () => {
+    const request = ++generation.current;
+    resyncPending.current = false;
+    setResyncing(false);
+    setDrift(null);
+    setError(null);
     if (!workspacePath) {
-      setDrift(null);
       return;
     }
     try {
@@ -62,36 +69,41 @@ export function TrackerSchemaDriftWarning({ workspacePath }: { workspacePath?: s
         'tracker-schema:get-drift',
         workspacePath
       );
-      setDrift(result ?? null);
-    } catch {
-      setDrift(null);
+      if (request === generation.current) setDrift(result ?? null);
+    } catch (err) {
+      if (request === generation.current) setError(err instanceof Error ? err.message : String(err));
     }
   }, [workspacePath]);
 
   useEffect(() => {
     void refresh();
+    return () => { generation.current++; };
   }, [refresh]);
 
   const handleResync = useCallback(async () => {
-    if (!workspacePath || resyncing) return;
+    if (!workspacePath || resyncPending.current) return;
+    resyncPending.current = true;
+    const request = ++generation.current;
     setResyncing(true);
+    setError(null);
     try {
       const result: WorkspaceSchemaDrift = await (window as any).electronAPI.invoke(
         'tracker-schema:resync-mirror',
         workspacePath
       );
-      setDrift(result ?? null);
-    } catch {
-      // Leave the existing warning in place on failure.
+      if (request === generation.current) setDrift(result ?? null);
+    } catch (err) {
+      if (request === generation.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setResyncing(false);
+      if (request === generation.current) {
+        resyncPending.current = false;
+        setResyncing(false);
+      }
     }
-  }, [workspacePath, resyncing]);
+  }, [workspacePath]);
 
-  if (!drift?.hasDrift) return null;
-
-  const warnings = drift.entries.filter((e) => DRIFT_WARNING_STATUSES.has(e.status));
-  if (warnings.length === 0) return null;
+  const warnings = drift?.hasDrift ? drift.entries.filter((e) => DRIFT_WARNING_STATUSES.has(e.status)) : [];
+  if (warnings.length === 0 && !error) return null;
 
   return (
     <div className="provider-panel-section py-4 mb-4 border-b border-[var(--nim-border)] last:border-b-0 last:mb-0 last:pb-0">
@@ -102,11 +114,11 @@ export function TrackerSchemaDriftWarning({ workspacePath }: { workspacePath?: s
         <MaterialSymbol icon="sync_problem" size={14} className="text-[#f59e0b] shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-medium text-[var(--nim-text)] mb-1">
-            Schema files are out of sync
+            {warnings.length ? 'Schema files are out of sync' : 'Tracker schema status unavailable'}
           </div>
-          <p className="text-[12px] text-[var(--nim-text-muted)] leading-relaxed mb-2">
+          {warnings.length > 0 && <p className="text-[12px] text-[var(--nim-text-muted)] leading-relaxed mb-2">
             The tracker schema files in <code className="text-[11px] text-[var(--nim-code-text)] bg-[var(--nim-code-bg)] px-1 py-[1px] rounded">.nimbalyst/trackers</code> differ from the local database mirror.
-          </p>
+          </p>}
           <ul className="text-[12px] text-[var(--nim-text-muted)] leading-relaxed mb-3 space-y-0.5">
             {warnings.map((e) => (
               <li key={e.type} className="flex items-center gap-1.5">
@@ -115,14 +127,15 @@ export function TrackerSchemaDriftWarning({ workspacePath }: { workspacePath?: s
               </li>
             ))}
           </ul>
+          {error && <p role="alert" className="text-[12px] text-[var(--nim-error)] mb-2">{error}</p>}
           <button
-            onClick={handleResync}
+            onClick={warnings.length ? handleResync : refresh}
             disabled={resyncing}
             className="inline-flex items-center gap-1 px-2.5 py-1 bg-transparent border border-[rgba(245,158,11,0.4)] rounded text-[#f59e0b] text-[11px] cursor-pointer hover:bg-[rgba(245,158,11,0.12)] disabled:opacity-50 disabled:cursor-default"
             data-testid="tracker-schema-resync-button"
           >
             <MaterialSymbol icon="sync" size={12} />
-            {resyncing ? 'Resyncing...' : 'Resync from files'}
+            {resyncing ? 'Resyncing...' : warnings.length ? 'Resync from files' : 'Retry'}
           </button>
         </div>
       </div>

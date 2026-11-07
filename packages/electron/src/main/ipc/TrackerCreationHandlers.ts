@@ -44,6 +44,10 @@ export function registerTrackerCreationHandlers(
           service.assertWorkspace(payload.workspace);
         const item = await service.createTrackerItem(payload);
         committedItem = item;
+        if (item.customFields?.trackerFormat === 1) {
+          onCreated(item, false);
+          return { success: true, item, publication: { itemId: item.id, status: 'local' } };
+        }
         shared = item.syncStatus === 'pending';
         const policy = getEffectiveTrackerSharingPolicy(
           payload.workspace,

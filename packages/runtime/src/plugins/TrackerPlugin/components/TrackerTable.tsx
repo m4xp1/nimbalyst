@@ -98,6 +98,7 @@ interface TrackerTableProps {
    *  exactly one item is selected. Callers omit this when the workspace
    *  has no team configured. */
   onCopyDeepLink?: (itemId: string) => void;
+  canCopyDeepLink?: (itemId: string) => boolean;
   /**
    * Open a row's tracker item as a document (the focused document view). When
    * the host offers it, double-clicking a row goes there instead of opening the
@@ -751,6 +752,7 @@ export function TrackerTable({
   onDeleteItems,
   confirmDelete,
   onCopyDeepLink,
+  canCopyDeepLink,
   onOpenDocument,
   searchQuery: externalSearchQuery,
   hasExternalFilters = false,
@@ -1452,6 +1454,7 @@ export function TrackerTable({
         onSetStatus={handleBulkStatusUpdate}
         onSetPriority={handleBulkPriorityUpdate}
         onCopyDeepLink={onCopyDeepLink}
+        canCopyDeepLink={canCopyDeepLink}
         onOpenDocument={onOpenDocument}
         onArchiveItems={onArchiveItems}
         onDeleteItems={onDeleteItems}

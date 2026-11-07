@@ -3,7 +3,12 @@ export type TrackerDeepLinkView = 'document';
 export interface TrackerDeepLinkTarget {
   trackerId: string;
   orgId: string;
+  scope?: 'files';
   view?: TrackerDeepLinkView;
+}
+
+export function isPortableTrackerLinkId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{3,100}$/.test(id);
 }
 
 /**
@@ -28,8 +33,14 @@ export function parseTrackerDeepLink(rawUrl: string): TrackerDeepLinkTarget {
     throw new Error('Tracker deep link has a malformed trackerId');
   }
 
-  const orgId = parsed.searchParams.get('orgId');
-  if (!trackerId || !orgId) {
+  const scope = parsed.searchParams.get('scope');
+  if (scope !== null && scope !== 'files') throw new Error('Tracker deep link has unsupported scope');
+  const fileScope = scope === 'files';
+  const orgId = fileScope ? '' : parsed.searchParams.get('orgId');
+  if (fileScope && (!isPortableTrackerLinkId(trackerId) || parsed.searchParams.has('orgId'))) {
+    throw new Error('File tracker deep link requires a portable card ID without an organization');
+  }
+  if (!trackerId || !fileScope && !orgId) {
     throw new Error('Tracker deep link requires trackerId and orgId');
   }
 
@@ -40,7 +51,8 @@ export function parseTrackerDeepLink(rawUrl: string): TrackerDeepLinkTarget {
 
   return {
     trackerId,
-    orgId,
+    orgId: orgId ?? '',
+    ...(fileScope ? { scope: 'files' as const } : {}),
     ...(rawView === 'document' ? { view: rawView } : {}),
   };
 }

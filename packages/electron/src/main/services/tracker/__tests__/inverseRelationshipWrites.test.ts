@@ -36,7 +36,7 @@ const BUG = model('bug', [
   { name: 'blockedBy', type: 'relationship', relationshipTypeKey: 'blocks', multiValue: true },
 ]);
 
-interface FakeTarget { id: string; type: string; data: Record<string, unknown> }
+interface FakeTarget { id: string; type: string; typeTags?: string[]; data: Record<string, unknown> }
 
 function makeDeps(targets: FakeTarget[]) {
   const writes: Array<{ itemId: string; fieldName: string; value: unknown }> = [];
@@ -123,6 +123,97 @@ describe('propagateInverseRelationships', () => {
       deps,
     );
     expect(writes).toHaveLength(0);
+  });
+
+  it('replaying creation does not write or reorder an already materialized inverse', async () => {
+    const source = { itemId: 'plan-1', direction: 'out', trackerType: 'plan', title: 'Plan One', issueKey: 'NIM-1', relationshipTypeKey: 'blocks' };
+    const other = { itemId: 'plan-2', direction: 'out', trackerType: 'plan', relationshipTypeKey: 'blocks' };
+    const { writes, deps } = makeDeps([{ id: 'bug-1', type: 'bug', data: { blockedBy: [source, other] } }]);
+    const result = await propagateInverseRelationships(
+      { id: 'plan-1', type: 'plan', title: 'Plan One', issueKey: 'NIM-1' },
+      { dependsOn: [{ itemId: 'bug-1' }] }, {}, deps,
+    );
+    expect(result.targetsUpdated).toBe(0);
+    expect(writes).toEqual([]);
+  });
+
+  it('updates supplied inverse display metadata in place while retaining known unsupplied data', async () => {
+    const source = { itemId: 'plan-1', direction: 'out', trackerType: 'plan', title: 'Before', issueKey: 'NIM-1', relationshipTypeKey: 'blocks', metadata: { note: 'retain' } };
+    const other = { itemId: 'plan-2', direction: 'out', trackerType: 'plan', relationshipTypeKey: 'blocks' };
+    const { writes, deps } = makeDeps([{ id: 'bug-1', type: 'bug', data: { blockedBy: [source, other] } }]);
+    await propagateInverseRelationships(
+      { id: 'plan-1', type: 'plan', title: 'After' },
+      { dependsOn: [{ itemId: 'bug-1' }] }, {}, deps,
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0].value).toEqual([{ ...source, title: 'After' }, other]);
+  });
+
+  describe('composite type fields', () => {
+    it('materializes a secondary source field into a secondary target field', async () => {
+      globalRegistry.register(model('plain-source', [{ name: 'title', type: 'string' }]));
+      globalRegistry.register(model('plain-target', [{ name: 'title', type: 'string' }]));
+      const { writes, deps } = makeDeps([{
+        id: 'target-1', type: 'plain-target', typeTags: ['plain-target', 'bug'],
+        data: { customFields: { blockedBy: [{ itemId: 'older-source', relationshipTypeKey: 'blocks' }] } },
+      }]);
+      const result = await propagateInverseRelationships(
+        { id: 'source-1', type: 'plain-source', typeTags: ['plain-source', 'plan', 'plan'] },
+        { dependsOn: [{ itemId: 'target-1' }] }, {}, deps,
+      );
+      expect(result.targetsUpdated).toBe(1);
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatchObject({ itemId: 'target-1', fieldName: 'blockedBy' });
+      expect((writes[0].value as Array<{ itemId: string }>).map(value => value.itemId)).toEqual(['older-source', 'source-1']);
+    });
+
+    it('removes secondary-field links using the target actual type tags', async () => {
+      globalRegistry.register(model('plain-source', [{ name: 'title', type: 'string' }]));
+      globalRegistry.register(model('plain-target', [{ name: 'title', type: 'string' }]));
+      const { writes, deps } = makeDeps([{
+        id: 'target-1', type: 'plain-target', typeTags: ['bug'],
+        data: { blockedBy: [{ itemId: 'source-1' }, { itemId: 'older-source' }] },
+      }]);
+      await propagateInverseRelationships(
+        { id: 'source-1', type: 'plain-source', typeTags: ['plan'] },
+        { dependsOn: [] }, { dependsOn: [{ itemId: 'target-1' }] }, deps,
+      );
+      expect(writes).toHaveLength(1);
+      expect((writes[0].value as Array<{ itemId: string }>).map(value => value.itemId)).toEqual(['older-source']);
+    });
+
+    it('preserves primary field precedence on both sides even if tags omit or reorder it', async () => {
+      globalRegistry.register(model('plain-source', [{ name: 'dependsOn', type: 'string' }]));
+      globalRegistry.register(model('plain-target', [{ name: 'blockedBy', type: 'string' }]));
+      const { writes, deps } = makeDeps([{ id: 'target-1', type: 'plain-target', typeTags: ['bug'], data: {} }]);
+      await propagateInverseRelationships(
+        { id: 'source-1', type: 'plain-source', typeTags: ['plan'] },
+        { dependsOn: [{ itemId: 'target-1' }] }, {}, deps,
+      );
+      expect(writes).toEqual([]);
+      await propagateInverseRelationships(
+        { id: 'source-1', type: 'plan', typeTags: ['plain-source', 'plan'] },
+        { dependsOn: [{ itemId: 'target-1' }] }, {}, deps,
+      );
+      // Target's primary scalar wins over the secondary relationship field.
+      expect(writes).toEqual([]);
+    });
+
+    it('uses one workspace-scoped schema resolver for source and target', async () => {
+      const source = model('scoped-source', PLAN.fields);
+      const target = model('scoped-target', BUG.fields);
+      globalRegistry.register(model(source.type, []));
+      globalRegistry.register(model(target.type, []));
+      const local = new Map([[source.type, source], [target.type, target]]);
+      const { writes, deps } = makeDeps([{ id: 'target-1', type: target.type, data: {} }]);
+      await propagateInverseRelationships(
+        { id: 'source-1', type: source.type },
+        { dependsOn: [{ itemId: 'target-1' }] }, {},
+        { ...deps, getModel: type => local.get(type) },
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatchObject({ itemId: 'target-1', fieldName: 'blockedBy' });
+    });
   });
 
   /**

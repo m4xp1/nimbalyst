@@ -37,6 +37,7 @@ export interface TrackerChipFieldSections {
  */
 export declare function getTrackerChipFieldSections(trackerType: string, exclude?: readonly string[], labelFields?: readonly FieldDefinition[], options?: {
     singleValuedOnly?: boolean;
+    typeTags?: readonly string[];
 }): TrackerChipFieldSections;
 /** Memoized `getTrackerChipFieldSections` for component use. */
-export declare function useTrackerChipFieldSections(trackerType: string, exclude?: readonly string[], labelFields?: readonly FieldDefinition[], singleValuedOnly?: boolean): TrackerChipFieldSections;
+export declare function useTrackerChipFieldSections(trackerType: string, exclude?: readonly string[], labelFields?: readonly FieldDefinition[], singleValuedOnly?: boolean, typeTags?: readonly string[]): TrackerChipFieldSections;

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { FileTrackerStore } from '../../../services/tracker/fileTrackerStore';
+import { encodeWorkspaceLocalId } from '../../../services/tracker/portableTrackerIdentity';
 
 const {
   mockQuery,
@@ -66,14 +68,16 @@ const {
     // `(): any` so tests can return partial models; inferring `undefined` from
     // this default made every such override an error.
     get: vi.fn((_type?: string): any => undefined),
+    getForWorkspace: vi.fn((_workspace: string, _type: string): any => undefined),
     getAll: vi.fn(() => []),
-    validate: vi.fn(() => ({ valid: true, errors: [] as Array<{ field: string; message: string }> })),
+    validate: vi.fn((..._args: any[]) => ({ valid: true, errors: [] as Array<{ field: string; message: string }> })),
   },
   mockApplyHeadlessBodyMarkdown: vi.fn<(...args: any[]) => Promise<boolean>>(async () => true),
   mockOnTrackerItemApplied: vi.fn<(listener: any) => () => void>(() => () => {}),
   mockAwaitServerIssueKey: vi.fn<(...args: any[]) => Promise<string | null>>(async () => null),
   mockDocumentServices: new Map<string, any>(),
   mockDocService: {
+    createTrackerItem: vi.fn<(...args: any[]) => Promise<any>>(),
     getTrackerItemById: vi.fn<(...args: any[]) => Promise<any>>(async () => null),
     listTrackerItems: vi.fn<(...args: any[]) => Promise<any[]>>(async () => []),
     ensureTrackerProjection: vi.fn<(...args: any[]) => Promise<any>>(async () => null),
@@ -169,7 +173,8 @@ vi.mock('../../../window/WindowManager', () => ({
   documentServices: mockDocumentServices,
 }));
 
-vi.mock('../../../../../../tracker-schema/src/TrackerDataModel', () => ({
+vi.mock('../../../../../../tracker-schema/src/TrackerDataModel', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../../../../tracker-schema/src/TrackerDataModel')>(),
   globalRegistry: mockGlobalRegistry,
   getRoleField: (model: any, role: string) => model?.roles?.[role],
 }));
@@ -232,8 +237,16 @@ import {
   resolveTrackerPromotionEligibility,
   TRACKER_LOCAL_ISSUE_KEY_MESSAGE,
 } from '@nimbalyst/runtime/plugins/TrackerPlugin/models/trackerLifecycle';
-import { READINESS_FILTER_FIELD } from '@nimbalyst/tracker-schema';
+import { READINESS_FILTER_FIELD, TrackerDataModelRegistry } from '@nimbalyst/tracker-schema';
 import { trackerItemToRecord } from '@nimbalyst/runtime/core/TrackerRecord';
+
+beforeEach(() => {
+  vi.spyOn(FileTrackerStore.prototype, 'config').mockResolvedValue({ version: 1, mode: 'database', directories: {} });
+  mockGlobalRegistry.getForWorkspace.mockImplementation((_workspace, type) => {
+    const model = mockGlobalRegistry.get(type);
+    return model ? { ...model, fields: model.fields ?? [] } : undefined;
+  });
+});
 
 describe('work radar activity', () => {
   beforeEach(() => {
@@ -3271,5 +3284,141 @@ describe('agent writes that would make a shared item too large for its room', ()
 
   it('tracker_add_comment refuses a comment body', async () => {
     expectRefusedBeforeAnyWrite(await handleTrackerAddComment({ trackerId: 'NIM-1', body: huge }, '/tmp/ws'));
+  });
+});
+
+
+describe('file-mode tracker tools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDocumentServices.clear();
+    mockDocumentServices.set('/tmp/ws', mockDocService);
+    vi.mocked(FileTrackerStore.prototype.config).mockResolvedValue({ version: 1, mode: 'files', directories: { task: 'docs/tasks' } });
+    mockGlobalRegistry.get.mockReturnValue(undefined);
+    mockGlobalRegistry.validate.mockReturnValue({ valid: true, errors: [] });
+    mockQuery.mockResolvedValue({ rows: [] });
+    mockDocService.createTrackerItem.mockResolvedValue({ id: 'task_stable', type: 'task', title: 'Portable', status: 'to-do', priority: 'medium', workspace: '/tmp/ws', source: 'frontmatter', sourceRef: 'docs/tasks/task_stable.md', customFields: { trackerFormat: 1 } });
+  });
+
+  it('requires a stable creation ID before writing so a retry can reuse the same card', async () => {
+    const result = await handleTrackerCreate({ type: 'task', title: 'Portable' }, '/tmp/ws');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/stable.*id/i);
+    expect(mockDocService.createTrackerItem).not.toHaveBeenCalled();
+    expect(mockQuery.mock.calls.some(([sql]) => /INSERT INTO tracker_items/.test(sql))).toBe(false);
+  });
+
+  function compositeModels() {
+    const primary = { type: 'task', displayName: 'Task', displayNamePlural: 'Tasks', icon: 'task', color: '#888', modes: { inline: false, fullDocument: true }, idPrefix: 'TASK', idFormat: 'ulid' as const, fields: [{ name: 'title', type: 'string' as const }] };
+    const secondary = { ...primary, type: 'feature', fields: [
+      { name: 'estimate', type: 'number' as const },
+      { name: 'needs', type: 'relationship' as const, multiValue: true, inverseFieldId: 'neededBy' },
+    ] };
+    mockGlobalRegistry.getForWorkspace.mockImplementation((_workspace, type) => type === 'task' ? primary : type === 'feature' ? secondary : undefined);
+    const validator = new TrackerDataModelRegistry();
+    mockGlobalRegistry.validate.mockImplementation((type, data, effectiveModel) => validator.validate(type, data, effectiveModel));
+    return { primary, secondary };
+  }
+
+  it('validates secondary fields in file creation with the workspace composite schema', async () => {
+    compositeModels();
+    const result = await handleTrackerCreate({ id: 'task_stable', type: 'task', typeTags: ['task', 'feature'], title: 'Portable', fields: { estimate: 'not a number' } }, '/tmp/ws');
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/estimate.*number/);
+    expect(mockDocService.createTrackerItem).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes secondary relationships and rejects self-links before file creation', async () => {
+    compositeModels();
+    const result = await handleTrackerCreate({ id: 'task_stable', type: 'task', typeTags: ['feature'], title: 'Portable', fields: { needs: 'another-card', estimate: 2 } }, '/tmp/ws');
+    expect(result.isError).toBe(false);
+    expect(mockDocService.createTrackerItem).toHaveBeenLastCalledWith(expect.objectContaining({ typeTags: ['task', 'feature'], customFields: expect.objectContaining({ needs: [{ itemId: 'another-card' }], estimate: 2 }) }));
+    // EDS owns create propagation for every UI/MCP caller; the tool must not repeat it.
+    expect(mockDocService.propagateInverseForUpdate).not.toHaveBeenCalled();
+    mockDocService.createTrackerItem.mockClear();
+    const refused = await handleTrackerCreate({ id: 'task_stable', type: 'task', typeTags: ['feature'], title: 'Portable', fields: { needs: 'task_stable' } }, '/tmp/ws');
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toMatch(/cannot link to itself/);
+    expect(mockDocService.createTrackerItem).not.toHaveBeenCalled();
+  });
+
+  it('uses row type_tags for file updates and propagates only the changed composite relationship', async () => {
+    compositeModels();
+    const row = makeRow({ id: encodeWorkspaceLocalId('/tmp/ws', 'task_stable'), type: 'task', type_tags: JSON.stringify(['task', 'feature']), source: 'frontmatter', source_ref: 'docs/tasks/task_stable.md', workspace: '/tmp/ws', data: JSON.stringify({ trackerFormat: 1, portableId: 'task_stable', title: 'Portable', estimate: 3, needs: [{ itemId: 'previous-card' }] }) });
+    const item = makeItem({ id: row.id, type: 'task', typeTags: ['task'], source: 'frontmatter', sourceRef: 'docs/tasks/task_stable.md', workspace: '/tmp/ws', customFields: { trackerFormat: 1 } });
+    mockDocService.getTrackerItemById.mockResolvedValue(item); mockDocService.ensureTrackerProjection.mockResolvedValue(item);
+    mockQuery.mockImplementation(async (sql: string) => ({ rows: sql.startsWith('SELECT') ? [row] : [] }));
+    const localTarget = encodeWorkspaceLocalId('/tmp/ws', 'next-card');
+    mockDocService.updateTrackerItemInFile.mockImplementationOnce(async (_id, fields) => {
+      row.data = JSON.stringify({ ...JSON.parse(row.data), ...fields, needs: [{ itemId: localTarget }] });
+      return item;
+    });
+    const result = await handleTrackerUpdate({ id: row.id, fields: { needs: 'next-card', estimate: 4 } }, '/tmp/ws');
+    expect(result.isError).toBe(false);
+    expect(mockDocService.updateTrackerItemInFile).toHaveBeenCalledWith(row.id, expect.objectContaining({ needs: [{ itemId: 'next-card' }], estimate: 4 }));
+    expect(mockDocService.propagateInverseForUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: row.id, type: 'task', typeTags: ['task', 'feature'] }),
+      { needs: [{ itemId: localTarget }] }, expect.objectContaining({ needs: [{ itemId: 'previous-card' }] }), undefined, undefined,
+    );
+    mockDocService.updateTrackerItemInFile.mockClear(); mockDocService.propagateInverseForUpdate.mockClear();
+    const invalid = await handleTrackerUpdate({ id: row.id, fields: { estimate: 'bad' } }, '/tmp/ws');
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content[0].text).toMatch(/estimate.*number/);
+    expect(mockDocService.updateTrackerItemInFile).not.toHaveBeenCalled();
+    expect(mockDocService.propagateInverseForUpdate).not.toHaveBeenCalled();
+    const self = await handleTrackerUpdate({ id: row.id, fields: { needs: 'task_stable' } }, '/tmp/ws');
+    expect(self.isError).toBe(true);
+    expect(self.content[0].text).toMatch(/cannot link to itself/);
+    expect(mockDocService.updateTrackerItemInFile).not.toHaveBeenCalled();
+  });
+
+  it('routes repeat creation through the file service with the same ID, fields and Markdown body', async () => {
+    const args = { id: 'task_stable', type: 'task', title: 'Portable', description: 'Short summary', content: '# Details', typeTags: ['task', 'feature'], fields: { goal: ['goal_1'] } };
+    const first = await handleTrackerCreate(args, '/tmp/ws');
+    const repeat = await handleTrackerCreate(args, '/tmp/ws');
+    expect(first.isError).toBe(false); expect(repeat.isError).toBe(false);
+    expect(mockDocService.createTrackerItem).toHaveBeenCalledTimes(2);
+    expect(mockDocService.createTrackerItem).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'task_stable', creationRequestId: 'task_stable', type: 'task', workspace: '/tmp/ws',
+      description: 'Short summary', content: '# Details', typeTags: ['task', 'feature'],
+      customFields: expect.objectContaining({ goal: ['goal_1'] }),
+    }));
+    expect(JSON.parse(first.content[0].text!).structured.item).toMatchObject({ id: 'task_stable', sourceRef: 'docs/tasks/task_stable.md' });
+    expect(mockQuery.mock.calls.some(([sql]) => /INSERT INTO tracker_items/.test(sql))).toBe(false);
+  });
+
+  it('surfaces file persistence failures without creating a database fallback', async () => {
+    mockDocService.createTrackerItem.mockRejectedValueOnce(new Error('File is unavailable'));
+    const result = await handleTrackerCreate({ id: 'task_stable', type: 'task', title: 'Portable' }, '/tmp/ws');
+    expect(result.isError).toBe(true); expect(result.content[0].text).toMatch(/File is unavailable/);
+    expect(mockQuery.mock.calls.some(([sql]) => /INSERT INTO tracker_items/.test(sql))).toBe(false);
+  });
+  it('updates portable tags and body through the file writer without overwriting its projection', async () => {
+    const row = makeRow({ id: 'task_stable', type: 'task', source: 'frontmatter', source_ref: 'docs/tasks/task_stable.md', workspace: '/tmp/ws', data: JSON.stringify({ trackerFormat: 1, title: 'Portable', status: 'to-do' }) });
+    const item = makeItem({ id: row.id, type: 'task', source: 'frontmatter', sourceRef: 'docs/tasks/task_stable.md', workspace: '/tmp/ws', customFields: { trackerFormat: 1 } });
+    mockDocService.getTrackerItemById.mockResolvedValue(item);
+    mockDocService.ensureTrackerProjection.mockResolvedValue(item);
+    mockQuery.mockImplementation(async (sql: string) => ({ rows: sql.startsWith('SELECT') ? [row] : [] }));
+    const result = await handleTrackerUpdate({ id: row.id, typeTags: ['task', 'feature'], description: 'Summary', content: '# Updated body' }, '/tmp/ws');
+    expect(result.isError).toBe(false);
+    expect(mockDocService.updateTrackerItemInFile).toHaveBeenCalledWith(row.id, expect.objectContaining({ typeTags: ['task', 'feature'], description: 'Summary' }), undefined, '# Updated body');
+    expect(mockQuery.mock.calls.some(([sql]) => /UPDATE tracker_items SET data/.test(sql))).toBe(false);
+  });
+
+  it('lists effective storage mode and directories alongside unchanged builtin schemas', async () => {
+    mockGetAllTrackerSchemas.mockReturnValue([{ type: 'task', displayName: 'Task', displayNamePlural: 'Tasks', fields: [] }]);
+    const result = await handleTrackerListTypes({}, '/tmp/ws');
+    const payload = JSON.parse(result.content[0].text!);
+    expect(payload.structured.storage).toEqual({ mode: 'files', directories: { task: 'docs/tasks' } });
+    expect(payload.structured.items[0]).toMatchObject({ type: 'task', directory: 'docs/tasks', storageMode: 'files' });
+  });
+
+});
+
+
+describe('portable tracker row identity', () => {
+  it('keeps the workspace-local ID instead of manufacturing a legacy path ID', () => {
+    const row = makeRow({ id: 'p:0123456789abcdef0123456789abcdef:card-001', source: 'frontmatter', source_ref: 'docs/tasks/card.md', data: JSON.stringify({ trackerFormat: 1, portableId: 'card-001', title: 'Portable' }) });
+    expect(rowToTrackerItem(row)).toMatchObject({ id: row.id, customFields: { portableId: 'card-001' } });
   });
 });

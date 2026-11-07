@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { storeGet, getEffectiveTrackerAutomation, execFile, getCurrentIdentity } = vi.hoisted(() => ({
@@ -10,6 +11,10 @@ const { storeGet, getEffectiveTrackerAutomation, execFile, getCurrentIdentity } 
 vi.mock('child_process', () => ({ execFile }));
 
 vi.mock('../TrackerIdentityService', () => ({ getCurrentIdentity }));
+
+const { documentServices, updateFile, readCard } = vi.hoisted(() => ({ documentServices: new Map<string, any>(), updateFile: vi.fn(), readCard: vi.fn() }));
+vi.mock('../../window/WindowManager', () => ({ documentServices }));
+vi.mock('../tracker/fileTrackerStore', () => ({ FileTrackerStore: class { read = readCard; } }));
 
 const LOCAL_IDENTITY = {
   email: 'alice@work.test',
@@ -310,4 +315,57 @@ describe('CommitTrackerLinker', () => {
       expect(query).toHaveBeenCalledTimes(3);
     });
   });
+});
+
+
+describe('portable commit links', () => {
+  beforeEach(() => {
+    documentServices.clear(); updateFile.mockReset(); readCard.mockReset();
+    documentServices.set('/workspace', { updateTrackerItemInFile: updateFile });
+    storeGet.mockReturnValue({ enabled: true, autoCloseOnCommit: false });
+    getEffectiveTrackerAutomation.mockImplementation((settings: unknown) => settings);
+  });
+
+  it('matches portable keys only when the workspace index actually contains them', () => {
+    expect(parseIssueKeys('Fixes TASK-TASK_STABLE; unrelated TASK-NOT_REGISTERED', undefined, ['TASK-TASK_STABLE']))
+      .toEqual([{ issueKey: 'TASK-TASK_STABLE', shouldClose: true }]);
+  });
+
+  it('appends to the current file and never writes project metadata directly into its database projection', async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ metadata: { linkedTrackerItemIds: ['task_stable'] } }] })
+      .mockResolvedValueOnce({ rows: [{ data: { trackerFormat: 1 }, source_ref: 'docs/tasks/task_stable.md' }] });
+    readCard.mockResolvedValue({ version: 'current-version', fields: { linkedCommits: [{ sha: 'external' }] } });
+    const linker = new CommitTrackerLinker(); linker.initialize({ getDatabase: () => ({ query }) });
+    await linker.linkBySession('new-sha', 'Update task', 'session', '/workspace');
+    expect(updateFile).toHaveBeenCalledWith('task_stable', expect.objectContaining({
+      linkedCommitSha: 'new-sha', linkedCommits: [expect.objectContaining({ sha: 'external' }), expect.objectContaining({ sha: 'new-sha' })],
+    }), 'current-version');
+    expect(query.mock.calls.some(([sql]) => /UPDATE tracker_items/.test(sql))).toBe(false);
+  });
+
+  it('does not fall back to database updates when the portable file is unavailable', async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ metadata: { linkedTrackerItemIds: ['task_stable'] } }] })
+      .mockResolvedValueOnce({ rows: [{ data: { trackerFormat: 1 }, source_ref: 'docs/tasks/task_stable.md' }] });
+    readCard.mockRejectedValueOnce(new Error('file unavailable'));
+    const linker = new CommitTrackerLinker(); linker.initialize({ getDatabase: () => ({ query }) });
+    await linker.linkBySession('new-sha', 'Update task', 'session', '/workspace');
+    expect(updateFile).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => /UPDATE tracker_items/.test(sql))).toBe(false);
+  });
+  it('checks the latest file status before a commit closes a portable card', async () => {
+    storeGet.mockReturnValue({ enabled: true, autoCloseOnCommit: true });
+    const row = { type: 'bug', data: { trackerFormat: 1, status: 'in-review' }, source_ref: 'docs/tasks/task_stable.md' };
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ metadata: { linkedTrackerItemIds: ['task_stable'] } }] })
+      .mockResolvedValueOnce({ rows: [row] })
+      .mockResolvedValueOnce({ rows: [{ id: 'task_stable', issue_key: 'TASK-TASK_STABLE' }] })
+      .mockResolvedValueOnce({ rows: [row] });
+    readCard.mockResolvedValue({ version: 'current-version', fields: { status: 'cancelled', linkedCommits: [] } });
+    const linker = new CommitTrackerLinker(); linker.initialize({ getDatabase: () => ({ query }) });
+    await linker.linkBySession('new-sha', 'Fixes TASK-TASK_STABLE', 'session', '/workspace');
+    expect(updateFile).toHaveBeenCalledTimes(1);
+    expect(updateFile.mock.calls[0][1]).not.toHaveProperty('status');
+    expect(updateFile.mock.calls[0][1].linkedCommits[0]).not.toHaveProperty('sessionId');
+    expect(query.mock.calls.some(([sql]) => /UPDATE tracker_items/.test(sql))).toBe(false);
+  });
+
 });

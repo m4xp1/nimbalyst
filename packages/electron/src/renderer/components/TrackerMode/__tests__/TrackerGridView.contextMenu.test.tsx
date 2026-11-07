@@ -157,6 +157,17 @@ describe('TrackerGridView row context menu', () => {
     expect(onCopyDeepLink).toHaveBeenCalledWith('bug-1');
   });
 
+  it('only exposes copy for rows with a portable or collaborative link in a mixed list', async () => {
+    const onCopyDeepLink = vi.fn();
+    renderGrid({ onCopyDeepLink, canCopyDeepLink: (id: string) => id === 'bug-2' });
+    rightClickRow(0);
+    await waitFor(() => screen.getByText('1 item selected'));
+    expect(screen.queryByTestId('tracker-row-context-copy-link')).toBeNull();
+    rightClickRow(1);
+    fireEvent.click(await screen.findByTestId('tracker-row-context-copy-link'));
+    expect(onCopyDeepLink).toHaveBeenCalledWith('bug-2');
+  });
+
   /**
    * Session actions are item-scoped, so a multi-row selection must not offer
    * them -- launching one session for two items has no meaning, and the submenu

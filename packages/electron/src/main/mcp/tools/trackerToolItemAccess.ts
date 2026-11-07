@@ -1,3 +1,5 @@
+import { decodeWorkspaceLocalId, encodeWorkspaceLocalId, isPortableTrackerSourceId } from '../../services/tracker/portableTrackerIdentity';
+import { isPortableTrackerRow } from '../../services/tracker/portableTrackerProjection';
 import type { TrackerItem } from '@nimbalyst/runtime';
 import { parseFullDocumentTrackerId } from '@nimbalyst/runtime/plugins/TrackerPlugin/documentHeader/frontmatterUtils';
 import { isLocalIssueKey, isLocalKeyReference } from '../../../shared/localIssueKey';
@@ -15,6 +17,10 @@ export async function resolveTrackerRowByReference(
   workspacePath?: string,
 ): Promise<any | null> {
   assertTrackerReference(reference);
+  if (reference.startsWith('p:')) {
+    if (!workspacePath) return null;
+    decodeWorkspaceLocalId(workspacePath, reference);
+  }
   // Legacy provisional keys are not stable references. New items never
   // receive them, but refusing old values prevents a stale LC reference from
   // resolving to whichever historical row happens to carry it.
@@ -53,6 +59,16 @@ export async function resolveTrackerRowByReference(
 
   if (result.rows[0]) {
     return result.rows[0];
+  }
+
+  // Raw portable IDs are scoped to this checkout. Existing native IDs above
+  // retain precedence; never search another project's projection namespace.
+  if (workspacePath && isPortableTrackerSourceId(reference)) {
+    const portable = await db.query<any>(
+      `SELECT * FROM tracker_items WHERE (id = $1 OR issue_key = $1) AND workspace = $2 LIMIT 1`,
+      [encodeWorkspaceLocalId(workspacePath, reference), workspacePath],
+    );
+    if (isPortableTrackerRow(portable.rows[0])) return portable.rows[0];
   }
 
   const parsed = parseFullDocumentTrackerId(reference);
@@ -101,6 +117,8 @@ export async function resolveTrackerItemFromDocumentService(
   assertTrackerReference(reference);
   if (!docService) return null;
 
+  // On a clean clone the index may not have been opened by any board yet.
+  await docService.ensureFileTrackerProjections?.();
   const byId = await docService.getTrackerItemById(reference);
   if (byId) return byId;
 

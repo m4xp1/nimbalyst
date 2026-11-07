@@ -98,6 +98,28 @@ export class ProjectMigrationService {
       return { canMove: false, reason: 'Project is currently open. Please close it first.' };
     }
 
+    // Portable IDs include the workspace path. The existing migration updates
+    // only tracker_items.workspace, leaving IDs, session references, receipts,
+    // revisions and personal-page parents in the old namespace. Refuse before
+    // copy/rename, backup or settings writes until those local references can
+    // be migrated together. Native and legacy file cards keep their old route.
+    try {
+      const rows = await this.dbWorker.query<{ data: unknown }>(
+        "SELECT data FROM tracker_items WHERE workspace = $1 AND source = 'frontmatter'",
+        [oldPath],
+      );
+      const portable = rows.rows.some(row => {
+        const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+        return data && typeof data === 'object' && data.trackerFormat === 1;
+      });
+      if (portable) return {
+        canMove: false,
+        reason: 'This project contains file tracker cards with workspace-local IDs. Rename and Move cannot yet migrate their local references. You can move the closed repository manually and open it at the new path to restore its card files and comments; local session links and UI state will not be migrated.',
+      };
+    } catch (error) {
+      logger.main.error('[ProjectMigration] Cannot verify file tracker storage:', error);
+      return { canMove: false, reason: 'Could not verify tracker storage before moving the project. No files or settings were changed.' };
+    }
     // Check for existing worktrees
     try {
       const result = await this.dbWorker.query(

@@ -21,7 +21,9 @@
  * link remains visible from the source side and renders as a backlink/dangler on
  * the other side. No storage model fixes shared-room A ↔ shared-room B for free.
  */
-import { globalRegistry } from '@nimbalyst/tracker-schema';
+import { isDeepStrictEqual } from 'node:util';
+import { resolveFields } from '@nimbalyst/tracker-schema';
+import type { TrackerDataModel } from '@nimbalyst/tracker-schema';
 import {
   isRelationshipField,
   normalizeRelationshipValue,
@@ -35,13 +37,16 @@ import { readStoredFieldValue } from './relationshipFieldStorage';
 export interface InverseWriteSource {
   id: string;
   type: string;
+  typeTags?: string[];
   issueKey?: string;
   title?: string;
 }
 
 export interface InverseWriteDeps {
-  /** Load a target item's type + parsed data by canonical id; null if absent. */
-  loadItem: (itemId: string) => Promise<{ id: string; type: string; data: Record<string, unknown> } | null>;
+  /** Load a target's primary type, actual type_tags and parsed data; null if absent. */
+  loadItem: (itemId: string) => Promise<{ id: string; type: string; typeTags?: string[]; data: Record<string, unknown> } | null>;
+  /** Resolve project overrides consistently for source and target fields. */
+  getModel?: (type: string) => TrackerDataModel | undefined;
   /** Persist one inverse-field value on a target item, then sync + reindex it. */
   applyTargetUpdate: (itemId: string, fieldName: string, value: unknown) => Promise<void>;
 }
@@ -58,7 +63,7 @@ export async function propagateInverseRelationships(
   oldData: Record<string, unknown>,
   deps: InverseWriteDeps,
 ): Promise<{ targetsUpdated: number }> {
-  const defs = globalRegistry.get(source.type)?.fields ?? [];
+  const defs = resolveFields([source.type, ...(source.typeTags ?? [])], deps.getModel);
   let targetsUpdated = 0;
 
   for (const def of defs) {
@@ -79,7 +84,7 @@ export async function propagateInverseRelationships(
       const target = await deps.loadItem(delta.targetItemId);
       if (!target) continue; // dangling/private target — backlinks still cover it
 
-      const invDef = (globalRegistry.get(target.type)?.fields ?? []).find((f) => f.name === delta.inverseFieldId);
+      const invDef = resolveFields([target.type, ...(target.typeTags ?? [])], deps.getModel).find((f) => f.name === delta.inverseFieldId);
       // Only materialize when the target type actually declares the inverse field
       // as a relationship; otherwise the derived backlink view is the only surface.
       if (!invDef || !isRelationshipField(invDef)) continue;
@@ -88,9 +93,21 @@ export async function propagateInverseRelationships(
       // customFields storage — reading top-level only would see it as empty and
       // clobber the target's other links on write (NIM-1305).
       const current = normalizeRelationshipValue(readStoredFieldValue(target.data, delta.inverseFieldId));
-      const next = delta.op === 'add'
+      let next = delta.op === 'add'
         ? addRelationshipValue(invDef, current, delta.value)
         : removeRelationshipValue(current, delta.value.itemId);
+      if (delta.op === 'add') {
+        const existingIndex = current.findIndex(value => value.itemId === delta.value.itemId);
+        if (existingIndex >= 0) {
+          // A replay may repair one failed target after others already saved.
+          // Keep an existing link in place, and retain metadata the source did
+          // not supply instead of dropping it or inventing replacement values.
+          const stamped = addRelationshipValue(invDef, [], delta.value)[0];
+          const updated = { ...current[existingIndex], ...stamped };
+          next = invDef.multiValue ? current.map((value, index) => index === existingIndex ? updated : value) : [updated];
+        }
+      }
+      if (isDeepStrictEqual(current, next)) continue;
 
       await deps.applyTargetUpdate(target.id, delta.inverseFieldId, serializeRelationshipValue(invDef, next));
       targetsUpdated++;

@@ -272,7 +272,7 @@ import { endDatabaseOperationShutdown } from './database/databaseOperationLock';
 import { showDatabaseStartupFailure } from './database/showDatabaseStartupFailure';
 import { reconcileRecoveryOnStartup } from './database/recovery';
 import { resolveDatabaseUserDataPath } from './database/userDataPath';
-import { resolveTrackerDeepLinkId } from './services/tracker/resolveTrackerDeepLinkId';
+import { resolveTrackerDeepLinkId, resolvePortableTrackerDeepLinkId } from './services/tracker/resolveTrackerDeepLinkId';
 import { AnalyticsService } from "./services/analytics/AnalyticsService.ts";
 import { registerAnalyticsHandlers } from "./ipc/AnalyticsHandlers.ts";
 import { registerFeatureUsageHandlers } from "./ipc/FeatureUsageHandlers.ts";
@@ -908,10 +908,21 @@ safeHandle('deep-link:consume-pending-org-feedback-request', (event, workspacePa
 // nimbalyst://tracker/{trackerId}?orgId=...&view=document
 const pendingTrackerLinks = new Map<string, TrackerDeepLinkTarget>();
 
-safeHandle('deep-link:consume-pending-tracker', (_event, workspacePath: string) => {
+safeHandle('deep-link:consume-pending-tracker', async (_event, workspacePath: string) => {
     if (!workspacePath) return null;
     const pending = pendingTrackerLinks.get(workspacePath);
     if (!pending) return null;
+    if (pending.scope === 'files') {
+        const service = documentServices.get(workspacePath);
+        if (!service) return null;
+        await service.ensureFileTrackerProjections(workspacePath);
+        const resolved = await resolvePortableTrackerDeepLinkId(database, workspacePath, pending.trackerId);
+        if (!resolved) {
+            pendingTrackerLinks.delete(workspacePath);
+            return null;
+        }
+        pending.trackerId = resolved;
+    }
     pendingTrackerLinks.delete(workspacePath);
     return { ...pending, workspacePath };
 });
@@ -933,12 +944,13 @@ async function openInboxSourceFromDeepLink(rawUrl: string): Promise<boolean> {
         const parsed = new URL(rawUrl);
         const orgId = parsed.searchParams.get('orgId');
         if (parsed.protocol !== 'nimbalyst:') return false;
-        if (parsed.host === 'tracker' && orgId) {
+        if (parsed.host === 'tracker' && (orgId || parsed.searchParams.get('scope') === 'files')) {
             const trackerLink = parseTrackerDeepLink(rawUrl);
             return openTrackerFromDeepLink(
                 trackerLink.trackerId,
                 trackerLink.orgId,
                 trackerLink.view,
+                trackerLink.scope,
             );
         }
         if (parsed.host === 'doc' && orgId) {
@@ -1125,6 +1137,7 @@ async function handleDeepLink(url: string): Promise<void> {
                 trackerLink.trackerId,
                 trackerLink.orgId,
                 trackerLink.view,
+                trackerLink.scope,
             );
         } else {
             logger.main.warn('[DeepLink] Unknown deep link:', summarizeDeepLink(url));
@@ -1259,14 +1272,20 @@ async function openTrackerFromDeepLink(
     trackerId: string,
     orgId: string,
     view?: TrackerDeepLinkView,
+    scope?: 'files',
 ): Promise<boolean> {
     const trackerLink: TrackerDeepLinkTarget = {
         trackerId,
         orgId,
         ...(view ? { view } : {}),
+        ...(scope ? { scope } : {}),
     };
-    const reason = !isAuthenticated() ? 'not-authenticated' : 'no-workspace';
-    const workspacePath = isAuthenticated() ? await findWorkspaceForOrgId(orgId) : null;
+    const focused = scope === 'files' ? getMostRecentlyFocusedWorkspaceWindow() : null;
+    const focusedState = focused ? windowStates.get(focused.id) : undefined;
+    const reason = scope !== 'files' && !isAuthenticated() ? 'not-authenticated' : 'no-workspace';
+    const workspacePath = scope === 'files'
+        ? focusedState?.activeWorkspacePath || focusedState?.workspacePath || null
+        : isAuthenticated() ? await findWorkspaceForOrgId(orgId) : null;
 
     if (!workspacePath) {
         logger.main.warn('[DeepLink] Cannot route tracker:', { reason, ...trackerLink });
@@ -1286,12 +1305,27 @@ async function openTrackerFromDeepLink(
     // links were minted before a shared plan was promoted to a stable id, and
     // issue keys were never row ids to begin with. Resolve here, in main, so the
     // renderer only ever receives an id it can actually select.
-    trackerLink.trackerId = await resolveTrackerDeepLinkId(database, workspacePath, trackerId);
+    if (scope === 'files') {
+        const service = documentServices.get(workspacePath);
+        if (!service) {
+            pendingTrackerLinks.set(workspacePath, trackerLink);
+            return true;
+        }
+        await service.ensureFileTrackerProjections(workspacePath);
+        const resolved = await resolvePortableTrackerDeepLinkId(database, workspacePath, trackerId);
+        if (!resolved) {
+            focused?.webContents.send('deep-link:tracker-not-available', { ...trackerLink, reason: 'not-found' });
+            return false;
+        }
+        trackerLink.trackerId = resolved;
+    } else {
+        trackerLink.trackerId = await resolveTrackerDeepLinkId(database, workspacePath, trackerId);
+    }
     if (trackerLink.trackerId !== trackerId) {
         logger.main.info('[DeepLink] Resolved tracker id:', { from: trackerId, to: trackerLink.trackerId });
     }
 
-    pendingTrackerLinks.set(workspacePath, trackerLink);
+    pendingTrackerLinks.set(workspacePath, scope === 'files' ? { ...trackerLink, trackerId } : trackerLink);
 
     const existing = findWindowByWorkspace(workspacePath);
     if (existing && !existing.isDestroyed()) {

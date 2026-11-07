@@ -653,6 +653,8 @@ export const PAGE_TOOL_CONTRACT: readonly PageToolContract[] = [
     desktopOnlyArgs: [
       'dueDate', 'progress', 'assigneeEmail', 'reporterEmail', 'assigneeId', 'reporterId',
       'labels', 'linkedCommitSha', 'typeTags', 'linkSession',
+      // Portable file cards live only in the desktop workspace.
+      'id', 'content',
     ],
   },
   {
@@ -682,6 +684,8 @@ export const PAGE_TOOL_CONTRACT: readonly PageToolContract[] = [
     desktopOnlyArgs: [
       'linkSession', 'published', 'dueDate', 'progress', 'assigneeEmail', 'reporterEmail',
       'assigneeId', 'reporterId', 'labels', 'linkedCommitSha', 'typeTags',
+      // Remote pages use description/applyCollabDocEdit for their body.
+      'content',
     ],
     remoteOnlyArgs: ['expectedRevision'],
   },

@@ -64,6 +64,8 @@ export interface TrackerRowContextMenuProps {
   onSetPriority: (priority: string) => void;
   onAddToCollection?: (collection: TrackerRecord) => void;
   onCopyDeepLink?: (itemId: string) => void;
+  /** Mixed file/database lists may expose links for only some rows. */
+  canCopyDeepLink?: (itemId: string) => boolean;
   /** Open the item as a document (focused document view); single selection only. */
   onOpenDocument?: (itemId: string) => void;
   /** Sessions already linked to a single selected item. Omit to hide the submenu. */
@@ -94,6 +96,7 @@ export function TrackerRowContextMenu({
   onSetPriority,
   onAddToCollection,
   onCopyDeepLink,
+  canCopyDeepLink,
   onOpenDocument,
   getLinkedSessions,
   onOpenSession,
@@ -267,7 +270,7 @@ export function TrackerRowContextMenu({
           </button>
         )}
 
-        {onCopyDeepLink && selectedIds.size === 1 && (
+        {onCopyDeepLink && selectedIds.size === 1 && (canCopyDeepLink?.([...selectedIds][0]) ?? true) && (
           <button
             className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--nim-text)] hover:bg-[var(--nim-bg-hover)] cursor-pointer"
             data-testid="tracker-row-context-copy-link"

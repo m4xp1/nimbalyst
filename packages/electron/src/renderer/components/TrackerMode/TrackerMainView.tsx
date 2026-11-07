@@ -66,7 +66,8 @@ import {
   type TrackerFilterChip,
   type TypeColumnConfig,
 } from '../../store/atoms/trackers';
-import { activeTeamOrgIdAtom, buildTrackerDeepLink, buildTrackerDocumentDeepLink } from '../../store/atoms/collabDocuments';
+import { activeTeamOrgIdAtom } from '../../store/atoms/collabDocuments';
+import { buildTrackerRecordDeepLink } from '../../utils/collabArtifactDeepLinks';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import {
   buildTrackerCreatePayload,
@@ -893,9 +894,10 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
   }, [selectedItemId, setModeLayout]);
 
   const teamOrgId = useAtomValue(activeTeamOrgIdAtom);
+  const canCopyDeepLink = useCallback((itemId: string) => Boolean(buildTrackerRecordDeepLink(store.get(trackerItemsMapAtom).get(itemId), teamOrgId)), [teamOrgId]);
   const handleCopyDeepLink = useCallback(async (itemId: string) => {
-    if (!teamOrgId) return;
-    const url = buildTrackerDeepLink(itemId, teamOrgId);
+    const url = buildTrackerRecordDeepLink(store.get(trackerItemsMapAtom).get(itemId), teamOrgId);
+    if (!url) return;
     try {
       await copyToClipboard(url);
       errorNotificationService.showInfo(
@@ -914,8 +916,9 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
 
   /** Link that reopens the item in document view (`view=document`). */
   const handleCopyDocumentLink = useCallback(async () => {
-    if (!teamOrgId || !documentItemId) return;
-    const url = buildTrackerDocumentDeepLink(documentItemId, teamOrgId);
+    if (!documentItemId) return;
+    const url = buildTrackerRecordDeepLink(store.get(trackerItemsMapAtom).get(documentItemId), teamOrgId, { view: 'document' });
+    if (!url) return;
     try {
       await copyToClipboard(url);
       errorNotificationService.showInfo(
@@ -1085,7 +1088,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
       onArchiveItems={handleArchiveItems}
       onDeleteItems={handleDeleteItems}
       confirmDelete={confirmTrackerItemDelete}
-      onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+      onCopyDeepLink={handleCopyDeepLink}
+      canCopyDeepLink={canCopyDeepLink}
       searchQuery={searchQuery}
       hasExternalFilters={hasExternalTableFilters}
       onClearFilters={clearTableFilters}
@@ -1235,7 +1239,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               onArchiveItems={handleArchiveItems}
               onDeleteItems={handleDeleteItems}
               confirmDelete={confirmTrackerItemDelete}
-              onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+              onCopyDeepLink={handleCopyDeepLink}
+              canCopyDeepLink={canCopyDeepLink}
               onOpenDocument={handleOpenItemAsDocument}
               searchQuery={searchQuery}
               hasExternalFilters={hasExternalTableFilters}
@@ -1259,7 +1264,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               overrideItems={viewItemsWithPersonalFields}
               onArchiveItems={handleArchiveItems}
               onDeleteItems={handleDeleteItems}
-              onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+              onCopyDeepLink={handleCopyDeepLink}
+              canCopyDeepLink={canCopyDeepLink}
               onOpenDocument={handleOpenItemAsDocument}
               getLinkedSessions={getLinkedSessionOptions}
               onOpenSession={handleSwitchToAgentMode}
@@ -1342,7 +1348,8 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
               overrideItems={viewFilteredItems}
               onArchiveItems={handleArchiveItems}
               onDeleteItems={handleDeleteItems}
-              onCopyDeepLink={teamOrgId ? handleCopyDeepLink : undefined}
+              onCopyDeepLink={handleCopyDeepLink}
+              canCopyDeepLink={canCopyDeepLink}
               onOpenDocument={handleOpenItemAsDocument}
               getLinkedSessions={getLinkedSessionOptions}
               onOpenSession={handleSwitchToAgentMode}
@@ -1404,7 +1411,7 @@ export const TrackerMainView: React.FC<TrackerMainViewProps> = ({
         bodyEditor={bodyEditor}
         detailPanelWidth={detailPanelWidth}
         onDetailPanelWidthChange={(w) => setModeLayout({ detailPanelWidth: w })}
-        onCopyDocumentLink={teamOrgId && documentItemId ? handleCopyDocumentLink : undefined}
+        onCopyDocumentLink={documentItemId && canCopyDeepLink(documentItemId) ? handleCopyDocumentLink : undefined}
         onCollapseToTracker={handleCollapseToTracker}
         onOpenItem={handleItemSelect}
         onSwitchToAgentMode={(sessionId) => {

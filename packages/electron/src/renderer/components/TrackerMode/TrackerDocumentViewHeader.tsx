@@ -43,7 +43,7 @@ interface TrackerDocumentViewHeaderProps {
   title: string;
   /** Compact schema-driven field editors (status included). */
   fieldPills?: React.ReactNode;
-  /** Copy the collaborative tracker URL that reopens this expanded view. */
+  /** Copy the portable or collaborative URL that reopens this expanded view. */
   onCopyDocumentLink?: () => void;
   /** Return to the ordinary tracker list + detail-panel presentation. */
   onCollapseToTracker: () => void;
@@ -88,8 +88,8 @@ export const TrackerDocumentViewHeader: React.FC<TrackerDocumentViewHeaderProps>
             type="button"
             className="tracker-document-copy-link-button shrink-0 inline-flex items-center justify-center rounded p-1 text-nim-muted transition-colors hover:bg-nim-tertiary hover:text-nim"
             onClick={onCopyDocumentLink}
-            title="Copy collaborative tracker link"
-            aria-label="Copy collaborative tracker link"
+            title="Copy tracker link"
+            aria-label="Copy tracker link"
             data-testid="tracker-document-copy-link"
           >
             <MaterialSymbol icon="link" size={16} />

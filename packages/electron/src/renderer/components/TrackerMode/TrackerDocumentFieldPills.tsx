@@ -33,7 +33,7 @@ export const TrackerDocumentFieldPills: React.FC<TrackerDocumentFieldPillsProps>
 }) => {
   const item = useAtomValue(trackerItemByIdAtom(itemId));
   const teamMembers = useTrackerTeamMembers(workspacePath);
-  const fields = useTrackerFieldLayout(item?.primaryType ?? '');
+  const fields = useTrackerFieldLayout(item?.primaryType ?? '', undefined, item?.typeTags);
   const relationshipCandidates = useTrackerRelationshipCandidates(item, fields);
   const editable = item ? isTrackerRecordEditable(item) : false;
   const values = useMemo(() => item?.fields ?? {}, [item]);

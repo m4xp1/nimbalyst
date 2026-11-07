@@ -167,6 +167,9 @@ export function shouldSyncTrackerItem(
   policy: TrackerSharingPolicy,
   source: Record<string, any> | null | undefined,
 ): boolean {
+  // Portable file cards are shared through the repository. Publishing a second
+  // authoritative room copy would break restoration from those files.
+  if (source?.trackerFormat === 1 || source?.customFields?.trackerFormat === 1) return false;
   return policy.sharing === 'team' && isTrackerItemPublished(source, policy.draftByDefault);
 }
 

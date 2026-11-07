@@ -12,7 +12,7 @@
  */
 
 import { useMemo } from 'react';
-import { globalRegistry } from '../models';
+import { globalRegistry, resolveFields } from '../models';
 import type { FieldDefinition } from '@nimbalyst/tracker-schema';
 import { getTrackerFieldLayout } from './trackerFieldLayout';
 
@@ -57,14 +57,14 @@ export function getTrackerChipFieldSections(
   trackerType: string,
   exclude: readonly string[] = [],
   labelFields: readonly FieldDefinition[] = [],
-  options: { singleValuedOnly?: boolean } = {},
+  options: { singleValuedOnly?: boolean; typeTags?: readonly string[] } = {},
 ): TrackerChipFieldSections {
   const excluded = new Set(exclude);
   const chipFields = getTrackerFieldLayout(trackerType, labelFields, options).filter(
     (field) => !excluded.has(field.name) && isChipRenderableField(field),
   );
   const chipNames = new Set(chipFields.map((field) => field.name));
-  const overflowFields = [...(globalRegistry.get(trackerType)?.fields ?? []), ...labelFields].filter(
+  const overflowFields = [...resolveFields([trackerType, ...(options.typeTags ?? [])]), ...labelFields].filter(
     (field) => !CHROME_FIELDS.has(field.name)
       && !excluded.has(field.name)
       && !chipNames.has(field.name),
@@ -78,13 +78,15 @@ export function useTrackerChipFieldSections(
   exclude: readonly string[] = [],
   labelFields: readonly FieldDefinition[] = NO_FIELDS,
   singleValuedOnly = false,
+  typeTags: readonly string[] = [],
 ): TrackerChipFieldSections {
   const excludeKey = exclude.join('\u0000');
+  const typeTagsKey = typeTags.join('\u0000');
   return useMemo(
     () => getTrackerChipFieldSections(
-      trackerType, excludeKey ? excludeKey.split('\u0000') : [], labelFields, { singleValuedOnly },
+      trackerType, excludeKey ? excludeKey.split('\u0000') : [], labelFields, { singleValuedOnly, typeTags: typeTagsKey ? typeTagsKey.split('\u0000') : [] },
     ),
-    [trackerType, excludeKey, labelFields, singleValuedOnly],
+    [trackerType, excludeKey, labelFields, singleValuedOnly, typeTagsKey],
   );
 }
 

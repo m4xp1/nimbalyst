@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { encodeWorkspaceLocalId } from '../../../services/tracker/portableTrackerIdentity';
 import { resolveTrackerItemFromDocumentService, resolveTrackerRowByReference } from '../trackerToolItemAccess';
 
 interface Row {
@@ -104,4 +105,42 @@ describe('resolveTrackerRowByReference', () => {
     const db = fakeDb(ROWS);
     await expect(resolveTrackerRowByReference(db, 'LC-7', '/src/app')).resolves.toBeNull();
   });
+});
+
+
+describe('portable tracker references', () => {
+  const portableId = 'task-portable-001';
+  const workspaces = ['/src/main', '/src/worktree'];
+  const rows = workspaces.map(workspace => ({ id: encodeWorkspaceLocalId(workspace, portableId), workspace, local_key: null, issue_key: 'TSK-PORTABLE', data: { trackerFormat: 1, portableId } }));
+  it('resolves the same portable ID independently in main and worktree', async () => {
+    for (const workspace of workspaces) {
+      await expect(resolveTrackerRowByReference(fakeDb(rows), portableId, workspace)).resolves.toMatchObject({ workspace, id: encodeWorkspaceLocalId(workspace, portableId) });
+    }
+  });
+  it('refuses another workspace local ID before lookup', async () => {
+    const db = fakeDb(rows);
+    await expect(resolveTrackerRowByReference(db, rows[0]!.id, workspaces[1])).rejects.toThrow('another workspace');
+    expect(db.calls).toHaveLength(0);
+  });
+  it('does not resolve local IDs without a workspace', async () => {
+    await expect(resolveTrackerRowByReference(fakeDb(rows), rows[0]!.id)).resolves.toBeNull();
+  });
+  it('keeps an existing native raw ID authoritative and never guesses another namespace', async () => {
+    const native = { id: portableId, workspace: workspaces[0]!, local_key: null, issue_key: null };
+    await expect(resolveTrackerRowByReference(fakeDb([native, ...rows]), portableId, workspaces[0])).resolves.toBe(native);
+    await expect(resolveTrackerRowByReference(fakeDb(rows), portableId)).resolves.toBeNull();
+  });
+});
+
+
+it('hydrates file projections before the first agent read in a clean profile', async () => {
+  let initialized = false;
+  const service = {
+    ensureFileTrackerProjections: vi.fn(async () => { initialized = true; }),
+    getTrackerItemById: vi.fn(async () => initialized ? { id: 'portable-card', source: 'frontmatter' } : null),
+    listTrackerItems: vi.fn(async () => []),
+  };
+  await expect(resolveTrackerItemFromDocumentService(service as any, 'portable-card')).resolves.toMatchObject({ id: 'portable-card' });
+  expect(service.ensureFileTrackerProjections).toHaveBeenCalledOnce();
+  expect(service.listTrackerItems).not.toHaveBeenCalled();
 });

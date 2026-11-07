@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Deep-link back-compat after a file-backed plan is promoted to a stable id.
  *
@@ -8,7 +9,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
-import { resolveTrackerDeepLinkId } from '../resolveTrackerDeepLinkId';
+import { resolveTrackerDeepLinkId, resolvePortableTrackerDeepLinkId } from '../resolveTrackerDeepLinkId';
+import { encodeWorkspaceLocalId } from '../portableTrackerIdentity';
 
 const WORKSPACE = '/tmp/workspace';
 const REL = 'nimbalyst-local/plans/attachment-staging-location.md';
@@ -26,6 +28,7 @@ beforeEach(async () => {
       workspace TEXT NOT NULL,
       source TEXT,
       source_ref TEXT,
+      data JSONB,
       updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
@@ -62,5 +65,53 @@ describe('resolveTrackerDeepLinkId', () => {
 
   it('does not cross workspaces', async () => {
     expect(await resolveTrackerDeepLinkId(db as any, '/tmp/other', `fm:plan:${REL}`)).toBe(`fm:plan:${REL}`);
+  });
+  it('resolves portable file IDs and keys inside the active worktree', async () => {
+    const stable = 'task-portable-id';
+    for (const workspace of [WORKSPACE, `${WORKSPACE}-other`]) {
+      await db.query('INSERT INTO tracker_items (id, issue_key, type, workspace, source, source_ref) VALUES ($1, $2, $3, $4, $5, $6)',
+        [encodeWorkspaceLocalId(workspace, stable), 'TASK-PORTABLE-ID', 'task', workspace, 'frontmatter', 'cards/task.md']);
+      expect(await resolveTrackerDeepLinkId(db as any, workspace, stable)).toBe(encodeWorkspaceLocalId(workspace, stable));
+      expect(await resolveTrackerDeepLinkId(db as any, workspace, 'task-portable-id')).toBe(encodeWorkspaceLocalId(workspace, stable));
+      expect(await resolveTrackerDeepLinkId(db as any, workspace, 'TASK-PORTABLE-ID')).toBe(encodeWorkspaceLocalId(workspace, stable));
+    }
+  });
+});
+
+
+describe('resolvePortableTrackerDeepLinkId', () => {
+  const portableId = 'task-portable-001';
+  it('never resolves a native card UUID or issue key through file scope', async () => {
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, PROMOTED_ID)).toBeNull();
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, 'NIM-2324')).toBeNull();
+  });
+  it('resolves only the matching projection of the same raw ID in two workspaces', async () => {
+    for (const workspace of [WORKSPACE, WORKSPACE + '-worktree']) {
+      await db.query('INSERT INTO tracker_items (id, type, workspace, source, data) VALUES ($1, $2, $3, $4, $5)',
+        [encodeWorkspaceLocalId(workspace, portableId), 'task', workspace, 'frontmatter', JSON.stringify({ trackerFormat: 1, portableId })]);
+    }
+    for (const workspace of [WORKSPACE, WORKSPACE + '-worktree']) {
+      expect(await resolvePortableTrackerDeepLinkId(db as any, workspace, portableId)).toBe(encodeWorkspaceLocalId(workspace, portableId));
+    }
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE + '-unknown', portableId)).toBeNull();
+  });
+  it('fails closed for absent, wrong-marker, and mismatched portable IDs', async () => {
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, portableId)).toBeNull();
+    await db.query('INSERT INTO tracker_items (id, type, workspace, source, data) VALUES ($1, $2, $3, $4, $5)',
+      [encodeWorkspaceLocalId(WORKSPACE, portableId), 'task', WORKSPACE, 'frontmatter', '{}']);
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, portableId)).toBeNull();
+    await db.query('UPDATE tracker_items SET data = $1 WHERE id = $2', [JSON.stringify({ trackerFormat: 1, portableId: 'another-card' }), encodeWorkspaceLocalId(WORKSPACE, portableId)]);
+    expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, portableId)).toBeNull();
+  });
+  it('does not accept a machine-local ID, legacy path, or malformed raw ID', async () => {
+    for (const id of [encodeWorkspaceLocalId(WORKSPACE, portableId), 'fm:plan:docs/x.md', '../secret', '', ' ' + portableId]) {
+      expect(await resolvePortableTrackerDeepLinkId(db as any, WORKSPACE, id)).toBeNull();
+    }
+  });
+  it('denies unexpected storage failures and malformed SQLite JSON without legacy fallback', async () => {
+    const broken = { query: async () => { throw new Error('Unavailable DB'); } };
+    expect(await resolvePortableTrackerDeepLinkId(broken, WORKSPACE, portableId)).toBeNull();
+    const malformed = { query: async () => ({ rows: [{ id: encodeWorkspaceLocalId(WORKSPACE, portableId), source: 'frontmatter', data: '{' }] }) };
+    expect(await resolvePortableTrackerDeepLinkId(malformed as any, WORKSPACE, portableId)).toBeNull();
   });
 });

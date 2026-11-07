@@ -851,8 +851,8 @@ export class TrackerDataModelRegistry {
     return this.builtinModels.get(type);
   }
 
-  validate(type: string, data: Record<string, any>): ValidationResult {
-    const model = this.get(type);
+  validate(type: string, data: Record<string, any>, effectiveModel?: TrackerDataModel): ValidationResult {
+    const model = effectiveModel ?? this.get(type);
     if (!model) {
       return {
         valid: false,
@@ -1210,12 +1210,15 @@ export function getFieldByRole(
  * Returns the union of all tag types' fields. Primary type (first tag) takes
  * precedence for duplicate field names.
  */
-export function resolveFields(typeTags: string[]): FieldDefinition[] {
+export function resolveFields(
+  typeTags: readonly string[],
+  getModel: (type: string) => TrackerDataModel | undefined = type => globalRegistry.get(type),
+): FieldDefinition[] {
   const seen = new Set<string>();
   const fields: FieldDefinition[] = [];
 
   for (const tag of typeTags) {
-    const model = globalRegistry.get(tag);
+    const model = getModel(tag);
     if (!model) continue;
     for (const field of model.fields) {
       if (!seen.has(field.name)) {

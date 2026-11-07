@@ -41,7 +41,7 @@ import { refreshSessionListAtom, sessionRegistryAtom, type SessionMeta } from '.
 import { resolveLinkedSessions } from '../../utils/resolveLinkedSessions';
 import { prRemoteAtom, navigateToPullRequest } from '../../store/atoms/pullRequests';
 import { getRecordPrReferences } from '@nimbalyst/runtime/plugins/TrackerPlugin/prReferences';
-import { buildTrackerDeepLink } from '../../store/atoms/collabDocuments';
+import { buildTrackerRecordDeepLink } from '../../utils/collabArtifactDeepLinks';
 import { requestConfirmation } from '../../dialogs/requestConfirmation';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import { getRelativeTimeString } from '../../utils/dateFormatting';
@@ -212,12 +212,12 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
 
   // Team lookup (orgId for the body mode and the copy link; members for people chips).
   const { teamOrgId, teamMembers, teamError, retryTeamLookup } = useTrackerTeam(workspacePath);
+  const copyLink = buildTrackerRecordDeepLink(item, teamOrgId);
 
   const handleCopyLink = useCallback(async () => {
-    if (!item || !teamOrgId) return;
-    const url = buildTrackerDeepLink(item.id, teamOrgId);
+    if (!copyLink) return;
     try {
-      await copyTextToClipboard(url);
+      await copyTextToClipboard(copyLink);
       errorNotificationService.showInfo(
         'Link copied',
         'Paste it anywhere to open this tracker in Nimbalyst.',
@@ -230,7 +230,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
         'Could not write the link to the clipboard.'
       );
     }
-  }, [item, teamOrgId]);
+  }, [copyLink]);
 
   const typeColor = TYPE_COLORS[item?.primaryType ?? ''] || NEUTRAL_SWATCH;
   const icon = model?.icon || getTypeIcon(item?.primaryType ?? '');
@@ -529,19 +529,30 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   }, [item, isItemPublished, sharePending]);
 
   /** Open the source document in Files mode */
-  const handleOpenDocument = useCallback(() => {
+  const handleOpenDocument = useCallback(async () => {
     if (!item?.system.documentPath) return;
-    const documentService = (window as any).documentService;
-    if (!documentService?.openDocument || !documentService?.getDocumentByPath) return;
-
-    if (onSwitchToFilesMode) onSwitchToFilesMode();
-
-    documentService.getDocumentByPath(item.system.documentPath).then((doc: any) => {
-      if (doc) {
-        documentService.openDocument(doc.id);
+    try {
+      if (workspacePath && fileBackedDocumentPath) {
+        const result = await window.electronAPI.invoke('workspace:open-file', { workspacePath, filePath: fileBackedDocumentPath });
+        if (result?.success === false) throw new Error(result.error || 'Could not open this document.');
+      } else {
+        const documentService = (window as any).documentService;
+        const doc = await documentService?.getDocumentByPath?.(item.system.documentPath);
+        if (!doc) throw new Error('Could not find the source document.');
+        await documentService.openDocument(doc.id);
       }
-    });
-  }, [item?.system.documentPath, onSwitchToFilesMode]);
+      onSwitchToFilesMode?.();
+    } catch (error) {
+      errorNotificationService.showError('Could not open document', error instanceof Error ? error.message : String(error));
+    }
+  }, [item?.system.documentPath, workspacePath, fileBackedDocumentPath, onSwitchToFilesMode]);
+
+  const openDocumentButton = item?.system.documentPath ? (
+    <button type="button" className="p-1 rounded hover:bg-nim-tertiary text-nim-muted" onClick={handleOpenDocument}
+      title="Open in Editor" aria-label="Open in Editor" data-testid="tracker-open-in-editor">
+      <MaterialSymbol icon="open_in_new" size={18} />
+    </button>
+  ) : null;
 
   const handleLinkExistingSession = useCallback(async (sessionId: string) => {
     if (!item) return;
@@ -583,7 +594,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
   // including the properties the item's labels bring.
   const labelLayout = useTrackerLabelFields(item?.primaryType ?? '', item?.fields);
   const { chipFields, overflowFields } = useTrackerChipFieldSections(
-    item?.primaryType ?? '', tagsField ? [tagsField.name] : [], labelLayout.fields,
+    item?.primaryType ?? '', tagsField ? [tagsField.name] : [], labelLayout.fields, false, item?.typeTags,
   );
 
   const relationshipCandidates = useTrackerRelationshipCandidates(item, chipFields);
@@ -854,7 +865,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               <span>{isItemPublished ? 'Return to draft' : 'Publish'}</span>
             </button>
           )}
-          {teamOrgId && (
+          {copyLink && (
             <button
               className="p-1 rounded hover:bg-nim-tertiary text-nim-muted"
               onClick={handleCopyLink}
@@ -864,6 +875,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               <MaterialSymbol icon="link" size={18} />
             </button>
           )}
+          {openDocumentButton}
           {onArchive && (
             <button
               className="p-1 rounded hover:bg-nim-tertiary text-nim-muted"
@@ -1106,15 +1118,17 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
         {/* Type tags editor (for native/editable items; a Local wiki file has one type) */}
         {editable && !isLocalWikiRecord(item) && (
           <TypeTagsEditor
+            key={item.id}
             typeTags={item.typeTags}
             primaryType={item.primaryType}
-            onUpdate={(newTags) => {
-              // Save via IPC -- typeTags are stored in the DB column, not JSONB data
-              window.electronAPI.documentService.updateTrackerItem({
+            onUpdate={async (newTags) => {
+              // The service routes portable cards through their source file.
+              const result = await window.electronAPI.documentService.updateTrackerItem({
                 itemId: item.id,
                 updates: { typeTags: newTags },
                 sharing,
-              }).catch((err: any) => console.error('[TrackerItemDetail] Failed to save type tags:', err));
+              });
+              if (!result?.success) throw new Error(result?.error || 'Could not save card types.');
             }}
           />
         )}
@@ -1135,6 +1149,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
 
         {/* Rich Content Editor / Description */}
         <div className={focusActive ? 'flex-1 min-h-0 flex flex-col' : 'pt-1 border-t border-nim'}>
+          {hideHeader && openDocumentButton && <div className="flex justify-end">{openDocumentButton}</div>}
           {!focusActive && (
           <label className="text-[11px] font-medium text-nim-muted uppercase tracking-[0.5px] block mb-1">
             Content
@@ -1227,19 +1242,6 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
           ) : contentMode === 'file-backed' && fileBackedDocumentPath ? (
             fileBackedDocument?.path === fileBackedDocumentPath ? (
               <div className="space-y-2">
-                <div className="flex items-center gap-2 py-2">
-                  <span className="text-sm text-nim-muted flex-1 truncate font-mono">
-                    {item.system.documentPath}
-                  </span>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-nim text-nim-muted hover:text-nim hover:bg-nim-tertiary transition-colors"
-                    onClick={handleOpenDocument}
-                  >
-                    <MaterialSymbol icon="open_in_new" size={14} />
-                    Open in Editor
-                  </button>
-                </div>
                 <div className="tracker-file-backed-document-editor h-[480px] min-h-[200px] overflow-hidden rounded border border-nim" data-testid="tracker-file-backed-document-editor">
                   <TabEditor
                   embedded
@@ -1272,18 +1274,7 @@ export const TrackerItemDetail: React.FC<TrackerItemDetailProps> = ({
               <div className="text-sm text-nim-faint py-4 text-center">Loading document...</div>
             )
           ) : item.system.documentPath ? (
-            <div className="flex items-center gap-2 py-2">
-              <span className="text-sm text-nim-muted flex-1 truncate font-mono">
-                {item.system.documentPath}
-              </span>
-              <button
-                className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-nim text-nim-muted hover:text-nim hover:bg-nim-tertiary transition-colors"
-                onClick={handleOpenDocument}
-              >
-                <MaterialSymbol icon="open_in_new" size={14} />
-                Open in Editor
-              </button>
-            </div>
+            <p className="text-sm text-nim-faint m-0">Open the source document in the editor using the header action.</p>
           ) : (
             <p className="text-sm text-nim-faint m-0">No content</p>
           )}

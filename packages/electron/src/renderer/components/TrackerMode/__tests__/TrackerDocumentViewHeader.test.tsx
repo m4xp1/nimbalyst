@@ -107,8 +107,8 @@ describe('TrackerDocumentViewHeader', () => {
     renderHeader({ onCopyDocumentLink });
 
     const copyLink = screen.getByTestId('tracker-document-copy-link');
-    expect(copyLink.getAttribute('aria-label')).toBe('Copy collaborative tracker link');
-    expect(copyLink.getAttribute('title')).toBe('Copy collaborative tracker link');
+    expect(copyLink.getAttribute('aria-label')).toBe('Copy tracker link');
+    expect(copyLink.getAttribute('title')).toBe('Copy tracker link');
 
     fireEvent.click(copyLink);
     expect(onCopyDocumentLink).toHaveBeenCalledTimes(1);

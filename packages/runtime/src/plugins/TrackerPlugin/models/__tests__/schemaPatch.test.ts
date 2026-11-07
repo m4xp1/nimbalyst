@@ -51,6 +51,16 @@ function featureSeed(): TrackerDataModel {
 }
 
 describe('resolveTrackerSchemaPatch', () => {
+  it('retains legacy file recognition through a small mode delta without copying builtin fields', () => {
+    const seed = featureSeed();
+    const patch = parseTrackerSchemaPatchYAML('type: feature\nmodes:\n  fullDocument: true\nsharing: personal\n');
+    const resolved = resolveTrackerSchemaPatch(seed, patch);
+    expect(resolved.modes).toEqual({ inline: true, fullDocument: true });
+    expect(resolved.fields).toEqual(seed.fields);
+    expect(seed.modes.fullDocument).toBe(false);
+    expect(diffTrackerSchema(seed, resolved)).toEqual({ type: 'feature', sharing: 'personal', modes: { fullDocument: true } });
+    expect(() => resolveTrackerSchemaPatch(seed, parseTrackerSchemaPatchYAML('type: feature\nmodes:\n  fullDocument: nope\n'))).toThrow(/mode/i);
+  });
   it('adds a select option by value without redeclaring the schema', () => {
     const patch: TrackerSchemaPatch = {
       type: 'feature',

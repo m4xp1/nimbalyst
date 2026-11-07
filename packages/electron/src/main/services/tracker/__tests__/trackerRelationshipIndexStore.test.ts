@@ -30,6 +30,7 @@ import {
 import { ensureWorkspaceRelationshipIndex } from '../trackerRelationshipIndexStore';
 import { getTrackerItemLinks } from '../trackerPageLinks';
 import { refreshRemoteBodyLinks } from '../trackerRemoteBodyLinks';
+import { encodeWorkspaceLocalId } from '../portableTrackerIdentity';
 import type { RelationshipEdge, FieldDefinition } from '@nimbalyst/runtime/plugins/TrackerPlugin/models';
 
 const SCHEMA_DIR = path.resolve(__dirname, '..', '..', '..', 'database', 'sqlite', 'schemas');
@@ -208,6 +209,24 @@ describe('trackerRelationshipIndexStore (SQLite, migration 0014)', () => {
       'See [the Yjs page](nimbalyst://NIM-2) and again [Yjs](nimbalyst://NIM-2 "rel=built-on").',
       'Self: [me](nimbalyst://NIM-1 "rel=built-on"). Ghost: [x](nimbalyst://NIM-999).',
     ].join('\n');
+
+    it('resolves raw portable body IDs only inside the current workspace', async () => {
+      const portableId = 'portable-target';
+      const localId = encodeWorkspaceLocalId(WS, portableId);
+      const foreignWorkspace = '/ws/another-copy';
+      const foreignId = encodeWorkspaceLocalId(foreignWorkspace, portableId);
+      for (const [workspace, id] of [[WS, localId], [foreignWorkspace, foreignId]]) {
+        await db.query(`INSERT INTO tracker_items (id, type, data, workspace, created, updated, last_indexed, sync_status, archived, source)
+          VALUES ($1, 'task', $2, $3, NOW(), NOW(), NOW(), 'local', FALSE, 'frontmatter')`,
+        [id, JSON.stringify({ trackerFormat: 1, portableId, title: 'Portable' }), workspace]);
+      }
+      await reindexItemRelationshipsAfterWrite(WS, 'page-1', {}, [], null, db, `[portable](nimbalyst://${portableId})`);
+      expect((await getOutgoingRelationships(WS, 'page-1', db)).map(row => row.targetItemId)).toEqual([localId]);
+      expect(await getBacklinks(foreignWorkspace, foreignId, db)).toEqual([]);
+      await db.query('DELETE FROM tracker_items WHERE id = $1', [localId]);
+      await reindexItemRelationshipsAfterWrite(WS, 'page-1', {}, [], null, db, `[portable](nimbalyst://${portableId})`);
+      expect(await getOutgoingRelationships(WS, 'page-1', db)).toEqual([]);
+    });
 
     it('derives one row per (target, relation) and skips self and unresolvable links', async () => {
       await reindexItemRelationshipsAfterWrite(WS, 'page-1', { title: 'Sync' }, [], null, db, BODY);
