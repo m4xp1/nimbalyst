@@ -1,3 +1,4 @@
+import { codexAccessAllowed } from '../../codexAccessPolicy';
 import { codexSessionConfigurationKey } from '../protocols/codexAppServer/windowsSandbox';
 import path from 'path';
 import crypto from 'crypto';
@@ -83,6 +84,7 @@ interface OpenAICodexProviderDeps {
 }
 
 interface OpenAICodexModelDiscoveryDeps {
+  loadAppServerModels?: (workspacePath?: string) => Promise<unknown[]>;
   loadSdkModule?: () => Promise<CodexSdkModuleLike>;
 }
 
@@ -562,7 +564,25 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   static async getModels(
     apiKey?: string,
     deps?: OpenAICodexModelDiscoveryDeps,
+    workspacePath?: string,
   ): Promise<AIModel[]> {
+    if (!codexAccessAllowed()) return OpenAICodexProvider.getFallbackModels();
+    const useSdk = !deps?.loadAppServerModels && (deps?.loadSdkModule ||
+      OpenAICodexProvider.sdkModuleLoader || OpenAICodexProvider.codexTransportResolver?.() === 'sdk');
+    if (!useSdk) {
+      try {
+        const candidates = deps?.loadAppServerModels
+          ? await deps.loadAppServerModels(workspacePath)
+          : await new CodexAppServerProtocol({ apiKey, resolveCodexPathOverride: resolvePackagedCodexBinaryPath })
+            .discoverModels({ workspacePath: workspacePath || process.cwd() });
+        // The runtime catalog is authoritative, including an intentionally empty
+        // catalog. Never add static models that this runtime did not advertise.
+        return OpenAICodexProvider.mapSdkModelResult(candidates);
+      } catch (error) {
+        console.warn('[Codex] Model discovery unavailable; using the offline catalog:', error);
+        return OpenAICodexProvider.getFallbackModels();
+      }
+    }
     const sdkModels = await OpenAICodexProvider.getModelsFromSdk(apiKey, deps);
     const apiModels = await OpenAICodexProvider.getModelsFromOpenAI(apiKey);
     return OpenAICodexProvider.getPreferredModels(sdkModels, apiModels);
@@ -579,33 +599,16 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   }
 
   private static getPreferredModels(...sourceLists: AIModel[][]): AIModel[] {
-    const metadataById = new Map<string, AIModel>();
+    const discovered = sourceLists.find((models) => models.length > 0);
+    return discovered ?? OpenAICodexProvider.getFallbackModels();
+  }
 
-    for (const sourceModels of sourceLists) {
-      for (const sourceModel of sourceModels) {
-        const rawId = OpenAICodexProvider.toRawModelId(sourceModel.id);
-        if (!rawId) {
-          continue;
-        }
-        if (!OpenAICodexProvider.FALLBACK_MODELS_SET.has(rawId)) {
-          continue;
-        }
-        if (!metadataById.has(rawId)) {
-          metadataById.set(rawId, sourceModel);
-        }
-      }
-    }
-
-    return OpenAICodexProvider.FALLBACK_MODELS.map((fallbackModel) => {
-      const discovered = metadataById.get(fallbackModel.id);
-      return {
-        id: ModelIdentifier.create('openai-codex', fallbackModel.id).combined,
-        name: discovered?.name || fallbackModel.name,
-        provider: 'openai-codex' as AIProviderType,
-        contextWindow: discovered?.contextWindow ?? fallbackModel.contextWindow,
-        maxTokens: discovered?.maxTokens ?? fallbackModel.maxTokens,
-      };
-    });
+  /** Fresh metadata probe; no thread, user prompt, or paid inference. */
+  static async discoverSkills(workspacePath: string): Promise<string[]> {
+    if (!codexAccessAllowed()) return [];
+    if (OpenAICodexProvider.codexTransportResolver?.() === 'sdk') return [];
+    return new CodexAppServerProtocol({ resolveCodexPathOverride: resolvePackagedCodexBinaryPath })
+      .discoverSkills({ workspacePath });
   }
 
   private static async getModelsFromSdk(
@@ -794,7 +797,8 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       modelId = candidate;
     } else if (candidate && typeof candidate === 'object') {
       const entry = candidate as Record<string, unknown>;
-      modelId = OpenAICodexProvider.readStringField(entry, ['id', 'model']);
+      if (entry.hidden === true) return null;
+      modelId = OpenAICodexProvider.readStringField(entry, ['model', 'id']);
       modelName = OpenAICodexProvider.readStringField(entry, ['displayName', 'display_name', 'name']);
       contextWindow = OpenAICodexProvider.readNumberField(entry, [
         'contextWindow',
@@ -904,8 +908,8 @@ export class OpenAICodexProvider extends BaseAgentProvider {
    *
    * Sourced from the transport's `skills/list`, which now includes Nimbalyst's
    * exported skills because `registerSkillRoots` adds them as an extra root.
-   * Empty until the first session has started -- the `/` typeahead is
-   * synchronous, so it renders "no skills" rather than blocking on an RPC.
+   * This instance cache is populated after session startup. The workflow IPC
+   * uses discoverSkills(workspacePath) before startup instead of waiting for it.
    */
   getSkills(): string[] {
     const skillSource = this.protocol as unknown as { getSkillNames?: () => string[] };

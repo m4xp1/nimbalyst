@@ -1,3 +1,4 @@
+import { isolatedAgentEnvironment } from './isolatedAgentEnvironment';
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
@@ -15,7 +16,7 @@ async function launch(){
  const main=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js');
  const isolate=path.join(temp,'isolate.cjs'),user=path.join(temp,'profile'),processTemp=path.join(temp,'process-temp');await fs.mkdir(processTemp,{recursive:true});const extensions=path.join(processTemp,'nimbalyst-test-extensions','extensions');await fs.mkdir(extensions,{recursive:true});
  await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(user)+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(main))+');require('+JSON.stringify(main)+');');
- const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,NIMBALYST_RELEASE_CHANNEL,...env}=process.env;for(const key of Object.keys(env))if(key.startsWith('GIT_'))delete env[key];
+ const env = isolatedAgentEnvironment(path.join(temp, 'agent-home')); delete env.NIMBALYST_RELEASE_CHANNEL; delete env.ELECTRON_RENDERER_URL;for(const key of Object.keys(env))if(key.startsWith('GIT_'))delete env[key];
  app=await _electron.launch({...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+user]:[isolate]),'--workspace',repo],cwd:root,timeout:45000,
  env:{...env,TEMP:processTemp,TMP:processTemp,GIT_CONFIG_GLOBAL:path.join(temp,'absent-global'),GIT_CONFIG_SYSTEM:path.join(temp,'absent-system'),GIT_CEILING_DIRECTORIES:temp,PLAYWRIGHT:'1',NIMBALYST_RELEASE_CHANNEL:'stable',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:user,NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),NIMBALYST_E2E_EXTENSIONS_DIR:extensions,OPENAI_API_KEY:'',ANTHROPIC_API_KEY:''}});
  if(process.env.NIMBALYST_E2E_APP_PATH)expect(await app.evaluate(({app})=>app.getVersion())).toBe(JSON.parse(await fs.readFile(path.join(root,'packages/electron/package.json'),'utf8')).version);

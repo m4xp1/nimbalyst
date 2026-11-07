@@ -1,3 +1,4 @@
+import { isolatedAgentEnvironment } from './isolatedAgentEnvironment';
 import {test,expect,_electron,type ElectronApplication,type Page} from '@playwright/test';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -33,7 +34,7 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
  async function launchWorkspace(reuse=false){
   const mainPath=process.env.NIMBALYST_E2E_MAIN_PATH??path.join(root,'packages/electron/out/main/index.js'),isolate=path.join(temp,'isolate.cjs');
   await fs.writeFile(isolate,'const {app}=require("electron");app.setPath("userData",'+JSON.stringify(path.join(temp,'user'))+');app.setPath("appData",'+JSON.stringify(temp)+');app.setAppPath('+JSON.stringify(path.dirname(mainPath))+');require('+JSON.stringify(mainPath)+');');
-  const {ELECTRON_RUN_AS_NODE,NODE_PATH,ELECTRON_RENDERER_URL,...clean}=process.env;
+  const clean = isolatedAgentEnvironment(path.join(temp, 'agent-home')); delete clean.ELECTRON_RENDERER_URL;
   app=await _electron.launch({...(process.env.NIMBALYST_E2E_RECORD_VIDEO==='1'?{recordVideo:{dir:path.join(root,'e2e_test_output/search-results/attached-videos'),size:{width:1280,height:720}}}:{}),...(process.env.NIMBALYST_E2E_APP_PATH?{executablePath:process.env.NIMBALYST_E2E_APP_PATH}:{}),args:[...(process.env.NIMBALYST_E2E_APP_PATH?['--user-data-dir='+path.join(temp,'user')]:[isolate]),'--workspace',workspace],cwd:root,timeout:45000,
    env:{...clean,PLAYWRIGHT:'1',NIMBALYST_CDP_PORT:'0',NIMBALYST_PERMISSION_MODE:'allow-all',NIMBALYST_USER_DATA_DIR:path.join(temp,'user'),NIMBALYST_USER_DATA_PATH:path.join(temp,'db'),OPENAI_API_KEY:'',ANTHROPIC_API_KEY:'',TEMP:path.join(temp,'tmp'),TMP:path.join(temp,'tmp')}});
   applicationClosed=false;page=await app.firstWindow();
@@ -154,6 +155,8 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await app.evaluate(({BrowserWindow})=>{BrowserWindow.getAllWindows().find(window=>!window.isDestroyed())!.webContents.send('open-settings-command',{category:'ext:com.nimbalyst.memory:memory',scope:'project',timestamp:Date.now()});});
   await page.getByTestId('settings-route-ext:com.nimbalyst.memory:memory').click();
   const coverage=page.locator('.nimbalyst-memory-coverage');await expect(coverage).toBeVisible();
+  await expect(coverage.getByRole('button',{name:'Refresh',exact:true})).toHaveCount(0);
+  await expect(coverage.getByRole('button',{name:'Rebuild all',exact:true})).toBeVisible();
   const usage=page.locator('.memory-embedding-usage');await expect(usage).toBeVisible();await expect(usage.getByRole('combobox',{name:'Embedding usage period'})).toHaveValue('today');
   const usageBefore=await panel('get_embedding_usage',{period:'all'});await usage.getByRole('combobox',{name:'Embedding usage period'}).selectOption('all');await expect(usage.getByText('Requests',{exact:true})).toBeVisible();const usageAfter=await panel('get_embedding_usage',{period:'all'});expect(usageAfter.totals.attempts).toBe(usageBefore.totals.attempts);
   await expect(usage.getByRole('checkbox',{name:/Embedding request logging/})).toHaveCount(0);
@@ -167,6 +170,14 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   await expect(page.getByRole('textbox',{name:'Source excludes'})).toHaveValue('docs');
   await sourceIncludes.fill('');await sourceIncludes.blur();
   await expect.poll(async()=>(await call('search_project_knowledge',{query:'ТочечноеДеревоМаркер'})).chunks.length).toBe(0);
+  // Settings unmounts on navigation. A new mount must read fresh rules rather than
+  // apply a queued response from the previous panel; no provider is configured.
+  await page.getByTestId('files-mode-button').click();await expect(coverage).toHaveCount(0);
+  await panel('set_sources',{include:[],exclude:['docs','closed-panel-probe']});
+  await app.evaluate(({BrowserWindow})=>{BrowserWindow.getAllWindows().find(window=>!window.isDestroyed())!.webContents.send('open-settings-command',{category:'ext:com.nimbalyst.memory:memory',scope:'project',timestamp:Date.now()});});
+  await page.getByTestId('settings-route-ext:com.nimbalyst.memory:memory').click();await expect(coverage).toBeVisible();
+  await expect(page.getByRole('textbox',{name:'Source excludes'})).toHaveValue('docs\nclosed-panel-probe');
+  await select.selectOption(link.id);
   // A real missing/returning attached source keeps its saved index in both app DB modes.
   await fs.writeFile(path.join(attached,'docs','RetainedProbe.md'),'# Retained\nУдержанныйИндексМаркер');
   await panel('set_sources',{rootId:link.id,include:['docs/RetainedProbe.md'],exclude:[]});
@@ -174,6 +185,9 @@ for(const database of ['sqlite','pglite'] as const) test.describe.serial('Attach
   const retainedFile=path.join(attached,'docs','RetainedProbe.md'),parked=path.join(temp,'parked-RetainedProbe.md');
   const storedBefore=await panel('status',{rootId:link.id});
   await fs.rename(retainedFile,parked);
+  // Observe the actual backend->host->renderer invalidation before another
+  // status read. UI subscription, not this test's polling, updates the card.
+  await expect(coverage.locator('.nimbalyst-memory-unavailable-files')).toContainText('docs/RetainedProbe.md');
   await expect.poll(async()=>(await panel('status',{rootId:link.id})).unavailableFiles?.some((row:any)=>row.relativePath==='docs/RetainedProbe.md')).toBe(true);
   expect((await panel('status',{rootId:link.id})).chunks).toBe(storedBefore.chunks);
   await expect(coverage.locator('.nimbalyst-memory-unavailable-files')).toContainText('docs/RetainedProbe.md');

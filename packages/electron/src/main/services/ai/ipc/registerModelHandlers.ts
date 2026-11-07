@@ -1,3 +1,5 @@
+import { OpenAICodexProvider } from '@nimbalyst/runtime/ai/server/providers/OpenAICodexProvider';
+import { CodexWorkflowDiscovery } from '../codexWorkflowDiscovery';
 import { getProviderCredentials } from '../../credentials/providerCredentials';
 import { getAgentProviderRegistry } from '../../../extensions/AgentProviderRegistry';
 import { safeHandle } from '../../../utils/ipcRegistry';
@@ -10,6 +12,11 @@ import { type AIServiceContext } from './AIServiceContext';
 import { ModelRegistry, ProviderFactory } from '@nimbalyst/runtime/ai/server';
 import { type AIProviderType } from '@nimbalyst/runtime/ai/server/types';
 import { BrowserWindow } from 'electron';
+
+const codexWorkflows = new CodexWorkflowDiscovery(
+  (workspacePath) => getAgentWorkflowService(workspacePath).ensureCodexExports(),
+  (workspacePath) => OpenAICodexProvider.discoverSkills(workspacePath),
+);
 
 /**
  * Model catalog and per-provider capability listings.
@@ -117,6 +124,12 @@ export function registerModelHandlers(ctx: AIServiceContext): void {
         provider: resolvedProvider,
       });
 
+      if (resolvedProvider === 'openai-codex' && nativeCatalog.capabilities.skills) {
+        // A new/resumed session has no live provider yet. Query metadata now,
+        // without starting a thread, so plugins appear before the first prompt.
+        nativeCatalog.skills = await codexWorkflows.get(request.workspacePath);
+      }
+
       // NIM-845: for a genuine claude-code-cli session, hide extension-plugin
       // (namespaced) commands when the resolved `claude` is too old to accept
       // `--plugin-dir` — those plugins can't load, so the commands would never
@@ -143,15 +156,20 @@ export function registerModelHandlers(ctx: AIServiceContext): void {
   });
 
   safeHandle('ai:getSlashCommands', async (
-    _event,
-    payload?: string | { sessionId?: string; provider?: string | null }
+    event,
+    payload?: string | { sessionId?: string; provider?: string | null; workspacePath?: string }
   ) => {
     try {
       const request = typeof payload === 'string'
         ? { sessionId: payload, provider: undefined }
         : payload ?? {};
-      const { commands, skills } = ctx.getProviderWorkflowCatalog(request);
-      return { success: true, commands, skills };
+      const catalog = ctx.getProviderWorkflowCatalog(request);
+      const workspacePath = ('workspacePath' in request ? request.workspacePath : undefined) ??
+        resolveActiveWorkspacePathForWindowId(getWindowIdForWindow(BrowserWindow.fromWebContents(event.sender)));
+      if (request.provider === 'openai-codex' && catalog.capabilities.skills && workspacePath) {
+        catalog.skills = await codexWorkflows.get(workspacePath);
+      }
+      return { success: true, commands: catalog.commands, skills: catalog.skills };
     } catch (error) {
       console.error('[AIService] Error getting slash commands:', error);
       return { success: false, commands: [], skills: [], error: error instanceof Error ? error.message : 'Unknown error' };

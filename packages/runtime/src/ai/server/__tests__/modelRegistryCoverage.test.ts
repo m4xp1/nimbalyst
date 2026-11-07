@@ -185,4 +185,12 @@ describe('ModelRegistry catalog cache', () => {
       .toEqual([model('openai', 'new')]);
     expect(fetchFresh).toHaveBeenCalledTimes(2);
   });
+  it('keeps Codex catalogs scoped to their workspace and worktree', async () => {
+    const fetchFresh = vi.spyOn(registryInternals, 'fetchFreshModels')
+      .mockImplementation(async (provider, workspacePath) => [model(provider, workspacePath || 'global')]);
+    expect(await ModelRegistry.getModelsForProvider('openai-codex', '/project')).toEqual([model('openai-codex', '/project')]);
+    expect(await ModelRegistry.getModelsForProvider('openai-codex', '/worktree')).toEqual([model('openai-codex', '/worktree')]);
+    expect(fetchFresh).toHaveBeenCalledTimes(2);
+  });
+
 });

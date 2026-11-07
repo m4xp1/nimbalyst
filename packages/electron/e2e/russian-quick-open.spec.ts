@@ -1,3 +1,4 @@
+import { isolatedAgentEnvironment } from './isolatedAgentEnvironment';
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -22,7 +23,7 @@ test.describe.serial('Built Electron Russian Quick Open', () => {
     await fs.mkdir(path.join(temp,'user'),{recursive:true});
     const mainPath = process.env.NIMBALYST_E2E_MAIN_PATH ?? path.join(root,'packages/electron/out/main/index.js');
     await fs.writeFile(isolate, `const {app}=require('electron'); app.setPath('userData',${JSON.stringify(path.join(temp,'user'))}); app.setPath('appData',${JSON.stringify(temp)}); app.setAppPath(${JSON.stringify(path.dirname(mainPath))}); require(${JSON.stringify(mainPath)});`);
-    const { ELECTRON_RUN_AS_NODE, NODE_PATH, ELECTRON_RENDERER_URL, ...clean } = process.env;
+    const clean = isolatedAgentEnvironment(path.join(temp, 'agent-home')); delete clean.ELECTRON_RENDERER_URL;
     const executablePath = process.env.NIMBALYST_E2E_APP_PATH;
     app = await _electron.launch({
       ...(executablePath ? { executablePath } : {}),

@@ -1,3 +1,4 @@
+import { assertCodexAccessAllowed } from '../../codexAccessPolicy';
 import { buildCodexThreadStartParams } from './codexAppServer/threadConfiguration';
 import { validateCodexSandbox } from './codexAppServer/validateCodexSandbox';
 import { previewForLog, summarizeNotificationParams, extractNotificationRouting } from './codexAppServer/notificationDiagnostics';
@@ -477,9 +478,59 @@ export class CodexAppServerProtocol implements AgentProtocol {
     this.terminateProcessTree(raw.child);
   }
 
-  private async spawnAndInit(options: SessionOptions): Promise<AppServerSessionRaw> {
+  /** Read runtime catalogs without creating a conversation, loading MCP tools or running a turn. */
+  async discoverModels(options: SessionOptions): Promise<unknown[]> {
+    const raw = await this.spawnAndInit(options, true);
+    try {
+      const models: unknown[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let page = 0; page < 100; page++) {
+        const response = await raw.client.request<{ data?: unknown[]; nextCursor?: string | null }>(
+          'model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) },
+        );
+        if (!Array.isArray(response.data)) throw new Error('Codex model/list returned an invalid catalog');
+        models.push(...response.data);
+        if (!response.nextCursor) return models;
+        if (seenCursors.has(response.nextCursor)) throw new Error('Codex model/list repeated a pagination cursor');
+        seenCursors.add(response.nextCursor);
+        cursor = response.nextCursor;
+      }
+      throw new Error('Codex model/list exceeded the catalog page limit');
+    } finally {
+      this.killChild(raw);
+    }
+  }
+
+  async discoverSkills(options: SessionOptions): Promise<string[]> {
+    const raw = await this.spawnAndInit(options, true);
+    try {
+      return await this.readSkillNames(raw.client, options.workspacePath || process.cwd());
+    } finally {
+      this.killChild(raw);
+    }
+  }
+
+  private async readSkillNames(client: JsonRpcClient, cwd: string): Promise<string[]> {
+    await client.request('skills/extraRoots/set', {
+      extraRoots: [path.join(cwd, '.agents', 'skills', '.nimbalyst-generated')],
+    });
+    const response = await client.request<SkillsListResponse>('skills/list', { cwds: [cwd], forceReload: true });
+    if (!Array.isArray(response.data)) throw new Error('Codex skills/list returned an invalid catalog');
+    const errors = response.data.flatMap((group) => group.errors ?? []);
+    if (errors.length) throw new Error(`Codex could not load ${errors.length} skill source(s): ${errors[0].message ?? 'unknown error'}`);
+    const names = response.data
+      .flatMap((group) => group.skills ?? [])
+      .filter((skill) => skill.enabled !== false)
+      .map((skill) => skill.name)
+      .filter((name): name is string => typeof name === 'string' && name.length > 0);
+    return Array.from(new Set(names)).sort();
+  }
+
+  private async spawnAndInit(options: SessionOptions, metadataOnly = false): Promise<AppServerSessionRaw> {
+    assertCodexAccessAllowed();
     const binary = resolveCodexBinaryPath(this.resolveCodexPathOverride);
-    const tracking = await prepareCodexShellTracking(options);
+    const tracking = metadataOnly ? undefined : await prepareCodexShellTracking(options);
     const env = this.buildEnv(options, binary);
     Object.assign(env, tracking?.registration.env);
     const cwd = options.workspacePath || process.cwd();
@@ -492,6 +543,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
       env,
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     const stderrTail: string[] = [];
     child.stderr.setEncoding('utf8');
@@ -504,6 +556,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
       }
     });
     const client = new JsonRpcClient(child, {
+      ...(metadataOnly ? { defaultTimeoutMs: 10_000 } : {}),
       logger: {
         log: (m, ...a) => console.log('[CODEX][APPSERVER]', m, ...a),
         warn: (m, ...a) => console.warn('[CODEX][APPSERVER]', m, ...a),
@@ -539,7 +592,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
       const configHint = describeCodexConfigError(rawError);
       throw new Error(`[CodexAppServer] initialize failed: ${rawError}${configHint ? `\n\n${configHint}` : ''}`);
     }
-    this.registerSkillRoots(client, cwd);
+    if (!metadataOnly) this.registerSkillRoots(client, cwd);
     const raw: AppServerSessionRaw = {
       child,
       client,
@@ -573,21 +626,8 @@ export class CodexAppServerProtocol implements AgentProtocol {
    * an enhancement, not a precondition for running a turn.
    */
   private registerSkillRoots(client: JsonRpcClient, cwd: string): void {
-    Promise.resolve(
-      client.request('skills/extraRoots/set', {
-        extraRoots: [path.join(cwd, '.agents', 'skills', '.nimbalyst-generated')],
-      }),
-    )
-      .then(() => client.request<SkillsListResponse>('skills/list', {}))
-      .then((response) => {
-        // Cached for the `/` typeahead, which is synchronous and cannot wait on
-        // an RPC. An empty cache renders as "no skills" rather than blocking.
-        const names = (response?.data ?? [])
-          .flatMap((group) => group?.skills ?? [])
-          .map((skill) => skill?.name)
-          .filter((name): name is string => typeof name === 'string' && name.length > 0);
-        this.skillNames = Array.from(new Set(names)).sort();
-      })
+    this.readSkillNames(client, cwd)
+      .then((names) => { this.skillNames = names; })
       .catch((err) => {
         console.warn('[CODEX][APPSERVER] skills registration failed; Nimbalyst skills will not be visible to the agent:', err);
       });

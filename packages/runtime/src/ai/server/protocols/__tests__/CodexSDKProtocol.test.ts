@@ -1,7 +1,15 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Only the fake SDK/JSON-RPC peer may run in this unit fixture.
+beforeEach(() => vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'));
+afterEach(() => vi.unstubAllEnvs());
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(() => { throw new Error('Real Codex is forbidden in this unit fixture'); }),
+}));
 import { CodexSDKProtocol } from '../CodexSDKProtocol';
 
 function createAsyncEventStream(events: any[]): AsyncIterable<any> {

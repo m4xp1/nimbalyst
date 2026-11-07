@@ -4,7 +4,15 @@
  * developer_instructions are re-sent at the head of every turn, so the session
  * directive and the out-of-band naming decision are read once and frozen.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
+
+// Only the fake SDK/JSON-RPC peer may run in this unit fixture.
+beforeEach(() => vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'));
+afterEach(() => vi.unstubAllEnvs());
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(() => { throw new Error('Real Codex is forbidden in this unit fixture'); }),
+}));
 import { OpenAICodexProvider } from '../OpenAICodexProvider';
 import { configureMcpServers } from '../../services/mcpServerConfig';
 import { AISessionsRepository } from '../../../../storage/repositories/AISessionsRepository';
