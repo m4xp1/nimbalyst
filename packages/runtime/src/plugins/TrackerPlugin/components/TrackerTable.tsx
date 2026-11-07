@@ -1369,7 +1369,7 @@ export function TrackerTable({
                 <TrackerTypeCell type={item.primaryType} display={typeColumnDisplay} variant="row" />
 
                 {/* Title (takes remaining space) */}
-                <div className="tracker-table-cell title flex-1 min-w-0">
+                <div className="tracker-table-cell title flex-1 min-w-[10rem]">
                   {editingCell?.itemId === item.id && editingCell?.field === 'title' ? (
                     <input
                       ref={titleInputRef}
@@ -1390,9 +1390,9 @@ export function TrackerTable({
                   ) : (
                     <div className="flex items-baseline gap-2 min-w-0">
                       {resolveDisplayIssueKey(item) && (
-                        <span className="shrink-0 text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]">{resolveDisplayIssueKey(item)}</span>
+                        <span className="max-w-[45%] shrink-0 truncate text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-[var(--nim-text-faint)]" title={resolveDisplayIssueKey(item)}>{resolveDisplayIssueKey(item)}</span>
                       )}
-                      <span className="text-[13px] font-medium text-[var(--nim-text)] truncate">{title}</span>
+                      <span className="min-w-0 flex-1 text-[13px] font-medium text-[var(--nim-text)] truncate" title={title}>{title}</span>
                     </div>
                   )}
                 </div>
@@ -1400,7 +1400,7 @@ export function TrackerTable({
                 <TrackerBlockedChip readiness={readinessByItemId?.get(item.id)} scope={blockerScope} />
 
                 {/* Right-side metadata: render visible columns (except type/title which are already shown) */}
-                <div className="tracker-table-row-meta flex items-center gap-2 shrink-0">
+                <div className="tracker-table-row-meta flex min-w-0 max-w-[60%] items-center gap-2 overflow-hidden">
                   {visibleColumnDefs.filter(col => col.id !== 'type' && col.id !== 'title').map(col => {
                     const value = getCellValue(item, resolveColumnFieldName(item.primaryType, col));
                     return (

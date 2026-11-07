@@ -53,6 +53,7 @@ for (const database of ['sqlite', 'pglite'] as const) test.describe.serial(`Port
         OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', TMP: path.join(temp, 'tmp'), TEMP: path.join(temp, 'tmp') },
     });
     closed = false; page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => !window.isDestroyed())!.setSize(1024, 768));
     await page.getByTestId('tracker-mode-button').waitFor();
     expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(user);
     expect((await invoke('db:migration:get-status')).activeBackend).toBe(database);
@@ -95,7 +96,10 @@ for (const database of ['sqlite', 'pglite'] as const) test.describe.serial(`Port
     if (!await typeButton.isVisible()) await page.getByRole('button', { name: 'Show Tracker sidebar', exact: true }).click();
     await typeButton.click();
     const row = page.locator(`[data-testid="tracker-table-row"][data-item-id="${item.id}"]`);
-    await expect(row).toBeVisible(); await row.locator('.tracker-table-cell.title').click();
+    await expect(row).toBeVisible();
+    // A long issue key plus owner/tags must not consume the card title at a narrow window size.
+    await expect(row.getByText(item.title, { exact: true })).toBeVisible();
+    await row.locator('.tracker-table-cell.title').click();
     await expect(page.locator('.tracker-item-detail')).toBeVisible();
   }
   async function readCard(item: any) {
