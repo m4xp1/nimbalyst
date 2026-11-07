@@ -40,7 +40,7 @@ Renderers cannot access Node.js APIs directly — use IPC to request main-proces
 ### Document Service
 - Main: `ElectronDocumentService` (file scanning, metadata extraction, caching)
 - Renderer: `RendererDocumentService` (facade over IPC)
-- **Metadata**: frontmatter extraction with bounded reads (4KB)
+- **Metadata**: frontmatter extraction with bounded reads (16 KiB). Portable tracker fields stay in one YAML header; short `description` is limited to 500 characters, with long text in the Markdown body.
 - **Channels**: `document-service:*`
 
 ### Common IPC Issues

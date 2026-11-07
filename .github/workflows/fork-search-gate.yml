@@ -13,6 +13,7 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=8192
       NIMBALYST_ALLOW_OPENAI_API: '0'
+      NIMBALYST_ALLOW_CODEX_ACCESS: '0'
       OPENAI_API_KEY: ''
       ANTHROPIC_API_KEY: ''
       OFFICIAL_BUILD: 'false'
@@ -37,6 +38,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Git extension build failed' }
       - name: Mandatory lexical and hybrid regression tests
         run: pnpm run test:fork-search
+      - name: Mandatory portable tracker, editor and discovery regressions
+        run: pnpm run test:fork-features
       - name: Mandatory schema and editor coordination regressions
         run: >-
           pnpm exec vitest run
@@ -73,8 +76,13 @@ jobs:
         run: pnpm --filter @nimbalyst/electron run build
       - name: Verify native runtime
         run: pnpm --filter @nimbalyst/electron run verify:native-runtime
-      - name: Mandatory built-app search across all six panes
-        run: pnpm --dir packages/electron exec playwright test --config playwright.search.config.ts
+      - name: Mandatory built-app search, Git and file tracker
+        run: |
+          $specs = @('russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts')
+          foreach ($spec in $specs) {
+            pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
+            if ($LASTEXITCODE -ne 0) { throw "Built application regression failed: $spec" }
+          }
       - name: Preserve failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

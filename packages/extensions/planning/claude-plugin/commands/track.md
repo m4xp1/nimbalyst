@@ -4,83 +4,19 @@ description: Track bugs, tasks, ideas, and other work items
 
 # /track Command
 
-Create a tracking item in the appropriate tracking document.
+Create one tracker item through the project's configured storage mode.
 
 ## Usage
 
-```
-/track [type] [description]
-```
+`/track [type] [description]`
 
-**Examples:**
-- `/track bug Login fails on mobile Safari`
-- `/track task Update API documentation`
-- `/track idea Add dark mode support`
-- `/track devblog-post How we built realtime sync`
+1. Call `tracker_list_types` for the effective builtin/custom schemas, status defaults, storage mode and per-type directories. Do not infer paths by pluralizing a type name or require copies of builtin schemas in `.nimbalyst/trackers`.
+2. Select the exact registered type matching the request. Respect its creatable flag, schema roles, allowed statuses and required fields. If Files mode has no directory for the type, ask the user to configure Tracker settings; do not choose another location or fall back to the database.
+3. Generate one portable stable ID (letters, digits, underscore or hyphen, 4–101 characters). Call `tracker_create` once with this ID. If the call needs retrying, reuse the same ID and draft; a changed draft with that ID is a conflict, not permission to create another card.
+4. In Files mode, `description` is a short YAML summary of at most 500 characters; put the full Markdown in `content`. The tool writes the Markdown card and updates the derived index. In Database mode, retain the normal tool behavior.
+5. Do not also write an inline tracker or a second Markdown card after calling the tool. Existing database and legacy file cards retain their storage; enabling Files mode does not migrate them.
+6. Use `tracker_update` for fields, tags and additional type tags. For new Files cards, `content` changes the body and `description` changes the summary. Comments use `tracker_add_comment`; project comments are kept in their companion file, while session links and local activity stay machine-local.
+7. Session linking is opt-in (`linkSession: true` or `tracker_link_session`). Do not assume a session link makes its conversation portable in Git.
+8. For updates and reads use the returned workspace-local ID, portableId, or key. A local ID belongs only to its checkout; retry creation with the original portableId, not the returned local ID. Confirm the returned ID/key and file path when present. A write conflict or unavailable file is an error to resolve, never a reason to create a replacement database card.
 
-## CRITICAL: Discover Custom Tracker Types First
-
-Before creating a tracker item, **always check for custom tracker types** defined in the workspace:
-
-1. Look for YAML files in `.nimbalyst/trackers/*.yaml` in the workspace root
-2. Each YAML file defines a custom tracker type with a `type:` field (e.g., `type: devblog-post`)
-3. The `type` field in the YAML is what goes after `#` in the tracker syntax (e.g., `#devblog-post[...]`)
-4. The `idPrefix` field determines the ID prefix (e.g., `dev` produces IDs like `dev_abc123`)
-5. Custom types have their own status options - use those, not the built-in ones
-
-**If the user's requested type matches a custom tracker (even partially), use the custom type name exactly as defined in the YAML.**
-
-For example, if `.nimbalyst/trackers/devblog-post.yaml` exists with `type: devblog-post`, then:
-- `/track dev-blog Something` should use `#devblog-post`, NOT `#plan` or `#blog`
-- The file goes in `nimbalyst-local/tracker/devblog-posts.md`, NOT `plans.md`
-
-## Built-in Tracker Types
-
-These are always available:
-- **bugs.md**: Issues and defects (`#bug`)
-- **tasks.md**: Work items and todos (`#task`)
-- **ideas.md**: Concepts to explore (`#idea`)
-- **decisions.md**: Important decisions (`#decision`)
-- **plans.md**: Plans and features (`#plan`)
-
-## Custom Tracker Types
-
-Defined in `.nimbalyst/trackers/*.yaml`. Common custom types:
-- **feature-requests.md**: User requests (`#feature-request`)
-- **tech-debt.md**: Technical debt (`#tech-debt`)
-- **devblog-posts.md**: Dev blog posts (`#devblog-post`)
-- Any other type defined in the workspace's YAML files
-
-## Item Format
-
-```markdown
-- [Brief description] #[type][id:[idPrefix]_[ulid] status:[default-status] priority:medium created:YYYY-MM-DD]
-```
-
-The `[type]` and `[idPrefix]` come from the tracker YAML definition. The `[default-status]` comes from the first status option in the YAML, or `to-do` for built-in types.
-
-## Execution Steps
-
-1. **Check `.nimbalyst/trackers/*.yaml`** for custom tracker types that match the user's request
-2. Parse the type from the command - match against custom types first, then built-in types
-3. Use the correct `type` name and `idPrefix` from the YAML definition
-4. Generate a unique ID using the prefix from the YAML (e.g., `dev_` for devblog-post)
-5. Use the correct default status from the YAML definition
-6. Determine priority from description keywords:
-   - "critical", "urgent", "blocking" -> high/critical
-   - "nice to have", "minor", "low" -> low
-   - Otherwise -> medium
-7. Add to `nimbalyst-local/tracker/[type]s.md` (pluralize the type name)
-8. Confirm where the item was tracked
-
-## CRITICAL: Do NOT Call tracker_create
-
-**Never call the `tracker_create` MCP tool when executing /track.** The markdown file you write is automatically synced to the tracker widget via frontmatter/inline parsing. Calling `tracker_create` in addition to writing the markdown file creates a duplicate entry -- one from the file sync and one from the database insert. Only write the markdown file; the tracker system handles the rest.
-
-## Best Practices
-
-- Always check for custom tracker types before falling back to built-in ones
-- Be specific in descriptions
-- Include context when helpful
-- Use the exact type name from the YAML definition
-- Set priorities appropriately
+Prefer these same tools for later edits so schema validation, relationships and file persistence remain consistent. A Git-only agent may edit the existing card's project fields and Markdown using the documented format, preserving its ID, trackerFormat, trackerStatus and unrelated fields. Never regenerate an existing card merely to normalize formatting.
