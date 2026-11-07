@@ -129,12 +129,14 @@ describe('session index reconciliation', () => {
     await service.setSessionsEnabled(true);
     expect(records('/one').size).toBe(1); expect(records('/two').size).toBe(1);
     h.request.mockImplementation((args: any) => {
-      if (args.workspacePath === '/one' && args.method === 'clearSessionRecords') return Promise.reject(new Error('write denied'));
+      if (args.workspacePath === '/one' && args.method === 'clearSessionRecords') return Promise.reject(Object.assign(new Error('write denied for private-session-data'), { code: 'EACCES' }));
       return rpc(args);
     });
     await expect(service.setSessionsEnabled(false)).rejects.toThrow('Could not update session indexing');
     expect(records('/two').size).toBe(0); expect(h.setting).toBe(false);
-    expect(service.sessionIndexingError()).toContain('could not be reconciled');
+    expect(service.sessionIndexingError()).toContain('Session indexing failed: access.');
+    expect(service.sessionIndexingError()).toContain('Check file access and source settings');
+    expect(service.sessionIndexingError()).not.toContain('private-session-data');
     h.request.mockImplementation(rpc);
     await service.setSessionsEnabled(false); expect(records('/one').size).toBe(0);
     expect(service.sessionIndexingError()).toBeNull();
