@@ -12,8 +12,12 @@ import { codexUsageAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
 
 export function initCodexUsageListeners(): () => void {
   const cleanups: Array<() => void> = [];
+  let active = true;
+  let receivedUpdate = false;
 
   const handleUsageUpdate = (data: CodexUsageData) => {
+    if (!active) return;
+    receivedUpdate = true;
     store.set(codexUsageAtom, data);
   };
 
@@ -23,7 +27,7 @@ export function initCodexUsageListeners(): () => void {
 
   // Fetch initial usage data on startup
   window.electronAPI.invoke('codex-usage:get').then((data: CodexUsageData | null) => {
-    if (data) {
+    if (active && !receivedUpdate && data) {
       store.set(codexUsageAtom, data);
     }
   }).catch((error: Error) => {
@@ -31,6 +35,7 @@ export function initCodexUsageListeners(): () => void {
   });
 
   return () => {
+    active = false;
     cleanups.forEach(fn => fn?.());
   };
 }

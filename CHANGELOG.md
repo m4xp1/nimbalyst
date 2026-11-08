@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Load the current Codex model catalog and distinguish direct OpenAI API models in both the menu and selected model.
+- Refresh Codex limits for the current personal or work account without restarting Nimbalyst, and stop showing historical session limits after account errors.
 
 ## [0.81.7+m4xp1.11] - 2026-11-07
 

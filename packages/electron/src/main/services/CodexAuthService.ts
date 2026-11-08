@@ -54,8 +54,10 @@ class CodexAuthServiceImpl {
   private client: JsonRpcClient | null = null;
   private initializing: Promise<JsonRpcClient> | null = null;
   private currentLoginId: string | null = null;
+  private connectionGeneration = 0;
   private cachedStatus: CodexAuthStatus | null = null;
   private rateLimitsUpdatedListeners = new Set<() => void>();
+  private accountUpdatedListeners = new Set<() => void>();
 
   private readonly sandboxSetup = new CodexSandboxSetup({
     connect: async () => {
@@ -95,9 +97,41 @@ class CodexAuthServiceImpl {
     return status;
   }
 
-  async getRateLimits(): Promise<AccountRateLimitsReadResponse> {
-    const client = await this.ensureChild();
-    return client.request<AccountRateLimitsReadResponse>('account/rateLimits/read', {});
+  /** Read stored native auth afresh without refreshing tokens or touching active agent/login children.
+   * Codex caches managed auth for a process lifetime; account/read alone cannot detect an
+   * external workspace switch. accountSession/list with metadata refresh off is a local identity read.
+   */
+  async getRateLimits(onAccountIdentified?: (scope: string | null) => void): Promise<AccountRateLimitsReadResponse & { accountScope: string }> {
+    const { client, child } = await this.openConnection('nimbalyst-usage');
+    try {
+      const accounts = await client.request<{
+        activeSessionId: string | null;
+        sessions: Array<{ sessionId: string; userId?: string | null; isActive: boolean; selectedWorkspaceAccountId: string | null }>;
+      }>('accountSession/list', { refreshWorkspaceMetadata: false });
+      const active = accounts.sessions.filter(session => session.isActive && session.sessionId === accounts.activeSessionId);
+      if (active.length !== 1 || !active[0].selectedWorkspaceAccountId) {
+        onAccountIdentified?.(null);
+        throw new Error('Current ChatGPT account could not be identified. Sign in with ChatGPT to view subscription limits.');
+      }
+      const account = active[0];
+      const accountScope = JSON.stringify([account.sessionId, account.userId ?? null, account.selectedWorkspaceAccountId]);
+      onAccountIdentified?.(accountScope);
+      const response = await client.request<AccountRateLimitsReadResponse & { accountId?: string | null }>('account/rateLimits/read', {});
+      if (response.accountId && response.accountId !== account.selectedWorkspaceAccountId) {
+        onAccountIdentified?.(null);
+        throw new Error('ChatGPT account changed while reading limits. Refresh to try again.');
+      }
+      return { ...response, accountScope };
+    } finally {
+      try { client.close('usage read completed'); } catch { /* already closed */ }
+      try { child.stdin.end(); } catch { /* already closed */ }
+      if (!child.killed) child.kill();
+    }
+  }
+
+  onAccountUpdated(listener: () => void): () => void {
+    this.accountUpdatedListeners.add(listener);
+    return () => this.accountUpdatedListeners.delete(listener);
   }
 
   onRateLimitsUpdated(listener: () => void): () => void {
@@ -146,6 +180,7 @@ class CodexAuthServiceImpl {
   }
 
   shutdown(): void {
+    this.connectionGeneration++;
     this.currentLoginId = null;
     try { this.client?.close('shutdown'); } catch { /* noop */ }
     this.client = null;
@@ -169,55 +204,65 @@ class CodexAuthServiceImpl {
     if (this.client) return Promise.resolve(this.client);
     if (this.initializing) return this.initializing;
 
-    this.initializing = (async () => {
-      const binaryPath = resolveCodexBinaryPath(() => resolvePackagedCodexBinaryPath());
-      const env = this.buildEnv(binaryPath);
-      const child = spawn(binaryPath, ['app-server', '--listen', 'stdio://'], {
-        env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk: string) => {
-        logger.main.debug('[CodexAuth] stderr:', chunk.toString().trim());
-      });
-      child.on('exit', (code, signal) => {
-        logger.main.warn('[CodexAuth] codex app-server exited', { code, signal });
-        if (this.child !== child) return;
-        this.client = null;
-        this.child = null;
-        this.initializing = null;
-      });
-      const client = new JsonRpcClient(child, {
-        logger: {
-          log: (m, ...a) => logger.main.debug('[CodexAuth]', m, ...a),
-          warn: (m, ...a) => logger.main.warn('[CodexAuth]', m, ...a),
-        },
-      });
-      client.onNotification((method, params) => this.handleNotification(method, params));
-      try {
-        await client.request<InitializeResponse>('initialize', {
-          clientInfo: { name: 'nimbalyst-auth', version: process.env.NIMBALYST_VERSION ?? '0.0.0' },
-          capabilities: { experimentalApi: true },
-        });
-        client.notify('initialized', {});
-      } catch (err) {
-        try { client.close('init failed'); } catch { /* noop */ }
-        try { child.kill(); } catch { /* noop */ }
-        throw err;
+    const generation = this.connectionGeneration;
+    this.initializing = this.openConnection('nimbalyst-auth').then(({ client, child }) => {
+      if (generation !== this.connectionGeneration) {
+        client.close('management connection retired');
+        child.kill();
+        throw new Error('Codex management connection retired.');
       }
       this.child = child;
       this.client = client;
       return client;
-    })();
-
+    });
     return this.initializing.catch((err) => {
-      this.initializing = null;
+      if (generation === this.connectionGeneration) this.initializing = null;
       throw err;
     });
   }
 
+  private async openConnection(name: string): Promise<{ client: JsonRpcClient; child: ChildProcessWithoutNullStreams }> {
+    assertCodexAccessAllowed();
+    const binaryPath = resolveCodexBinaryPath(() => resolvePackagedCodexBinaryPath());
+    const child = spawn(binaryPath, ['app-server', '--listen', 'stdio://'], {
+      env: this.buildEnv(binaryPath), stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    child.stderr.setEncoding('utf8');
+    // Never forward account-reader diagnostics: native errors may contain credential metadata.
+    child.stderr.on('data', () => {});
+    child.on('exit', (code, signal) => {
+      if (this.child !== child) return;
+      logger.main.warn('[CodexAuth] management process exited', { code, signal });
+      this.client = null;
+      this.child = null;
+      this.initializing = null;
+    });
+    const client = new JsonRpcClient(child, {
+      defaultTimeoutMs: name === 'nimbalyst-usage' ? 15_000 : undefined,
+      logger: { log: () => {}, warn: () => logger.main.warn('[CodexAuth] protocol warning') },
+    });
+    client.onNotification((method, params) => {
+      if (this.child === child) this.handleNotification(method, params);
+    });
+    try {
+      await client.request<InitializeResponse>('initialize', {
+        clientInfo: { name, version: process.env.NIMBALYST_VERSION ?? '0.0.0' },
+        capabilities: { experimentalApi: true },
+      });
+      client.notify('initialized', {});
+      return { client, child };
+    } catch (err) {
+      try { client.close('init failed'); } catch { /* noop */ }
+      try { child.kill(); } catch { /* noop */ }
+      throw err;
+    }
+  }
+
   private buildEnv(binaryPath: string): NodeJS.ProcessEnv {
     const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    // Native account reads must use the configured Codex store, never ambient API keys.
+    delete baseEnv.OPENAI_API_KEY;
+    delete baseEnv.CODEX_API_KEY;
     const helperPathEntries = getCodexVendorPathEntries(binaryPath);
     const enhancedPath = getEnhancedPath();
     const existingPath = baseEnv.PATH ?? baseEnv.Path ?? '';
@@ -246,6 +291,7 @@ class CodexAuthServiceImpl {
         planType,
       };
       this.broadcast('openai-codex:auth-updated', this.cachedStatus);
+      for (const listener of this.accountUpdatedListeners) listener();
       return;
     }
     if (method === 'account/login/completed') {
