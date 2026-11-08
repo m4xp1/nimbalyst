@@ -248,6 +248,9 @@ export function ModelSelector({
     setWindowMode('settings');
   };
 
+  const getModelLabel = (model: Model) =>
+    model.provider === 'openai' ? `${model.name} (API)` : model.name;
+
   const getCurrentModelName = () => {
     // Voice sessions run the OpenAI Realtime voice agent, not the Claude
     // model the session row defaults its `model` field to. Label it by
@@ -259,7 +262,7 @@ export function ModelSelector({
     // Find the model in our list
     for (const providerModels of Object.values(models)) {
       const model = providerModels.find(m => m.id === currentModel);
-      if (model) return model.name;
+      if (model) return getModelLabel(model);
     }
 
     // Fallback - strip provider prefix for display
@@ -267,7 +270,8 @@ export function ModelSelector({
       return getClaudeCodeModelLabel(currentModel);
     }
     const [, ...modelParts] = currentModel.split(':');
-    return modelParts.join(':') || currentModel;
+    const name = modelParts.join(':') || currentModel;
+    return currentModel.startsWith('openai:') ? `${name} (API)` : name;
   };
 
   const getProviderLabel = (provider: string) => {
@@ -281,7 +285,7 @@ export function ModelSelector({
       // parenthetical here is spent steering the choice instead.
       case 'claude-code': return 'Claude Agent (Recommended)';
       case 'claude-code-cli': return 'Claude Code CLI';
-      case 'openai': return 'OpenAI';
+      case 'openai': return 'OpenAI (API)';
       case 'openai-codex': return 'OpenAI Codex';
       case 'openai-codex-acp': return 'OpenAI Codex (ACP)';
       case 'opencode': return 'OpenCode';
@@ -443,9 +447,9 @@ export function ModelSelector({
                             title={isDisabled ? disabledTooltip : undefined}
                             aria-disabled={isDisabled}
                             data-model-id={model.id}
-                            data-model-name={model.name}
+                            data-model-name={getModelLabel(model)}
                           >
-                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>{model.name}</span>
+                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>{getModelLabel(model)}</span>
                             {isDisabled ? (
                               <MaterialSymbol icon="block" size={14} className="disabled-icon text-[var(--nim-text-faint)]" />
                             ) : isCurrent ? (
@@ -490,9 +494,9 @@ export function ModelSelector({
                             title={isDisabled ? disabledTooltip : undefined}
                             aria-disabled={isDisabled}
                             data-model-id={model.id}
-                            data-model-name={model.name}
+                            data-model-name={getModelLabel(model)}
                           >
-                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>{model.name}</span>
+                            <span className={`model-selector-option-name flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${isDisabled ? 'text-[var(--nim-text-faint)]' : ''}`}>{getModelLabel(model)}</span>
                             {isDisabled ? (
                               <MaterialSymbol icon="block" size={14} className="disabled-icon text-[var(--nim-text-faint)]" />
                             ) : isCurrent ? (

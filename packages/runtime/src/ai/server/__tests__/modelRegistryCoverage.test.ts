@@ -64,6 +64,17 @@ describe('ModelRegistry.getAllModels', () => {
     expect([...asked].sort()).toEqual(['antigravity-gemini-agent', 'grok-build']);
   });
 
+  it('uses only the explicit Codex key for its catalog, never the direct OpenAI key', async () => {
+    const calls = new Map<string, string | undefined>();
+    vi.spyOn(ModelRegistry, 'getModelsForProvider').mockImplementation(async (provider, _workspace, key) => {
+      calls.set(provider, key);
+      return [];
+    });
+    await ModelRegistry.getAllModels({ openai: 'direct-api-key', 'openai-codex': 'explicit-codex-key' }, undefined);
+    expect(calls.get('openai')).toBe('direct-api-key');
+    expect(calls.get('openai-codex')).toBe('explicit-codex-key');
+  });
+
   it('passes each provider the API key it needs, and no key to the ones that have none', async () => {
     const calls = new Map<string, string | undefined>();
     vi.spyOn(ModelRegistry, 'getModelsForProvider').mockImplementation(
@@ -77,7 +88,7 @@ describe('ModelRegistry.getAllModels', () => {
 
     expect(calls.get('claude')).toBe('sk-ant');
     expect(calls.get('openai')).toBe('sk-oai');
-    expect(calls.get('openai-codex')).toBe('sk-oai');
+    expect(calls.get('openai-codex')).toBeUndefined();
     // Vendor-login providers must never be handed a key — the no-env-fallback
     // rule is about where keys come from, and silently passing an unrelated
     // one is the same class of mistake.

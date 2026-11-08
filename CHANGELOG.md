@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.12] - 2026-11-09
+
+### Fixed
+- Load the current Codex model catalog and distinguish direct OpenAI API models in both the menu and selected model.
+
 ## [0.81.7+m4xp1.11] - 2026-11-07
 
 ### Added
