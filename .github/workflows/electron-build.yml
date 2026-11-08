@@ -118,6 +118,11 @@ jobs:
         working-directory: packages/electron
         run: pnpm run build:win --publish never --config.publish.owner=m4xp1 --config.publish.repo=nimbalyst
 
+      - name: Verify packaged Codex offline native contract
+        run: >-
+          node scripts/verify-codex-contract.mjs --binary
+          packages/electron/release/win-unpacked/resources/app.asar.unpacked/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe
+
       - name: Verify packaged application search and Git
         env:
           NIMBALYST_ALLOW_OPENAI_API: '0'
@@ -138,7 +143,7 @@ jobs:
           }
           $env:NIMBALYST_E2E_APP_PATH = Join-Path $target 'Nimbalyst.exe'
           $env:NIMBALYST_E2E_MAIN_PATH = Join-Path $target 'resources/app.asar/out/main/index.js'
-          $specs = @('russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts')
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Packaged application regression failed: $spec" }
