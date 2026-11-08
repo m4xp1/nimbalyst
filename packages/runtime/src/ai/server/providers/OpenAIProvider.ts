@@ -271,6 +271,7 @@ export class OpenAIProvider extends BaseAIProvider {
       const supportsTemperature =
         !modelId.startsWith('o1') &&
         !modelId.startsWith('gpt-5') &&
+        !modelId.startsWith('gpt-6') &&
         !modelId.startsWith('gpt-4.5');
       if (supportsTemperature) {
         completionParams.temperature = this.config.temperature || 0;

@@ -128,6 +128,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     // (Sol, Luna), and >= 0.159.1 (6.1 Sol); the catalog lists a 272k default
     // context window for all of them.
     { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', contextWindow: 272000, maxTokens: 128000 },
+    { id: 'gpt-6.1-terra', name: 'GPT-6.1 Terra', contextWindow: 272000, maxTokens: 128000 },
     { id: 'gpt-6-sol', name: 'GPT-6 Sol', contextWindow: 272000, maxTokens: 128000 },
     { id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 272000, maxTokens: 128000 },
     { id: 'gpt-6-luna', name: 'GPT-6 Luna', contextWindow: 272000, maxTokens: 128000 },
@@ -567,8 +568,11 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     workspacePath?: string,
   ): Promise<AIModel[]> {
     if (!codexAccessAllowed()) return OpenAICodexProvider.getFallbackModels();
-    const useSdk = !deps?.loadAppServerModels && (deps?.loadSdkModule ||
-      OpenAICodexProvider.sdkModuleLoader || OpenAICodexProvider.codexTransportResolver?.() === 'sdk');
+    // A packaged SDK loader only resolves an optional module; its presence
+    // must not override the selected app-server transport.
+    const transport = OpenAICodexProvider.codexTransportResolver?.()
+      ?? (deps?.loadSdkModule ? 'sdk' : 'app-server');
+    const useSdk = !deps?.loadAppServerModels && transport === 'sdk';
     if (!useSdk) {
       try {
         const candidates = deps?.loadAppServerModels

@@ -55,6 +55,7 @@ export interface CodexUsageData {
   source?: 'account' | 'session';
   lastUpdated: number;
   error?: string;
+  refreshing?: boolean;
 }
 
 export interface CodexUsageWindowEntry {
@@ -135,7 +136,7 @@ export function codexUsageColor(usedPercent: number): 'green' | 'yellow' | 'red'
 export const codexUsageAvailableAtom = atom((get) => {
   const usage = get(codexUsageAtom);
   if (!usage) return false;
-  if (usage.error) return true;
+  if (usage.error || usage.refreshing) return true;
   return getCodexUsageWindows(usage).length > 0
     || (usage.rateLimitResetCredits?.availableCount ?? 0) > 0
     || (usage.tokenUsage?.totalTokens ?? 0) > 0;

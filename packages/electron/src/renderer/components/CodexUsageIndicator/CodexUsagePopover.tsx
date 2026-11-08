@@ -185,7 +185,7 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
             <>
               {!limitsAvailable && windowEntries.length === 0 && (
                 <div className="mb-3 text-[12px] text-nim-muted">
-                  Usage detected, but Codex limits are unavailable in recent session data.
+                  {usage.refreshing ? 'Updating current account limits…' : 'Current account limits are unavailable.'}
                 </div>
               )}
               {windowEntries.map(({ limit, window }) => {
@@ -220,7 +220,7 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
         {/* Footer */}
         <div className="px-4 py-2 border-t border-nim flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            {usage.lastUpdated && (
+            {usage.lastUpdated > 0 && (
               <span className="text-[11px] text-nim-faint">
                 Updated {formatLastUpdated(usage.lastUpdated)}
               </span>

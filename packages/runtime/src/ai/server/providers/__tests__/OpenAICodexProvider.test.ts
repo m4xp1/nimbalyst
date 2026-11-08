@@ -13,6 +13,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawn: vi.fn(() => { throw new Error('Real Codex is forbidden in this unit fixture'); }),
 }));
 import { OpenAICodexProvider } from '../OpenAICodexProvider';
+import { CodexAppServerProtocol } from '../../protocols/CodexAppServerProtocol';
 import { OpenAICodexACPProvider } from '../OpenAICodexACPProvider';
 import { configureMcpServers } from '../../services/mcpServerConfig';
 import * as codexBinaryPath from '../codex/codexBinaryPath';
@@ -265,6 +266,7 @@ describe('OpenAICodexProvider', () => {
   it('leads the Codex roster with the GPT-6 models and keeps them out of the ACP roster', async () => {
     const expectedCodexModelIds = [
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-6-sol',
       'gpt-6-astra',
       'gpt-6-luna',
@@ -314,6 +316,39 @@ describe('OpenAICodexProvider', () => {
     expect(OpenAICodexProvider.normalizeModelSelection(legacyModelId)).toBe(
       `openai-codex:${canonicalModelId}`
     );
+  });
+
+  it('does not transfer a catalog key into an existing subscription session', async () => {
+    const setApiKey = vi.fn();
+    const provider = new OpenAICodexProvider({}, {
+      transport: 'app-server',
+      protocol: { platform: 'codex-app-server', setApiKey } as any,
+    });
+    await provider.initialize({ model: 'openai-codex:gpt-6.1-terra' });
+    await OpenAICodexProvider.getModels('fake-catalog-key', {
+      loadAppServerModels: async () => [{ model: 'gpt-6.1-terra' }],
+    });
+    expect(setApiKey.mock.calls).toEqual([['']]);
+    expect(provider.getTransport()).toBe('app-server');
+    await provider.initialize({ apiKey: 'fake-explicit-codex-key' });
+    expect(setApiKey.mock.calls).toEqual([[''], ['fake-explicit-codex-key']]);
+  });
+
+  it('uses app-server discovery with the packaged SDK loader registered', async () => {
+    const loader = vi.fn(async () => { throw new Error('Legacy SDK must not load'); });
+    OpenAICodexProvider.setSdkModuleLoader(loader);
+    OpenAICodexProvider.setCodexTransportResolver(() => 'app-server');
+    const discover = vi.spyOn(CodexAppServerProtocol.prototype, 'discoverModels')
+      .mockResolvedValue([{ model: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra' }]);
+    try {
+      const models = await OpenAICodexProvider.getModels(undefined, undefined, '/project');
+      expect(discover).toHaveBeenCalledWith({ workspacePath: '/project' });
+      expect(loader).not.toHaveBeenCalled();
+      expect(models.map(model => model.id)).toEqual(['openai-codex:gpt-6.1-terra']);
+    } finally {
+      OpenAICodexProvider.setSdkModuleLoader(null);
+      OpenAICodexProvider.setCodexTransportResolver(null);
+    }
   });
 
   it('uses the runtime catalog without a curated allowlist or synthetic fallback additions', async () => {

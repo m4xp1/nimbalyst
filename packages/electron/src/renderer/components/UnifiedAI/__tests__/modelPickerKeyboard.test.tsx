@@ -46,6 +46,27 @@ function renderModelSelector(ui: React.ReactElement, showDirectChatProviders = f
 }
 
 describe('AI model picker keyboard controls', () => {
+  it('distinguishes API Terra from Codex Terra and preserves the chosen provider ID', async () => {
+    const grouped = {
+      'openai-codex': [{ id: 'openai-codex:gpt-6.1-terra', name: 'GPT-6.1 Terra', provider: 'openai-codex' }],
+      openai: [{ id: 'openai:gpt-6.1-terra', name: 'GPT-6.1 Terra', provider: 'openai' }],
+    };
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      aiGetModels: vi.fn().mockResolvedValue({ success: true, grouped }),
+    } });
+    const onModelChange = vi.fn();
+    const view = renderModelSelector(<ModelSelector currentModel="openai-codex:gpt-6.1-terra" onModelChange={onModelChange} />, true);
+    await waitFor(() => expect(screen.getByTestId('model-picker').textContent).toContain('GPT-6.1 Terra'));
+    fireEvent.click(screen.getByTestId('model-picker'));
+    fireEvent.click(await screen.findByRole('button', { name: 'GPT-6.1 Terra (API)' }));
+    expect(onModelChange.mock.calls).toEqual([['openai:gpt-6.1-terra']]);
+    view.rerender(<ModelSelector currentModel="openai:gpt-6.1-terra" onModelChange={onModelChange} />);
+    expect(screen.getByTestId('model-picker').textContent).toContain('GPT-6.1 Terra (API)');
+    fireEvent.click(screen.getByTestId('model-picker'));
+    fireEvent.click(await screen.findByRole('button', { name: 'GPT-6.1 Terra' }));
+    expect(onModelChange.mock.calls).toEqual([['openai:gpt-6.1-terra'], ['openai-codex:gpt-6.1-terra']]);
+  });
+
   it('recognizes Cmd/Ctrl+Shift+M as the model-picker shortcut', () => {
     expect(isOpenModelPickerShortcut({ key: 'm', metaKey: true, ctrlKey: false, shiftKey: true })).toBe(true);
     expect(isOpenModelPickerShortcut({ key: 'M', metaKey: false, ctrlKey: true, shiftKey: true })).toBe(true);
@@ -295,7 +316,7 @@ describe('AI model picker provider visibility', () => {
     fireEvent.click(screen.getByTestId('model-picker'));
 
     expect(await screen.findByRole('button', { name: 'Haiku' })).toBeTruthy();
-    screen.getByRole('button', { name: 'GPT-5' });
+    screen.getByRole('button', { name: 'GPT-5 (API)' });
     screen.getByRole('button', { name: 'Local Model' });
   });
 

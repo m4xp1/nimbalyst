@@ -36,7 +36,7 @@ interface ModelCatalogRefresh {
 const PROVIDER_API_KEY_SOURCE: Readonly<Record<AIProviderType, string | null>> = Object.freeze({
   claude: 'anthropic',
   openai: 'openai',
-  'openai-codex': 'openai',
+  'openai-codex': 'openai-codex',
   'openai-codex-acp': 'openai',
 
   // Its base URL travels separately, as the fourth argument.

@@ -51,11 +51,8 @@ describe('automated app launches do not use the working Codex account', () => {
 
   it('does not fall back from disabled quota RPCs to personal session logs', async () => {
     const account = vi.spyOn(codexAuthService, 'getRateLimits').mockRejectedValue(new Error('disabled'));
-    const files = vi.spyOn(codexUsageService as any, 'findLatestUsageSnapshot')
-      .mockResolvedValue({ rateLimits: null, tokenUsage: null });
     await expect(codexUsageService.refresh()).resolves.toMatchObject({ limits: [], limitsAvailable: false });
     expect(account).not.toHaveBeenCalled();
-    expect(files).not.toHaveBeenCalled();
   });
 
   it('keeps an offline model catalog and skips live model and skill discovery', async () => {

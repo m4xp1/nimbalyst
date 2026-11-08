@@ -156,6 +156,20 @@ export const OPENAI_MODELS: ModelDefinition[] = [
     contextWindow: 272000,
   },
   {
+    id: 'gpt-6.1-terra',
+    displayName: 'GPT-6.1 Terra',
+    shortName: '6.1 Terra',
+    maxTokens: 128000,
+    contextWindow: 1050000,
+  },
+  {
+    id: 'gpt-6-astra',
+    displayName: 'GPT-6 Astra',
+    shortName: '6 Astra',
+    maxTokens: 128000,
+    contextWindow: 1050000,
+  },
+  {
     id: 'gpt-6-sol',
     displayName: 'GPT-6 Sol',
     shortName: '6 Sol',

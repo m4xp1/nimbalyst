@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 <!-- Removed features go here -->
 
+## [0.81.7+m4xp1.12] - 2026-11-09
+
+### Changed
+- Bundle Codex 0.167.0-alpha.3.2 with offline checks for tools, skills, session resume, cancellation and legacy SDK compatibility.
+
+### Fixed
+- Load the current Codex model catalog and distinguish direct OpenAI API models in both the menu and selected model.
+- Refresh Codex limits for the current personal or work account without restarting Nimbalyst, and stop showing historical session limits after account errors.
+
 ## [0.81.7+m4xp1.11] - 2026-11-07
 
 ### Added

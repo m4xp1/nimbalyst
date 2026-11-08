@@ -10,11 +10,20 @@
 import { store } from '../index';
 import { codexUsageAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
 
+let usageRevision = 0;
+function applyUsage(data: CodexUsageData): void {
+  usageRevision++;
+  store.set(codexUsageAtom, data);
+}
+
 export function initCodexUsageListeners(): () => void {
   const cleanups: Array<() => void> = [];
+  let active = true;
+  const initialRevision = usageRevision;
 
   const handleUsageUpdate = (data: CodexUsageData) => {
-    store.set(codexUsageAtom, data);
+    if (!active) return;
+    applyUsage(data);
   };
 
   cleanups.push(
@@ -23,14 +32,15 @@ export function initCodexUsageListeners(): () => void {
 
   // Fetch initial usage data on startup
   window.electronAPI.invoke('codex-usage:get').then((data: CodexUsageData | null) => {
-    if (data) {
-      store.set(codexUsageAtom, data);
+    if (active && usageRevision === initialRevision && data) {
+      applyUsage(data);
     }
   }).catch((error: Error) => {
     console.error('[CodexUsageListeners] Failed to get initial usage:', error);
   });
 
   return () => {
+    active = false;
     cleanups.forEach(fn => fn?.());
   };
 }
@@ -45,7 +55,9 @@ export async function recordCodexActivity(): Promise<void> {
 
 export async function refreshCodexUsage(): Promise<CodexUsageData | null> {
   try {
+    const revision = usageRevision;
     const data = await window.electronAPI.invoke('codex-usage:refresh');
+    if (data && usageRevision === revision) applyUsage(data);
     return data;
   } catch (error) {
     console.error('[CodexUsageListeners] Failed to refresh usage:', error);

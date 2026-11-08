@@ -246,6 +246,13 @@ it("keeps OAuth without a saved key usable when locked, but pauses global and pr
   expect(() => vault().get("openai-codex")).toThrow();
 });
 
+it("never borrows the direct OpenAI API key for a Codex subscription", () => {
+  const credentials = vault();
+  credentials.set("openai", "fake-direct-api");
+  expect(resolveProviderApiKey(credentials, "openai")).toBe("fake-direct-api");
+  expect(resolveProviderApiKey(credentials, "openai-codex", "/project")).toBeUndefined();
+});
+
 it("resolves provider aliases and project keys without changing subscription selection", () => {
   const credentials = vault();
   credentials.set("anthropic", "dummy-chat");

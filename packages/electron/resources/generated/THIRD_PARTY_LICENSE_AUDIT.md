@@ -2,7 +2,7 @@
 
 Generated from the installed dependency tree and its package legal files.
 
-- Packages scanned: 1002
+- Packages scanned: 1003
 - Review required: 0
 - Approved exceptions: 3
 
@@ -17,7 +17,7 @@ Generated from the installed dependency tree and its package legal files.
 - EPL-2.0: 1
 - ISC: 67
 - LGPL-3.0: 1
-- MIT: 814
+- MIT: 815
 - Python-2.0: 1
 - SEE LICENSE IN README.md: 1
 - Unlicense: 2
