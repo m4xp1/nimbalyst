@@ -147,7 +147,8 @@ class CodexUsageServiceImpl {
     if (this.refreshing) return this.refreshing;
     const pending = this.readCurrentUsage();
     this.refreshing = pending;
-    void pending.finally(() => { if (this.refreshing === pending) this.refreshing = null; });
+    const clear = () => { if (this.refreshing === pending) this.refreshing = null; };
+    void pending.then(clear, clear);
     return pending;
   }
 

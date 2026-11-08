@@ -22,7 +22,7 @@ for (const database of ['sqlite', 'pglite'] as const) test(`Codex usage follows 
   try {
     const executablePath = process.env.NIMBALYST_E2E_APP_PATH;
     app = await _electron.launch({ ...(executablePath ? { executablePath } : {}), args: [...(executablePath ? [`--user-data-dir=${user}`] : [isolate]), '--workspace', workspace], cwd: root, timeout: 45000,
-      env: { ...env, PLAYWRIGHT: '1', NIMBALYST_CDP_PORT: '0', NIMBALYST_USER_DATA_DIR: user, NIMBALYST_USER_DATA_PATH: db, TMP: processTemp, TEMP: processTemp } });
+      env: { ...env, PLAYWRIGHT: '1', NIMBALYST_PERMISSION_MODE: 'allow-all', NIMBALYST_CDP_PORT: '0', NIMBALYST_USER_DATA_DIR: user, NIMBALYST_USER_DATA_PATH: db, TMP: processTemp, TEMP: processTemp } });
     const page = await app.firstWindow();
     await page.getByTestId('tracker-mode-button').waitFor();
     expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(user);
