@@ -46,9 +46,10 @@ try {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const workspace = path.join(root, 'workspace'); await mkdir(workspace);
+  const extra = path.join(root, 'allowed-extra'); await mkdir(extra);
   const skill = path.join(workspace, '.agents/skills/synthetic'); await mkdir(skill, { recursive: true });
   await writeFile(path.join(skill, 'SKILL.md'), '---\nname: synthetic\ndescription: Offline native skill fixture\n---\nUse the synthetic fixture only.\n');
-  await writeFile(path.join(root, 'config.toml'), `model = "fixture-model"\nmodel_provider = "fixture"\nmodel_context_window = 32768\ncli_auth_credentials_store = "file"\n[model_providers.fixture]\nname = "Offline fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[analytics]\nenabled = false\n`);
+  await writeFile(path.join(root, 'config.toml'), `model = "fixture-model"\nmodel_provider = "fixture"\nmodel_context_window = 32768\ncli_auth_credentials_store = "file"\n[windows]\nsandbox = "unelevated"\n[model_providers.fixture]\nname = "Offline fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[analytics]\nenabled = false\n`);
   child = spawn(binary, ['app-server','--listen','stdio://'], { env, cwd: workspace, stdio: ['pipe','pipe','pipe'] });
   let diagnostic = ''; child.stderr.on('data', data => { diagnostic = (diagnostic + data.toString()).slice(-3000); });
   const write = data => child.stdin.write(JSON.stringify(data) + '\n');
@@ -81,8 +82,19 @@ try {
     assert.ok(skills.data.some(entry => entry.skills.some(skill => skill.name === 'synthetic')));
     const models = await request('model/list', { limit: 100, includeHidden: false });
     assert.ok(Array.isArray(models.data));
-    const start = await request('thread/start', { cwd: workspace, model: 'fixture-model', approvalPolicy: 'never', sandbox: 'workspace-write', dynamicTools: [{ name: 'synthetic_probe', description: 'Offline fixture tool', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false } }] });
+    if (process.platform === 'win32') {
+      const readiness = await request('windowsSandbox/readiness', {});
+      assert.ok(['ready', 'notConfigured', 'updateRequired'].includes(readiness.status));
+      await request('configRequirements/read', {});
+    }
+    const reviewed = await request('thread/start', { cwd: workspace, model: 'fixture-model', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', sandbox: 'workspace-write' });
+    assert.equal(reviewed.sandbox.type, 'workspaceWrite');
+    const unrestricted = await request('thread/start', { cwd: workspace, model: 'fixture-model', approvalPolicy: 'never', sandbox: 'danger-full-access' });
+    assert.equal(unrestricted.sandbox.type, 'dangerFullAccess');
+    const start = await request('thread/start', { config: { 'sandbox_workspace_write.writable_roots': [extra] }, cwd: workspace, model: 'fixture-model', approvalPolicy: 'never', sandbox: 'workspace-write', dynamicTools: [{ name: 'synthetic_probe', description: 'Offline fixture tool', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false } }] });
     assert.ok(start.thread.id);
+    assert.equal(start.sandbox.type, 'workspaceWrite');
+    assert.ok(start.sandbox.writableRoots.some(p => path.normalize(p).toLowerCase() === path.normalize(extra).toLowerCase()));
     const turn = await request('turn/start', { threadId: start.thread.id, input: [{ type: 'text', text: 'Run the offline tool.', text_elements: [] }] });
     while (!notifications.some(n => n.method === 'turn/completed' && n.params?.turn?.id === turn.turn.id)) await new Promise(r => setTimeout(r, 20));
     const done = notifications.find(n => n.method === 'turn/completed' && n.params?.turn?.id === turn.turn.id);
@@ -102,7 +114,7 @@ try {
     const legacy = sdk.startThread({ workingDirectory: workspace, skipGitRepoCheck: true, model: 'fixture-model', approvalPolicy: 'never', sandboxMode: 'workspace-write' });
     const sdkTurn = await legacy.run('Offline legacy SDK fixture.');
     assert.equal(sdkTurn.finalResponse, 'Offline native tool complete.');
-    return { version, target, initialized: true, emptyNativeAccount: true, identityReadMs, skillDiscovered: true, modelCatalogRead: true, toolCalls, localModelRequests: requestCount, turnCompleted: true, resumed: true, interrupted: true, legacySdkCompleted: true, paidRequests: 0, workingProfileRead: false };
+    return { version, target, initialized: true, emptyNativeAccount: true, identityReadMs, sandboxPolicyAccepted: true, skillDiscovered: true, modelCatalogRead: true, toolCalls, localModelRequests: requestCount, turnCompleted: true, resumed: true, interrupted: true, legacySdkCompleted: true, paidRequests: 0, workingProfileRead: false };
   };
   console.log(JSON.stringify(await Promise.race([run(), failed]), null, 2));
 } finally {

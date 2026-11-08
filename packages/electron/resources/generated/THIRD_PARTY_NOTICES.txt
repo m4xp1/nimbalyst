@@ -3,7 +3,7 @@ Nimbalyst Third-Party Notices
 This file aggregates license and notice texts for third-party packages reachable
 from the Electron app, runtime package, and built-in extensions.
 
-Package count: 1002
+Package count: 1003
 Packages requiring manual review: 0
 Approved exceptions (non-permissive licenses, manually reviewed): 3
 
@@ -4534,7 +4534,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@openai/codex@0.162.1
+@openai/codex@0.167.0-alpha.3.2
 Selected license: Apache-2.0
 Declared license: Apache-2.0
 Install paths: node_modules/@openai/codex
@@ -4543,7 +4543,7 @@ Issues: No license file found in package directory
 No license file found.
 
 ================================================================================
-@openai/codex-sdk@0.162.1
+@openai/codex-sdk@0.167.0-alpha.3.2
 Selected license: Apache-2.0
 Declared license: Apache-2.0
 Install paths: node_modules/@openai/codex-sdk
@@ -9169,9 +9169,9 @@ Copyright (C) 2013-present  SheetJS
 better-sqlite3@13.0.3
 Selected license: MIT
 Declared license: MIT
-Install paths: packages/electron/node_modules/better-sqlite3
+Install paths: node_modules/better-sqlite3
 
---- LICENSE (packages\electron\node_modules\better-sqlite3\LICENSE) ---
+--- LICENSE (node_modules\better-sqlite3\LICENSE) ---
 The MIT License (MIT)
 
 Copyright (c) 2017 Joshua Wise
@@ -24195,6 +24195,23 @@ Declared license: MIT
 Install paths: node_modules/node-addon-api
 
 --- LICENSE.md (node_modules\node-addon-api\LICENSE.md) ---
+The MIT License (MIT)
+
+Copyright (c) 2017 [Node.js API collaborators](https://github.com/nodejs/node-addon-api#collaborators)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+node-addon-api@8.9.0
+Selected license: MIT
+Declared license: MIT
+Install paths: node_modules/better-sqlite3/node_modules/node-addon-api
+
+--- LICENSE.md (node_modules\better-sqlite3\node_modules\node-addon-api\LICENSE.md) ---
 The MIT License (MIT)
 
 Copyright (c) 2017 [Node.js API collaborators](https://github.com/nodejs/node-addon-api#collaborators)

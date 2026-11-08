@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-07T02:06:21.808Z",
+  "generatedAt": "2026-11-08T21:37:40.335Z",
   "scope": {
     "workspaceRoots": [
       "packages/electron",
@@ -37,7 +37,7 @@
     "description": "Production dependencies reachable from Electron, runtime, and built-in extension workspaces."
   },
   "summary": {
-    "packageCount": 1002,
+    "packageCount": 1003,
     "reviewRequiredCount": 0,
     "approvedExceptionCount": 3,
     "licenseCounts": {
@@ -50,7 +50,7 @@
       "EPL-2.0": 1,
       "ISC": 67,
       "LGPL-3.0": 1,
-      "MIT": 814,
+      "MIT": 815,
       "Python-2.0": 1,
       "SEE LICENSE IN README.md": 1,
       "Unlicense": 2
@@ -2451,9 +2451,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@openai/codex@0.162.1",
+      "id": "@openai/codex@0.167.0-alpha.3.2",
       "name": "@openai/codex",
-      "version": "0.162.1",
+      "version": "0.167.0-alpha.3.2",
       "rawLicense": "Apache-2.0",
       "selectedLicense": "Apache-2.0",
       "reviewRequired": false,
@@ -2471,9 +2471,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@openai/codex-sdk@0.162.1",
+      "id": "@openai/codex-sdk@0.167.0-alpha.3.2",
       "name": "@openai/codex-sdk",
-      "version": "0.162.1",
+      "version": "0.167.0-alpha.3.2",
       "rawLicense": "Apache-2.0",
       "selectedLicense": "Apache-2.0",
       "reviewRequired": false,
@@ -6233,12 +6233,12 @@
       "approvalLicense": null,
       "issues": [],
       "installPaths": [
-        "packages/electron/node_modules/better-sqlite3"
+        "node_modules/better-sqlite3"
       ],
       "licenseFiles": [
         {
           "fileName": "LICENSE",
-          "relativePath": "packages\\electron\\node_modules\\better-sqlite3\\LICENSE",
+          "relativePath": "node_modules\\better-sqlite3\\LICENSE",
           "text": "The MIT License (MIT)\n\nCopyright (c) 2017 Joshua Wise\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
         }
       ],
@@ -16310,6 +16310,30 @@
         {
           "fileName": "LICENSE.md",
           "relativePath": "node_modules\\node-addon-api\\LICENSE.md",
+          "text": "The MIT License (MIT)\n\nCopyright (c) 2017 [Node.js API collaborators](https://github.com/nodejs/node-addon-api#collaborators)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n"
+        }
+      ],
+      "noticeFiles": []
+    },
+    {
+      "id": "node-addon-api@8.9.0",
+      "name": "node-addon-api",
+      "version": "8.9.0",
+      "rawLicense": "MIT",
+      "selectedLicense": "MIT",
+      "reviewRequired": false,
+      "reviewReasons": [],
+      "approved": false,
+      "approvalReason": null,
+      "approvalLicense": null,
+      "issues": [],
+      "installPaths": [
+        "node_modules/better-sqlite3/node_modules/node-addon-api"
+      ],
+      "licenseFiles": [
+        {
+          "fileName": "LICENSE.md",
+          "relativePath": "node_modules\\better-sqlite3\\node_modules\\node-addon-api\\LICENSE.md",
           "text": "The MIT License (MIT)\n\nCopyright (c) 2017 [Node.js API collaborators](https://github.com/nodejs/node-addon-api#collaborators)\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n"
         }
       ],
