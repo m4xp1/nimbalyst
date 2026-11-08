@@ -72,9 +72,10 @@
     "@nimbalyst/local-wiki": "workspace:*",
     "@nimbalyst/mockuplm": "workspace:*",
     "@nimbalyst/runtime": "workspace:*",
+    "@nimbalyst/search-text": "workspace:*",
     "@nimbalyst/tracker-engine": "workspace:*",
     "@nimbalyst/tracker-schema": "workspace:*",
-    "@openai/codex-sdk": "^0.162.1",
+    "@openai/codex-sdk": "0.167.0-alpha.3.2",
     "@revolist/react-datagrid": "4.21.4",
     "@revolist/revogrid": "4.21.4",
     "@types/glob": "^8.1.0",
@@ -146,8 +147,7 @@
     "web-streams-polyfill": "^4.2.0",
     "ws": "^8.19.0",
     "zod": "^4.0.0",
-    "zustand": "^5.0.9",
-    "@nimbalyst/search-text": "workspace:*"
+    "zustand": "^5.0.9"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
