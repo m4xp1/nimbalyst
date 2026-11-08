@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const f = vi.hoisted(() => ({ spawn: vi.fn(), clients: [] as any[], scope: 'work' as string | null, percent: 90, fail: false }));
+const f = vi.hoisted(() => ({ spawn: vi.fn(), clients: [] as any[], scope: 'work' as string | null, percent: 90, fail: false, subject: 'same-user' as unknown }));
 vi.mock('node:child_process', () => ({ spawn: f.spawn }));
 vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/codexAppServerBinary', () => ({ resolveCodexBinaryPath: () => '/synthetic/codex', getCodexVendorPathEntries: () => [] }));
 vi.mock('../shellEnvironment', () => ({ getEnhancedPath: () => '' }));
@@ -10,7 +10,7 @@ vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', (
   request = vi.fn(async (method: string) => {
     if (method === 'initialize') return {};
     if (method === 'account/read') return { account: { type: 'chatgpt', email: 'same@example.test', planType: 'pro' }, requiresOpenaiAuth: true };
-    if (method === 'accountSession/list') return { activeSessionId: 'login', sessions: f.scope ? [{ sessionId: 'login', userId: 'same-user', email: 'same@example.test', isActive: true, selectedWorkspaceAccountId: f.scope }] : [] };
+    if (method === 'accountSession/list') return { activeSessionId: 'login', sessions: f.scope ? [{ sessionId: 'login', userId: f.subject, email: 'same@example.test', isActive: true, selectedWorkspaceAccountId: f.scope }] : [] };
     if (method === 'account/rateLimits/read') { if (f.fail) throw new Error('synthetic quota failure'); return { accountId: f.scope, rateLimits: { primary: { usedPercent: f.percent } } }; }
     throw new Error('Unexpected RPC: ' + method);
   });
@@ -19,7 +19,7 @@ vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', (
 } }));
 import { codexAuthService as service } from '../CodexAuthService';
 beforeEach(() => {
-  vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.scope = 'work'; f.fail = false; f.clients.length = 0;
+  vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.scope = 'work'; f.fail = false; f.subject = 'same-user'; f.clients.length = 0;
   f.spawn.mockImplementation(() => ({ killed: false, kill: vi.fn(), stdin: { end: vi.fn() }, stderr: { setEncoding: vi.fn(), on: vi.fn() }, on: vi.fn() }));
 });
 afterEach(() => { service.shutdown(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
@@ -61,5 +61,12 @@ it('rejects quota returned for a different workspace', async () => {
   const identified = vi.fn(() => { f.scope = 'other-workspace'; });
   await expect(service.getRateLimits(identified)).rejects.toThrow(/changed while reading limits/);
   expect(identified).toHaveBeenLastCalledWith(null);
+  expect(f.clients[0].close).toHaveBeenCalled();
+});
+
+it('rejects an invalid external subject instead of treating it as an application identity', async () => {
+  f.subject = 123;
+  await expect(service.getRateLimits()).rejects.toThrow('invalid account identity');
+  expect(f.clients[0].request.mock.calls.some(([method]: any[]) => method === 'account/rateLimits/read')).toBe(false);
   expect(f.clients[0].close).toHaveBeenCalled();
 });

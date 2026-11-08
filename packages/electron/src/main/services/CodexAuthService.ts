@@ -106,7 +106,7 @@ class CodexAuthServiceImpl {
     try {
       const accounts = await client.request<{
         activeSessionId: string | null;
-        sessions: Array<{ sessionId: string; userId?: string | null; isActive: boolean; selectedWorkspaceAccountId: string | null }>;
+        sessions: Array<{ sessionId: string; userId?: unknown; isActive: boolean; selectedWorkspaceAccountId: string | null }>;
       }>('accountSession/list', { refreshWorkspaceMetadata: false });
       const active = accounts.sessions.filter(session => session.isActive && session.sessionId === accounts.activeSessionId);
       if (active.length !== 1 || !active[0].selectedWorkspaceAccountId) {
@@ -114,7 +114,13 @@ class CodexAuthServiceImpl {
         throw new Error('Current ChatGPT account could not be identified. Sign in with ChatGPT to view subscription limits.');
       }
       const account = active[0];
-      const accountScope = JSON.stringify([account.sessionId, account.userId ?? null, account.selectedWorkspaceAccountId]);
+      // This is a native Codex subject, not a Nimbalyst personal/team member identity.
+      // Decode the external wire value before using it in the opaque quota scope.
+      const nativeSubject = account.userId;
+      if (nativeSubject !== undefined && nativeSubject !== null && typeof nativeSubject !== 'string') {
+        throw new Error('Codex returned an invalid account identity.');
+      }
+      const accountScope = JSON.stringify([account.sessionId, nativeSubject ?? null, account.selectedWorkspaceAccountId]);
       onAccountIdentified?.(accountScope);
       const response = await client.request<AccountRateLimitsReadResponse & { accountId?: string | null }>('account/rateLimits/read', {});
       if (response.accountId && response.accountId !== account.selectedWorkspaceAccountId) {
