@@ -85,7 +85,7 @@ export async function appendTrackerGitignore(snapshot: TrackerGitignoreSnapshot)
  * This changes only the workspace .gitignore and never stages or commits. */
 export async function ensureFileTrackerGitVisibility(workspace: string): Promise<void> {
   try {
-    await exec('git', ['-C', workspace, 'rev-parse', '--show-toplevel'], { env: { ...process.env, LC_ALL: 'C' } });
+    await exec('git', ['-C', workspace, 'rev-parse', '--show-toplevel'], { windowsHide: true, env: { ...process.env, LC_ALL: 'C' } });
   } catch (error) {
     if ((error as { stderr?: string }).stderr?.includes('not a git repository')) return;
     throw new Error('Cannot inspect Git rules for file trackers', { cause: error });
@@ -107,7 +107,7 @@ export async function ensureFileTrackerGitVisibility(workspace: string): Promise
     // Bound argv size on Windows even for projects with many comments files.
     for (let offset = 0; offset < candidates.length; offset += 50) {
       try {
-        const result = await exec('git', ['-C', root, 'check-ignore', '--no-index', '--', ...candidates.slice(offset, offset + 50)]);
+        const result = await exec('git', ['-C', root, 'check-ignore', '--no-index', '--', ...candidates.slice(offset, offset + 50)], { windowsHide: true });
         blocked.push(...result.stdout.split(/\r?\n/).filter(Boolean));
       } catch (error) {
         if ((error as { code?: number }).code === 1) continue; // No ignored paths.

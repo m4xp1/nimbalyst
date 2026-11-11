@@ -23,10 +23,11 @@ import { ModelIdentifier, type ChatAttachment, type SessionData } from '@nimbaly
 import { stripMcpPrefix } from '@nimbalyst/runtime/ai/server/interactivePromptTools';
 import type { SessionMeta } from '@nimbalyst/runtime';
 import deepEqual from 'fast-deep-equal';
-import { captureTranscriptMessages, reconcileTranscriptMessages } from '../transcriptReconciliation';
+import { captureTranscriptMessages, preserveTranscriptMessageIdentity, reconcileTranscriptMessages } from '../transcriptReconciliation';
 import { sessionLaunchCountsAtom } from './sessionLaunchCounts';
 import { sessionListMetadata } from './sessionListMetadata';
 import { workstreamStateAtom, setWorkstreamActiveChildAtom } from './workstreamState';
+import { clearSessionUnreadAtom } from './sessionActivity';
 import { aiInputHistoryAtom } from './aiInputUndo';
 
 // SessionMeta is imported from @nimbalyst/runtime (canonical type).
@@ -768,6 +769,15 @@ export const sessionLoadingAtom = atomFamily((_sessionId: string) =>
 );
 
 /**
+ * Per-session load failure: why the last load threw, or null. Lets the view
+ * tell a session that failed to load apart from one that does not exist
+ * (#1812).
+ */
+export const sessionLoadErrorAtom = atomFamily((_sessionId: string) =>
+  atom<string | null>(null)
+);
+
+/**
  * Per-session AI mode (plan vs agent).
  * This is a read-write derived atom that reads from sessionStoreAtom and writes through it.
  * This ensures the mode stays in sync with session data during reloads.
@@ -1180,6 +1190,9 @@ export const loadSessionChildrenAtom = atom(
         { includeArchived: false }
       );
       // console.log('[loadSessionChildrenAtom] IPC result:', result);
+      // The window may have switched projects while this was in flight.
+      const listWorkspace = get(sessionListWorkspaceAtom);
+      if (listWorkspace && listWorkspace !== workspacePath) return [];
       if (result.success && Array.isArray(result.children)) {
         const childIds = result.children.map((c: any) => c.id);
         // console.log('[loadSessionChildrenAtom] Setting children:', childIds);
@@ -1784,6 +1797,7 @@ export const setSessionWorkspaceOpenAtom = atom(
       closed.delete(workspacePath);
     } else {
       closed.add(workspacePath);
+      sessionListCache.delete(workspacePath);
       const generations = new Map(get(sessionWorkspaceGenerationsAtom));
       generations.set(workspacePath, {});
       set(sessionWorkspaceGenerationsAtom, generations);
@@ -1806,6 +1820,12 @@ export const setSessionWorkspaceOpenAtom = atom(
   }
 );
 
+
+/** The thrown reason, without Electron's "Error invoking remote method" wrapper. */
+function describeSessionLoadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error invoking remote method '[^']*': /, '');
+}
 
 /**
  * Load session data into the atom.
@@ -1830,6 +1850,7 @@ export const loadSessionDataAtom = atom(
     }
 
     set(sessionLoadingAtom(sessionId), true);
+    set(sessionLoadErrorAtom(sessionId), null);
     const draftWasHydrated = get(sessionDraftHydratedAtom(sessionId));
     const draftModifiedAtStart = get(sessionDraftLocalModifiedAtAtom(sessionId));
 
@@ -1879,6 +1900,9 @@ export const loadSessionDataAtom = atom(
       }
     } catch (error) {
       console.error(`[sessions] Failed to load session ${sessionId}:`, error);
+      if (get(sessionWorkspaceGenerationsAtom).get(workspacePath) === generation) {
+        set(sessionLoadErrorAtom(sessionId), describeSessionLoadError(error));
+      }
     } finally {
       if (get(sessionWorkspaceGenerationsAtom).get(workspacePath) === generation) {
         set(sessionLoadingAtom(sessionId), false);
@@ -1924,37 +1948,13 @@ export const updateSessionDataAtom = atom(
  */
 const pendingReloads = new Map<string, { version: number; aborted: boolean; workspacePath: string }>();
 
-function preserveEquivalentArrayRef<T>(current: T[] | undefined, next: T[] | undefined): T[] | undefined {
-  if (!current || !next) return next;
-  if (current === next) return current;
-  if (current.length !== next.length) return next;
-  if (deepEqual(current, next)) return current;
-  // Per-element preservation: if individual entries are deep-equal, reuse the
-  // current reference for that index so virtualized row memos can bail out.
-  // The outer array reference still changes (some element differs) — that's
-  // expected — but rows whose underlying message didn't change keep identity.
-  let changed = false;
-  const merged: T[] = new Array(next.length);
-  for (let i = 0; i < next.length; i++) {
-    const c = current[i];
-    const n = next[i];
-    if (c === n || deepEqual(c, n)) {
-      merged[i] = c;
-    } else {
-      merged[i] = n;
-      changed = true;
-    }
-  }
-  return changed ? merged : current;
-}
-
 function preserveEquivalentValue<T>(current: T | undefined, next: T | undefined): T | undefined {
   if (current === undefined || next === undefined) return next;
   return deepEqual(current, next) ? current : next;
 }
 
 export function preserveReloadIdentity(current: SessionData, next: SessionData): SessionData {
-  const normalizedMessages = preserveEquivalentArrayRef(current.messages, next.messages);
+  const normalizedMessages = preserveTranscriptMessageIdentity(current.messages, next.messages);
   const currentTeammates = Array.isArray(current.metadata?.currentTeammates)
     ? current.metadata.currentTeammates
     : undefined;
@@ -2082,6 +2082,7 @@ export const cleanupSessionAtom = atom(null, (get, set, sessionId: string) => {
   // Remove all per-session atoms
   sessionStoreAtom.remove(sessionId);
   sessionLoadingAtom.remove(sessionId);
+  sessionLoadErrorAtom.remove(sessionId);
   sessionModeAtom.remove(sessionId);
   sessionModelAtom.remove(sessionId);
   sessionArchivedAtom.remove(sessionId);
@@ -2144,6 +2145,7 @@ export const markSessionReadAtom = atom(null, (get, set, sessionId: string) => {
   const now = Date.now();
   set(sessionUnreadAtom(sessionId), false);
   set(sessionLastReadAtom(sessionId), now);
+  set(clearSessionUnreadAtom, { sessionId });
 
   // Always push lastReadAt through sync for cross-device read state.
   // Even if this device didn't consider the session "unread", another device
@@ -2206,6 +2208,9 @@ export const sessionListRootAtom = atom<SessionListItem[]>((get) => {
 
   return Array.from(registry.values())
     .filter(s => {
+      // GitHub #1887: the send path rejects a session whose workspace_id is not
+      // this workspace, so never list one (the registry is shared per window).
+      if (workspacePath && s.workspaceId && s.workspaceId !== workspacePath) return false;
       if ((s.remoteHostDeviceId ?? "") !== host) return false;
       if (!showArchived && s.isArchived) return false;
       // Root sessions (no parent) are always included
@@ -2324,11 +2329,16 @@ export const refreshSessionListAtom = atom(
  */
 let initInProgress: Promise<void> | null = null;
 let lastInitWorkspacePath: string | null = null;
+/** Session list of each project this window switched away from, by workspace path. */
+const sessionListCache = new Map<string, { registry: Map<string, SessionMeta>; launchCounts: Record<string, number> }>();
 let initializedWorkspacePath: string | null = null;
 
 export async function initSessionList(workspacePath: string): Promise<void> {
-  // If already initialized for this workspace, return immediately
-  if (initializedWorkspacePath === workspacePath) {
+  // If already initialized for this workspace, return immediately. A rail
+  // switch away and back before the other project's load finished leaves
+  // initializedWorkspacePath on this project while the list points at the
+  // other one, so the list's workspace must match too.
+  if (initializedWorkspacePath === workspacePath && store.get(sessionListWorkspaceAtom) === workspacePath) {
     return;
   }
 
@@ -2338,17 +2348,36 @@ export async function initSessionList(workspacePath: string): Promise<void> {
   }
 
   lastInitWorkspacePath = workspacePath;
-  if (store.get(sessionListWorkspaceAtom) !== workspacePath) store.set(sessionLaunchCountsAtom, {});
+  const previousWorkspacePath = store.get(sessionListWorkspaceAtom);
+  if (previousWorkspacePath !== workspacePath) {
+    // The registry holds one project's sessions. Keep the outgoing project's
+    // list and show the incoming one's cached list while it refetches, so a
+    // rail switch back to a project does not blank the list for the round trip.
+    // A switch can land before the outgoing project's first refresh did, when
+    // the registry still holds an older project; cache only matching rows.
+    const outgoing = [...store.get(sessionRegistryAtom)].filter(([, s]) => s.workspaceId === previousWorkspacePath);
+    if (previousWorkspacePath && outgoing.length > 0) {
+      sessionListCache.set(previousWorkspacePath, {
+        registry: new Map(outgoing),
+        launchCounts: store.get(sessionLaunchCountsAtom),
+      });
+    }
+    const cached = sessionListCache.get(workspacePath);
+    store.set(sessionLaunchCountsAtom, cached?.launchCounts ?? {});
+    if (cached) store.set(sessionRegistryAtom, cached.registry);
+  }
   store.set(sessionListWorkspaceAtom, workspacePath);
 
   // Trigger initial load and track the promise
-  initInProgress = store.set(refreshSessionListAtom);
+  const load = store.set(refreshSessionListAtom);
+  initInProgress = load;
   try {
-    await initInProgress;
-    // Mark as initialized only after successful completion
-    initializedWorkspacePath = workspacePath;
+    await load;
+    // Mark as initialized only after successful completion, and only if the
+    // list still shows this project: a switch during the load discards it.
+    if (store.get(sessionListWorkspaceAtom) === workspacePath) initializedWorkspacePath = workspacePath;
   } finally {
-    initInProgress = null;
+    if (initInProgress === load) initInProgress = null;
   }
 }
 

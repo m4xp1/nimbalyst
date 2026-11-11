@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Tests for the WorkspaceEventBus circuit breaker teardown (issue #629).
  *
@@ -12,6 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import * as path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — must run before vi.mock() factories
@@ -135,6 +137,7 @@ vi.mock('ignore', () => {
 
 import { subscribe, unsubscribe, resetBus, getBusEntryCount } from '../WorkspaceEventBus';
 import type { WorkspaceEventListener } from '../WorkspaceEventBus';
+import { logger } from '../../utils/logger';
 
 // Mirrors the private constant in WorkspaceEventBus. The breaker trips when the
 // oldest entry in the ring buffer (size THRESHOLD) is still within the window,
@@ -209,6 +212,27 @@ describe('WorkspaceEventBus circuit breaker teardown (#629)', () => {
     // The close must be deferred — calling it synchronously from inside the
     // FSEvents delivery callback is what crashes Electron.
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it('logs routine watcher startup at debug, but keeps failures and recovery visible', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.mocked(logger.main.info).mockClear();
+    vi.mocked(logger.main.warn).mockClear();
+    await subscribe(WORKSPACE, 'logging', createListener());
+    expect(logger.main.info).not.toHaveBeenCalled();
+    expect(logger.main.warn).not.toHaveBeenCalled();
+
+    fireBurst(CIRCUIT_BREAKER_THRESHOLD + 130);
+    expect(logger.main.warn).toHaveBeenCalledWith(
+      '[WorkspaceEventBus] Watcher health:',
+      expect.objectContaining({ state: 'recovering', workspacePath: path.resolve(WORKSPACE) }),
+    );
+    await flushImmediate();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(logger.main.info).toHaveBeenCalledWith(
+      '[WorkspaceEventBus] Watcher health:',
+      expect.objectContaining({ state: 'watching', workspacePath: path.resolve(WORKSPACE) }),
+    );
   });
 
   it('recovers delivery to the original subscriber after a storm (#1499)', async () => {

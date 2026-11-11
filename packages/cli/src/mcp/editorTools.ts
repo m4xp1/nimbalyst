@@ -77,7 +77,7 @@ export function editorModelsFromWikiWeb(options: { assetsDir?: string; version: 
     if (!resolution.ok) throw new EditorModelsUnavailable(installHint(options.version, resolution));
     const file = path.join(resolution.assets.dir, 'models', 'editor-models.mjs');
     if (!existsSync(file)) {
-      throw new EditorModelsUnavailable(`${resolution.assets.dir} has no models/editor-models.mjs; install a newer @nimbalyst/wiki-web (npm install -g @nimbalyst/wiki-web@${options.version}).`);
+      throw new EditorModelsUnavailable(`${resolution.assets.dir} has no models/editor-models.mjs; it is older than this nim. Run \`nim update\`, which installs the browser app published with nim.`);
     }
     let models = loaded.get(file);
     if (!models) {
@@ -86,7 +86,7 @@ export function editorModelsFromWikiWeb(options: { assetsDir?: string; version: 
     }
     const value = await models;
     if (value.EDITOR_MODELS_VERSION !== EDITOR_MODELS_VERSION) {
-      throw new EditorModelsUnavailable(`${file} is version ${value.EDITOR_MODELS_VERSION}; this nim needs ${EDITOR_MODELS_VERSION}. Install the matching @nimbalyst/wiki-web.`);
+      throw new EditorModelsUnavailable(`${file} is version ${value.EDITOR_MODELS_VERSION}; this nim needs ${EDITOR_MODELS_VERSION}. Run \`nim update\`, which installs the browser app published with nim.`);
     }
     return value;
   };

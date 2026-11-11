@@ -95,6 +95,7 @@ test.describe('Multi-Project Rail', () => {
 
     electronApp = await launchElectronApp({
       workspace: workspaceA,
+      recordVideo: false,
       env: { NODE_ENV: 'test' },
     });
 
@@ -217,13 +218,10 @@ test.describe('Multi-Project Rail', () => {
     const items = rail.locator('[data-testid="project-rail-item"]');
     await expect(items).toHaveCount(2);
 
-    // Click the active item to surface its close button (CSS shows it on
-    // hover or when active).
+    // Closing goes through the right-click menu; there is no hover close button.
     const activeItem = rail.locator('[data-testid="project-rail-item"].is-active');
-    await activeItem.hover();
-
-    const closeButton = activeItem.locator('.project-rail-item-close');
-    await closeButton.click();
+    await activeItem.click({ button: 'right' });
+    await page.locator('[data-testid="project-rail-context-menu"]').getByText('Close project').click();
 
     await expect(items).toHaveCount(1);
     await expect(items.first()).toHaveClass(/\bis-active\b/);
@@ -296,7 +294,7 @@ test.describe('Multi-Project Rail', () => {
       const rail = page.locator('[data-testid="project-rail"]');
       // Restore merges these with the projects still live in this window.
       for (const p of extraPaths) {
-        await expect(rail.locator(`[data-testid="project-rail-item"][data-project-path="${p}"]`)).toHaveCount(1);
+        await expect(rail.locator(`[data-testid="project-rail-item"][data-project-path=${JSON.stringify(p)}]`)).toHaveCount(1);
       }
       await expect(rail.locator('[data-testid="project-rail-add"]')).toBeDisabled();
     } finally {

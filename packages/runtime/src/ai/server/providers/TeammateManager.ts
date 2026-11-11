@@ -6,7 +6,7 @@
  */
 
 import { query, type SDKUserMessage, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-
+import { afterCommitProposalSettles } from '../commitProposalInFlight';
 // Query interface not properly exported by SDK, so we define it inline
 interface Query extends AsyncGenerator<SDKMessage, void> {
   streamInput(stream: AsyncIterable<any>): Promise<void>;
@@ -83,6 +83,8 @@ export interface TeammateManagerDeps {
     workspacePath: string,
     permissionsPath: string | undefined,
     teammateName?: string,
+    /** The teammate query's own SDK permission mode; it does not follow the lead's */
+    queryPermissionMode?: 'plan' | 'auto' | 'default',
   ): (toolName: string, input: any, options: { signal: AbortSignal; toolUseID?: string }) =>
     Promise<{ behavior: 'allow' | 'deny'; updatedInput?: any; message?: string }>;
 }
@@ -1048,8 +1050,8 @@ export class TeammateManager {
       summary,
     });
 
-    const formattedMessage = `[Teammate message from "${teammateName}"]\n\n${content}`;
-    this.deps.interruptWithMessage(formattedMessage).catch(err => {
+    // #1682: never interrupt the lead mid-commit; the message stays queued until the call settles.
+    afterCommitProposalSettles(sessionId, () => this.deps.interruptWithMessage(`[Teammate message from "${teammateName}"]\n\n${content}`)).catch(err => {
       console.warn(`[MANAGED-TEAMMATE] Failed to interrupt lead with teammate message:`, err);
     });
 
@@ -1428,10 +1430,11 @@ export class TeammateManager {
     // otherwise fall back to process.env (development mode)
     const baseEnv = this.packagedBuildOptions?.env ?? process.env;
 
+    const permissionMode = 'default' as const;
     const options: any = {
       model: model || 'haiku',
       maxTurns: 20,
-      permissionMode: 'default',
+      permissionMode,
       persistSession: true,
       // SECURITY: Use empty settingSources so the subprocess cannot load
       // allow-rules from settings files and auto-approve tools internally.
@@ -1459,10 +1462,10 @@ export class TeammateManager {
         CLAUDE_CODE_AGENT_TYPE: agentType,
       },
       hooks: {
-        'PreToolUse': [{ hooks: [this.deps.createPreToolUseHook(cwd, sessionId, permissionsPath, { isTeammateSession: true })] }],
+        'PreToolUse': [{ hooks: [this.deps.createPreToolUseHook(cwd, sessionId, permissionsPath, { isTeammateSession: true })], timeout: 86400 }],
         'PostToolUse': [{ hooks: [this.deps.createPostToolUseHook(cwd, sessionId)] }],
       },
-      canUseTool: this.deps.createCanUseToolHandler(sessionId, cwd, permissionsPath, name),
+      canUseTool: this.deps.createCanUseToolHandler(sessionId, cwd, permissionsPath, name, permissionMode),
       additionalDirectories: teammateAdditionalDirectories,
     };
 

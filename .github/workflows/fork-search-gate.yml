@@ -30,10 +30,10 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify native Codex with offline model and tool
         run: node scripts/verify-codex-contract.mjs
-      - name: Build workspace dependencies and Memory
+      - name: Build and typecheck all integrated workspaces
+        run: pnpm run typecheck:prepush
+      - name: Build Memory and Git extensions
         run: |
-          pnpm run build:workspace-deps
-          if ($LASTEXITCODE -ne 0) { throw 'Workspace dependency build failed' }
           pnpm --dir packages/extensions/nimbalyst-memory run build
           if ($LASTEXITCODE -ne 0) { throw 'Memory build failed' }
           pnpm --dir packages/extensions/git run build
@@ -42,6 +42,10 @@ jobs:
         run: pnpm run test:fork-search
       - name: Mandatory portable tracker, editor and discovery regressions
         run: pnpm run test:fork-features
+      - name: Mandatory upstream integration regressions
+        run: pnpm run test:fork-upstream
+      - name: Reject OpenAI transcription before opening a socket
+        run: pnpm exec vitest run packages/electron/src/main/services/credentials/__tests__/ProviderCredentialVault.test.ts -t "transcription socket"
       - name: Mandatory schema and editor coordination regressions
         run: >-
           pnpm exec vitest run
@@ -76,11 +80,14 @@ jobs:
           packages/electron/src/renderer/components/WindowTopBar/__tests__/WindowTopBar.test.tsx
       - name: Build isolated Electron application
         run: pnpm --filter @nimbalyst/electron run build
+      - name: Build all shipped extensions for app checks
+        run: pnpm --filter @nimbalyst/electron run build:extensions
       - name: Verify native runtime
         run: pnpm --filter @nimbalyst/electron run verify:native-runtime
       - name: Mandatory built-app search, Git and file tracker
         run: |
-          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts')
+          $env:NIMBALYST_E2E_MAIN_PATH = (Resolve-Path 'packages/electron/out/main/index.js').Path
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Built application regression failed: $spec" }

@@ -39,11 +39,20 @@ for (const database of ['sqlite', 'pglite'] as const) test(`Codex usage follows 
     // Manual refresh is deliberately denied in automated launches.
     await popover.getByRole('button', { name: 'Refresh usage' }).click();
     await expect(popover).toContainText('Codex account access is disabled');
-    await publish(snapshot(100)); await expect(popover).toContainText('100%');
+    const history = (label: string, utilization: number) => [{ meter: 'codex:codex:secondary', label, utilization, resetsAt: new Date(Date.now() + 86400000).toISOString(), lastSeenAt: Date.now() }];
+    await publish({ ...snapshot(100), weeklyHistory: history('Account A weekly', 77) }); await expect(popover).toContainText('100%');
+    await popover.getByRole('button', { name: 'Weekly history' }).click();
+    await expect(popover).toContainText('Account A weekly');
+    await expect(popover).toContainText('77%');
     await publish({ limits: [], limitsAvailable: false, refreshing: true, lastUpdated: 0 });
     await expect(indicator).toHaveText('--'); await expect(popover).toContainText('Updating current account limits');
     await expect(popover).not.toContainText('100%'); await expect(popover).not.toContainText('Updated just now');
-    await publish(snapshot(12)); await expect(indicator).toHaveText('12%'); await expect(popover).toContainText('12%');
+    await expect(popover).not.toContainText('Account A weekly');
+    await publish({ ...snapshot(12), weeklyHistory: history('Account B weekly', 23) }); await expect(indicator).toHaveText('12%'); await expect(popover).toContainText('12%');
+    const weeklyToggle = popover.getByRole('button', { name: 'Weekly history' });
+    if (await weeklyToggle.getAttribute('aria-expanded') !== 'true') await weeklyToggle.click();
+    await expect(popover).toContainText('Account B weekly');
+    await expect(popover).not.toContainText('Account A weekly');
     await publish({ limits: [], limitsAvailable: false, lastUpdated: 0, error: 'Current Codex account limits are unavailable.' });
     await expect(indicator).toHaveText('--'); await expect(popover).toContainText('Current Codex account limits are unavailable');
     await expect(popover).not.toContainText('12%');

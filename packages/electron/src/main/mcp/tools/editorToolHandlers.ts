@@ -13,7 +13,7 @@ import {
   describeTypedPage,
   isAgentPageUri,
   pageUpdatedText,
-  personalTypedPageError,
+  resolveAgentPageTarget,
   typedPageItemId,
   fileTrackerPageUri,
 } from "./agentPageTargets";
@@ -294,19 +294,18 @@ export async function handleApplyDiff(
   const typedArgs = args as
     | { filePath?: string; replacements?: any[] }
     | undefined;
-  const targetFilePath = typedArgs?.filePath;
-
-  if (!targetFilePath) {
+  if (!typedArgs?.filePath) {
     return {
       content: [{ type: "text", text: "Error: filePath is required for applyDiff" }],
       isError: true,
     };
   }
 
-  const personalError = await personalTypedPageError(targetFilePath, workspacePath);
-  if (personalError) {
-    return { content: [{ type: "text", text: personalError }], isError: true };
+  const target = await resolveAgentPageTarget(typedArgs.filePath, workspacePath);
+  if ("error" in target) {
+    return { content: [{ type: "text", text: target.error }], isError: true };
   }
+  const targetFilePath = target.uri;
 
   // A page is addressable whether or not it is on screen; a file on disk still
   // has to be resolved through the window that owns it.
@@ -435,19 +434,24 @@ async function readCollabDocLocally(
   args: any,
   workspacePath?: string,
 ): Promise<McpToolResult & { otherProjectId?: string }> {
-  const targetFilePath = typeof args?.filePath === 'string'
+  const pageUri = typeof args?.filePath === 'string'
     ? await fileTrackerPageUri(args.filePath, workspacePath) : args?.filePath;
-  if (!isAgentPageUri(targetFilePath)) {
+  if (!isAgentPageUri(pageUri)) {
     return {
       content: [
         {
           type: "text",
-          text: `Error: readCollabDoc requires a collab:// or personal:// URI. Got: ${targetFilePath ?? "(missing)"}.`,
+          text: `Error: readCollabDoc requires a collab:// or personal:// URI. Got: ${args?.filePath ?? "(missing)"}.`,
         },
       ],
       isError: true,
     };
   }
+  const target = await resolveAgentPageTarget(pageUri, workspacePath);
+  if ("error" in target) {
+    return { content: [{ type: "text", text: target.error }], isError: true };
+  }
+  const targetFilePath = target.uri;
 
   const targetWindow = await resolveCollabDocWindow(targetFilePath, workspacePath);
   if (!targetWindow) {

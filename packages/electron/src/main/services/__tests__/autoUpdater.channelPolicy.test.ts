@@ -124,3 +124,10 @@ it('announces an upstream release and downloads only on request without installi
     download.mockRestore();
   }
 });
+
+it('keeps upstream update discovery without automatic download or install', () => {
+  new AutoUpdaterService();
+  expect(autoUpdater.autoDownload).toBe(false);
+  expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({ provider: 'github', owner: 'nimbalyst', repo: 'nimbalyst' });
+});

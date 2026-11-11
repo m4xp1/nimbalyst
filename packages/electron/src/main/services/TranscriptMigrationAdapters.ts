@@ -16,7 +16,7 @@ import { database } from '../database/PGLiteDatabaseWorker';
 
 export function createRawMessageStoreAdapter(): IRawMessageStore {
   return {
-    async getMessages(sessionId: string, afterId?: number): Promise<RawMessage[]> {
+    async getMessages(sessionId: string, afterId?: number, limit?: number): Promise<RawMessage[]> {
       if (!database.isInitialized()) {
         await database.initialize();
       }
@@ -25,13 +25,15 @@ export function createRawMessageStoreAdapter(): IRawMessageStore {
       let cursor = afterId ?? 0;
       // Keep each worker query bounded without discarding the older dialogue.
       for (;;) {
+        const pageSize = Math.min(500, (limit ?? Infinity) - rows.length);
+        if (pageSize <= 0) break;
         const page = await database.query<any>(
           `SELECT id, session_id, source, direction, content, created_at, metadata, hidden
            FROM ai_agent_messages WHERE session_id = $1 AND id > $2
-           ORDER BY id ASC LIMIT 500`, [sessionId, cursor],
+           ORDER BY id ASC LIMIT $3`, [sessionId, cursor, pageSize],
         );
         rows.push(...page.rows);
-        if (page.rows.length < 500) break;
+        if (page.rows.length < pageSize) break;
         cursor = Number(page.rows[page.rows.length - 1].id);
         await new Promise<void>(resolve => setImmediate(resolve));
       }

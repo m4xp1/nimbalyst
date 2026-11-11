@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { OpenAIDictationEngine } from '../../dictation/OpenAIDictationEngine';
+import { openAIAccessAllowed } from '../../../../shared/openaiAccessPolicy';
 import { resolveProviderApiKey } from "../../ai/resolveProviderApiKey";
 import { isProviderEncryptionAvailable } from "../providerCredentials";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -335,4 +337,19 @@ it('moves project credentials without plaintext and refuses to overwrite another
   vault().set('openai', 'dummy-conflict', {workspacePath: '/other'});
   expect(() => vault().moveWorkspace('/new', '/other')).toThrow('migration');
   expect(vault().get('openai', {workspacePath: '/new'})).toBe('dummy-project');
+});
+
+it('withholds an existing cached OpenAI key from dictation and never opens a transcription socket when API access is off', async () => {
+  const env: NodeJS.ProcessEnv = { NIMBALYST_ALLOW_OPENAI_API: '1' };
+  const credentials = new ProviderCredentialVault(dir, encryption, () => {},
+    provider => provider !== 'openai' || openAIAccessAllowed({ packaged: true, env }));
+  credentials.set('openai', 'dummy-dictation-secret');
+  expect(credentials.get('openai')).toBe('dummy-dictation-secret');
+  env.NIMBALYST_ALLOW_OPENAI_API = '0';
+  const socket = vi.fn(() => { throw new Error('unexpected network access'); });
+  const engine = new OpenAIDictationEngine({ getApiKey: () => credentials.get('openai'), createSocket: socket, log: () => {} });
+  expect(engine.isAvailable()).toBe(false);
+  expect(await engine.start({ dictationId: 'offline-guard', contextStrings: [] }, { onEvent: vi.fn(), onEnded: vi.fn() }))
+    .toEqual({ ok: false, reason: 'no-engine' });
+  expect(socket).not.toHaveBeenCalled();
 });

@@ -15,6 +15,7 @@ import {
 import type { AgentCapabilities } from './agentCapabilities';
 import { toolRegistry, toAnthropicTools, toOpenAITools } from '../tools/definitions';
 import { buildSystemPrompt } from '../prompt';
+import type { ExitPlanModeResponse } from '../exitPlanModeDeferral';
 import {
   AgentMessageWriteQueue,
   type MessagesLoggedBatchEvent,
@@ -38,13 +39,15 @@ export interface AskUserQuestionProvider {
   ): boolean;
 
   /**
-   * Reject a pending AskUserQuestion request (e.g., on cancel/abort)
+   * Reject a pending AskUserQuestion request (e.g., on cancel/abort).
+   * Returns 'dismissed' when the rejection is delivered to the agent as an
+   * answer, so the caller must not abort the turn that will read it.
    */
   rejectAskUserQuestion(
     questionId: string,
     error: Error,
     respondedBy?: 'desktop' | 'mobile'
-  ): void;
+  ): 'dismissed' | void;
 }
 
 /**
@@ -61,7 +64,7 @@ export function isAskUserQuestionProvider(provider: AIProvider): provider is AIP
 export interface ExitPlanModeConfirmationProvider {
   resolveExitPlanModeConfirmation(
     requestId: string,
-    response: { approved: boolean; clearContext?: boolean; feedback?: string },
+    response: ExitPlanModeResponse,
     sessionId?: string,
     respondedBy?: 'desktop' | 'mobile'
   ): void;

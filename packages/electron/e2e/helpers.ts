@@ -111,8 +111,10 @@ async function findDevServerUrl(): Promise<string> {
   );
 }
 
-function buildElectronArgs(electronMain: string, workspace?: string): string[] {
-  const args = [electronMain];
+export function buildElectronArgs(electronMain: string | undefined, workspace?: string, userDataDir?: string): string[] {
+  const args = electronMain ? [electronMain] : [];
+  // Electron resolves userData during static imports, before bootstrap can read env.
+  if (userDataDir) args.push(`--user-data-dir=${userDataDir}`);
   if (process.platform === 'linux' && process.getuid && process.getuid() === 0) {
     args.push('--no-sandbox');
   }
@@ -143,6 +145,15 @@ function buildElectronArgs(electronMain: string, workspace?: string): string[] {
  * launches; that trade is not taken here.
  */
 export const TEST_USER_DATA_DIR = path.join(os.tmpdir(), 'nimbalyst-test-user-data');
+
+/** Built/packaged checks load their bundled renderer, never a running dev app. */
+export async function resolveTestRendererUrl(
+  mainPath: string | undefined,
+  executablePath: string | undefined,
+  probe: () => Promise<string> = findDevServerUrl,
+): Promise<string> {
+  return mainPath || executablePath ? '' : probe();
+}
 
 /**
  * `process.env` is typed `string | undefined` per key, but Playwright's `env`
@@ -181,6 +192,10 @@ export function buildTestEnv(
     ...options?.env,
     // Real provider runs use a separate explicit runner, never inherited approval.
     NIMBALYST_ALLOW_OPENAI_API: '0',
+    // After `options.env` and never deleted below: every launch wipes
+    // userData, so any event sent from a test registers as a new install.
+    // `PLAYWRIGHT` alone is not enough because session-restore specs drop it.
+    NIMBALYST_DISABLE_ANALYTICS: '1',
   };
 
   const permissionMode = options?.permissionMode ?? 'allow-all';
@@ -193,6 +208,7 @@ export function buildTestEnv(
     delete testEnv.ENABLE_SESSION_RESTORE;
   }
 
+  if (!devServerUrl) delete testEnv.ELECTRON_RENDERER_URL;
   return isolatedAgentEnvironment(path.join(testEnv.NIMBALYST_USER_DATA_DIR, 'agent-home'), testEnv);
 }
 
@@ -284,14 +300,18 @@ export async function launchElectronApp(options?: {
     preserveTestDatabase: options?.preserveTestDatabase,
     userDataDir: options?.env?.NIMBALYST_USER_DATA_DIR,
   });
-  const devServerUrl = await findDevServerUrl();
-  const args = buildElectronArgs(electronMain, options?.workspace);
+  const executablePath = process.env.NIMBALYST_E2E_APP_PATH;
+  const devServerUrl = await resolveTestRendererUrl(options?.mainPath ?? process.env.NIMBALYST_E2E_MAIN_PATH, executablePath);
   const testEnv = buildTestEnv(devServerUrl, {
     env: options?.env,
     permissionMode: options?.permissionMode,
   });
 
+  await fs.mkdir(testEnv.NIMBALYST_USER_DATA_DIR, { recursive: true });
+  await fs.mkdir(testEnv.APPDATA, { recursive: true });
+  const args = buildElectronArgs(executablePath ? undefined : electronMain, options?.workspace, testEnv.NIMBALYST_USER_DATA_DIR);
   const app = await _electron.launch({
+    ...(executablePath ? { executablePath } : {}),
     ...(recordVideoConfig ? { recordVideo: recordVideoConfig } : {}),
     args,
     cwd: electronCwd,
@@ -321,12 +341,14 @@ export async function launchElectronAppViaCdp(options?: {
     userDataDir: options?.env?.NIMBALYST_USER_DATA_DIR,
   });
   const devServerUrl = await findDevServerUrl();
-  const args = buildElectronArgs(electronMain, options?.workspace);
   const testEnv = buildTestEnv(devServerUrl, {
     env: options?.env,
     permissionMode: options?.permissionMode,
   });
 
+  await fs.mkdir(testEnv.NIMBALYST_USER_DATA_DIR, { recursive: true });
+  await fs.mkdir(testEnv.APPDATA, { recursive: true });
+  const args = buildElectronArgs(electronMain, options?.workspace, testEnv.NIMBALYST_USER_DATA_DIR);
   const electronBinary = (await import('electron')).default as unknown as string;
   const child = spawn(electronBinary, args, {
     cwd: electronCwd,

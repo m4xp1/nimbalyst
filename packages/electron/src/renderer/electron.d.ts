@@ -25,6 +25,8 @@ interface FileTreeItem {
   type: 'file' | 'directory';
   children?: FileTreeItem[];
   childrenTruncated?: boolean;
+  omittedChildCount?: number;
+  omittedChildCountIsMinimum?: boolean;
 }
 
 interface ClaudeForWindowsInstallation {
@@ -54,6 +56,15 @@ interface ArchiveTask {
   status: 'queued' | 'pending' | 'removing-worktree' | 'completed' | 'failed';
   startTime: Date;
   error?: string;
+}
+
+interface ProjectMoveJob {
+  oldPath: string;
+  newPath: string;
+  status: 'running' | 'succeeded' | 'failed';
+  phase: 'backup' | 'moving' | 'moving-worktrees' | 'database' | 'repairing-worktrees' | null;
+  error?: string;
+  warnings?: string[];
 }
 
 interface GhCliStatus {
@@ -192,6 +203,7 @@ interface ElectronAPI {
   team: {
     list: (options?: { forceRefresh?: boolean }) => Promise<OrganizationDirectoryResult>;
     getKeyCustodyStatus: (orgId: string) => Promise<{ success: boolean; mode?: 'server-managed' | 'unmigrated'; error?: string }>;
+    recovery: (orgId: string, command: import('../shared/teamRecovery').TeamRecoveryCommand, options?: { workspacePath?: string; password?: string }) => Promise<{ success: boolean; overview?: import('../shared/teamRecovery').TeamRecoveryOverview; error?: string }>;
     openManagementWindow: (target?: TeamManagementWindowTarget) => Promise<{ success: boolean }>;
     resolveOrgProjectsLocalState: (orgId: string) => Promise<{
       success: boolean;
@@ -311,7 +323,6 @@ interface ElectronAPI {
   onWorkspaceTeamResolutionInvalidated: (callback: (workspacePath?: string) => void) => () => void;
   onWorkspaceOpened: (callback: (data: { workspacePath: string; workspaceName: string; fileTree: FileTreeItem[] }) => void) => () => void;
   onOpenWorkspaceFile: (callback: (filePath: string) => void) => () => void;
-  onOpenDocument: (callback: (data: { path: string }) => void) => () => void;
   onOpenWorkspaceFromCLI: (callback: (workspacePath: string) => void) => () => void;
   onWorkspaceFileTreeUpdated: (callback: (data: { fileTree: FileTreeItem[]; addedPath?: string; removedPath?: string }) => void) => () => void;
 
@@ -459,6 +470,8 @@ interface ElectronAPI {
   copyToClipboard: (text: string) => Promise<{ success: boolean }>;
   copyImageToClipboard: (payload: { filePath?: string; dataUrl?: string }) => Promise<{ success: boolean; error?: string }>;
   readClipboard: () => Promise<{ success: boolean; text?: string }>;
+  /** Under WSL, the image on the Windows clipboard; null elsewhere or when there is none. */
+  readWindowsClipboardImage: () => Promise<{ mimeType: string; data: Uint8Array<ArrayBuffer> } | null>;
 
   // Settings operations
   getSidebarWidth: (workspacePath: string) => Promise<number>;
@@ -659,7 +672,7 @@ interface ElectronAPI {
   onMcpRenameSharedItem: (callback: (data: { itemId: string, kind: 'doc' | 'folder', newName: string, resultChannel: string }) => void) => () => void;
   onMcpDeleteSharedItem: (callback: (data: { itemId: string, kind: 'doc' | 'folder', resultChannel: string }) => void) => () => void;
   sendMcpCollabIndexResult: (resultChannel: string, result: { success: boolean; error?: string; [key: string]: unknown }) => void;
-  onMcpGetResourceSharingStatus: (callback: (data: { sourceId: string; resultChannel: string }) => void) => () => void;
+  onMcpGetResourceSharingStatus: (callback: (data: { sourceId: string; workspacePath?: string; resultChannel: string }) => void) => () => void;
   sendMcpCollabReadResult: (resultChannel: string, result: { success: boolean; result?: unknown; error?: string }) => void;
   updateMcpDocumentState: (state: any) => void;
   clearMcpDocumentState: () => Promise<void>;
@@ -731,8 +744,11 @@ interface ElectronAPI {
   // Project Migration (move/rename)
   projectMigration: {
     canMove: (oldPath: string) => Promise<{ canMove: boolean; reason?: string }>;
-    move: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string; newPath?: string }>;
-    rename: (oldPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string }>;
+    /** Starts a background move; progress arrives through onMoveProgress */
+    move: (oldPath: string, newPath: string) => Promise<{ started: boolean; error?: string }>;
+    getMoveJobs: () => Promise<ProjectMoveJob[]>;
+    onMoveProgress: (callback: (job: ProjectMoveJob) => void) => () => void;
+    rename: (oldPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string; warnings?: string[] }>;
   };
 
   // Tracker lifecycle: personal -> team promotion (one-way) and archive.

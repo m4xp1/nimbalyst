@@ -3,12 +3,12 @@ Nimbalyst Third-Party Notices
 This file aggregates license and notice texts for third-party packages reachable
 from the Electron app, runtime package, and built-in extensions.
 
-Package count: 1003
+Package count: 1005
 Packages requiring manual review: 0
 Approved exceptions (non-permissive licenses, manually reviewed): 3
 
 Approved exceptions:
-- @anthropic-ai/claude-agent-sdk@0.3.300 (Anthropic Commercial): Anthropic commercial license (https://code.claude.com/docs/en/legal-and-compliance). Permits use by developers writing code locally, which is exactly how Nimbalyst integrates the SDK. Used unmodified.
+- @anthropic-ai/claude-agent-sdk@0.3.321 (Anthropic Commercial): Anthropic commercial license (https://code.claude.com/docs/en/legal-and-compliance). Permits use by developers writing code locally, which is exactly how Nimbalyst integrates the SDK. Used unmodified.
 - elkjs@0.11.1 (EPL-2.0): Eclipse Public License 2.0. Bundled unmodified as a JavaScript library. EPL-2.0 is a file-level weak copyleft that permits this without affecting Nimbalyst's licensing; only modifications to elkjs itself would need to be released under EPL-2.0.
 - libheif-js@1.19.8 (LGPL-3.0): GNU Lesser GPL 3.0. Bundled unmodified as a JavaScript module loaded at runtime from node_modules; users can substitute their own build. License text is included in THIRD_PARTY_NOTICES.txt. No copyleft contagion to Nimbalyst's source.
 
@@ -241,7 +241,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@anthropic-ai/claude-agent-sdk@0.3.300
+@anthropic-ai/claude-agent-sdk@0.3.321
 Selected license: Unknown
 Declared license: SEE LICENSE IN README.md
 Install paths: node_modules/@anthropic-ai/claude-agent-sdk
@@ -3664,7 +3664,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/clipboard@0.44.0
+@lexical/a11y@0.53.0
+Selected license: MIT
+Declared license: MIT
+Install paths: node_modules/@lexical/a11y
+
+--- LICENSE (node_modules\@lexical\a11y\LICENSE) ---
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+@lexical/clipboard@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/clipboard
@@ -3693,7 +3722,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/code@0.44.0
+@lexical/code@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/code
@@ -3722,7 +3751,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/code-core@0.44.0
+@lexical/code-core@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/code-core
@@ -3751,7 +3780,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/code-prism@0.44.0
+@lexical/code-prism@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/code-prism
@@ -3780,7 +3809,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/code-shiki@0.44.0
+@lexical/code-shiki@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/code-shiki
@@ -3809,7 +3838,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/devtools-core@0.44.0
+@lexical/devtools-core@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/devtools-core
@@ -3838,7 +3867,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/dragon@0.44.0
+@lexical/dragon@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/dragon
@@ -3867,7 +3896,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/extension@0.44.0
+@lexical/extension@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/extension
@@ -3896,7 +3925,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/file@0.44.0
+@lexical/file@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/file
@@ -3925,7 +3954,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/hashtag@0.44.0
+@lexical/hashtag@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/hashtag
@@ -3954,7 +3983,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/history@0.44.0
+@lexical/history@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/history
@@ -3983,7 +4012,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/html@0.44.0
+@lexical/html@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/html
@@ -4012,7 +4041,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/link@0.44.0
+@lexical/internal@0.53.0
+Selected license: MIT
+Declared license: MIT
+Install paths: node_modules/@lexical/internal
+
+--- LICENSE (node_modules\@lexical\internal\LICENSE) ---
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+@lexical/link@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/link
@@ -4041,7 +4099,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/list@0.44.0
+@lexical/list@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/list
@@ -4070,7 +4128,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/mark@0.44.0
+@lexical/mark@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/mark
@@ -4099,7 +4157,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/markdown@0.44.0
+@lexical/markdown@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/markdown
@@ -4128,7 +4186,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/overflow@0.44.0
+@lexical/overflow@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/overflow
@@ -4157,7 +4215,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/plain-text@0.44.0
+@lexical/plain-text@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/plain-text
@@ -4186,7 +4244,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/react@0.44.0
+@lexical/react@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/react
@@ -4215,7 +4273,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/rich-text@0.44.0
+@lexical/rich-text@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/rich-text
@@ -4244,7 +4302,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/selection@0.44.0
+@lexical/selection@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/selection
@@ -4273,7 +4331,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/table@0.44.0
+@lexical/table@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/table
@@ -4302,7 +4360,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/text@0.44.0
+@lexical/text@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/text
@@ -4331,7 +4389,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/utils@0.44.0
+@lexical/utils@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/utils
@@ -4360,7 +4418,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@lexical/yjs@0.44.0
+@lexical/yjs@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@lexical/yjs
@@ -4534,7 +4592,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@openai/codex@0.167.0-alpha.3.2
+@openai/codex@0.167.0
 Selected license: Apache-2.0
 Declared license: Apache-2.0
 Install paths: node_modules/@openai/codex
@@ -4543,7 +4601,7 @@ Issues: No license file found in package directory
 No license file found.
 
 ================================================================================
-@openai/codex-sdk@0.167.0-alpha.3.2
+@openai/codex-sdk@0.167.0
 Selected license: Apache-2.0
 Declared license: Apache-2.0
 Install paths: node_modules/@openai/codex-sdk
@@ -5112,7 +5170,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@preact/signals-core@1.14.1
+@preact/signals-core@1.14.5
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@preact/signals-core
@@ -5849,7 +5907,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/core@4.0.2
+@shikijs/core@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/core
@@ -5879,7 +5937,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/engine-javascript@4.0.2
+@shikijs/engine-javascript@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/engine-javascript
@@ -5909,7 +5967,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/engine-oniguruma@4.0.2
+@shikijs/engine-oniguruma@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/engine-oniguruma
@@ -5939,7 +5997,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/langs@4.0.2
+@shikijs/langs@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/langs
@@ -5969,7 +6027,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/primitive@4.0.2
+@shikijs/primitive@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/primitive
@@ -5999,7 +6057,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/themes@4.0.2
+@shikijs/themes@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/themes
@@ -6029,7 +6087,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@shikijs/types@4.0.2
+@shikijs/types@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/@shikijs/types
@@ -7423,6 +7481,104 @@ Declared license: MIT
 Install paths: node_modules/@types/hast
 
 --- LICENSE (node_modules\@types\hast\LICENSE) ---
+    MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
+
+================================================================================
+@types/hast@3.0.5
+Selected license: MIT
+Declared license: MIT
+Install paths: node_modules/@shikijs/types/node_modules/@types/hast, node_modules/@shikijs/primitive/node_modules/@types/hast, node_modules/@shikijs/core/node_modules/@types/hast, node_modules/shiki/node_modules/@types/hast
+
+--- LICENSE (node_modules\@shikijs\types\node_modules\@types\hast\LICENSE) ---
+    MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
+
+--- LICENSE (node_modules\@shikijs\primitive\node_modules\@types\hast\LICENSE) ---
+    MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
+
+--- LICENSE (node_modules\@shikijs\core\node_modules\@types\hast\LICENSE) ---
+    MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
+
+--- LICENSE (node_modules\shiki\node_modules\@types\hast\LICENSE) ---
     MIT License
 
     Copyright (c) Microsoft Corporation.
@@ -20568,7 +20724,7 @@ Issues: No license file found in package directory
 No license file found.
 
 ================================================================================
-lexical@0.44.0
+lexical@0.53.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/lexical
@@ -34051,34 +34207,6 @@ SOFTWARE.
 react-error-boundary@4.1.2
 Selected license: MIT
 Declared license: MIT
-Install paths: packages/runtime/node_modules/react-error-boundary
-
---- LICENSE (packages\runtime\node_modules\react-error-boundary\LICENSE) ---
-The MIT License (MIT)
-Copyright (c) 2020 Brian Vaughn
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-react-error-boundary@6.1.2
-Selected license: MIT
-Declared license: MIT
 Install paths: node_modules/react-error-boundary
 
 --- LICENSE (node_modules\react-error-boundary\LICENSE) ---
@@ -38048,7 +38176,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ================================================================================
-shiki@4.0.2
+shiki@4.5.0
 Selected license: MIT
 Declared license: MIT
 Install paths: node_modules/shiki

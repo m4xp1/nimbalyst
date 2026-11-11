@@ -2,10 +2,12 @@ import {getPrivilegedExtensionHost} from '../extensions/PrivilegedExtensionHost'
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
 import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey, scanSearchRoots } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
+import { systemShell } from '../utils/systemShell';
+import { readWindowsClipboardImage } from '../utils/windowsClipboard';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
 import { join, basename, dirname, extname } from 'path';
 import * as path from 'path';
-import { exec, execFile, spawn } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { AnalyticsService } from '../services/analytics/AnalyticsService';
 import { openWorkspaceFile, openFile } from '../file/FileOpener';
@@ -16,14 +18,19 @@ import { getSyncId, removeFileFromIndex } from '../services/DocSyncService';
 const { writeFile, mkdir, rename, unlink, rmdir, copyFile, readFile, rm, stat, cp } = fsPromises;
 
 const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
 import { windowStates, getWindowId, createWindow, markRecentlyDeleted, clearRecentlyDeleted } from '../window/WindowManager';
 // Aliased: this module has a local `windows` (BrowserWindow[]) further down.
-import { syncRepresentedFilename, windows as windowsById } from '../window/windowState';
+import {
+    syncRepresentedFilename,
+    windows as windowsById,
+    getWindowProjectPaths,
+    resolveActiveWorkspacePath,
+    resolveProjectForFile,
+} from '../window/windowState';
+import { WORKSPACE_ACTIVATE_CHANNEL } from '../window/workspaceWindowMatch';
 import { startFileWatcher, stopFileWatcher } from '../file/FileWatcher';
 import { getFolderContents, listFolderFilesRecursive } from '../utils/FileTree';
 import { decodeTextFileBuffer } from '../utils/textEncoding';
-import { RIPGREP_EXCLUDE_ARGS_ARRAY, QUICKOPEN_FILE_TYPE_ARGS } from '../utils/fileFilters';
 import {
     getWorkspaceRecentFiles,
     addWorkspaceRecentFile,
@@ -41,8 +48,7 @@ import {
 } from '../services/tracker/localKeyAllocator';
 import { workspaceLocalKeyStore } from '../services/tracker/workspaceLocalKeyStore';
 import { database } from '../database/PGLiteDatabaseWorker';
-import { getRipgrepPath } from '../services/ripgrepPath';
-import { findWorkspaceFiles, listContentSearchRoots } from '../file/QuickOpenFileScanner';
+import { findWorkspaceFiles, listContentSearchRoots, searchFileContent } from '../file/QuickOpenFileScanner';
 import { quickOpenFileNameCache } from '../file/QuickOpenFileNameCache';
 
 /**
@@ -174,7 +180,7 @@ export function registerWorkspaceHandlers() {
             let isBinary = forceBinary;
             if (!forceBinary) {
                 const ext = extname(filePath).toLowerCase();
-                const binaryExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.zip', '.tar', '.gz', '.woff', '.woff2', '.ttf', '.eot'];
+                const binaryExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.zip', '.tar', '.gz', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.mov', '.m4v', '.webm', '.mkv', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.webp', '.avif', '.heic'];
                 isBinary = binaryExtensions.includes(ext);
             }
 
@@ -228,9 +234,13 @@ export function registerWorkspaceHandlers() {
             // Use unified FileOpener API with skipFileWatcher=true
             // File watchers are managed separately by start-watching-file/stop-watching-file
             // when tabs are opened/closed, not when switching between them
+            // The file's own rail project, which need not be the window's
+            // first one; openFile records the recent file under it.
+            const fileWorkspacePath = resolveProjectForFile(state ?? undefined, filePath)
+                ?? resolveActiveWorkspacePath(state ?? undefined);
             const result = await openFile({
                 filePath,
-                workspacePath: state?.workspacePath || undefined,
+                workspacePath: fileWorkspacePath || undefined,
                 source: 'tab_switch',
                 targetWindow: window,
                 skipFileWatcher: true,  // Tabs manage their own watchers
@@ -358,66 +368,10 @@ export function registerWorkspaceHandlers() {
             const trimmedQuery = query.trim();
             if (!trimmedQuery) return [];
 
-            const rgPath = getRipgrepPath();
-            const rgArgs = [
-                ...QUICKOPEN_FILE_TYPE_ARGS,
-                '-i',
-                '--json',
-                ...RIPGREP_EXCLUDE_ARGS_ARRAY,
-                fileContentPattern(trimmedQuery),
-                // ripgrep takes N search roots directly, so a multi-root
-                // workspace is one invocation, not one per root.
-                ...await listContentSearchRoots(scanSearchRoots(describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath))).map(root=>root.path))
-            ];
-
-            let stdout = '';
-            try {
-                const result = await execFileAsync(rgPath, rgArgs, { maxBuffer: 5 * 1024 * 1024 });
-                stdout = result.stdout;
-            } catch (execError: any) {
-                // ripgrep returns exit code 1 when no matches found, which is not an error
-                if (execError.code === 1) {
-                    stdout = execError.stdout || '';
-                } else {
-                    throw execError;
-                }
-            }
-
-            const contentMatches = new Map<string, any>();
-            if (stdout) {
-                const lines = stdout.split('\n').filter(line => line.trim());
-                for (const line of lines) {
-                    try {
-                        const item = JSON.parse(line);
-                        if (item.type === 'match') {
-                            const match = decodeRipgrepMatch(item.data, trimmedQuery);
-                            if (!match) continue;
-                            const filePath = canonicalSearchPath(item.data.path.text);
-                            const fileKey = searchPathKey(filePath);
-                            if (!contentMatches.has(fileKey)) {
-                                contentMatches.set(fileKey, {
-                                    path: path.normalize(filePath),
-                                    isContentMatch: true,
-                                    matches: []
-                                });
-                            }
-
-                            const matches=contentMatches.get(fileKey).matches;
-                            if(!matches.some((previous:any)=>previous.line===match.line && previous.start===match.start && previous.end===match.end))matches.push(match);
-                        }
-                    } catch (e) {
-                        // Skip invalid JSON lines
-                    }
-                }
-            }
-
-            const currentSearchRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
-            return Array.from(contentMatches.values())
-                .filter(item => owningSearchRoot(currentSearchRoots, item.path)?.available)
-                .sort((a, b) => {
-                const exact = (r: any) => r.matches.some((m: any) => m.keywordMatch !== 'stem');
-                return Number(exact(b)) - Number(exact(a));
-            }).slice(0, 50);
+            const roots = scanSearchRoots(describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath))).map(root => root.path);
+            const matches = await searchFileContent(await listContentSearchRoots(roots), trimmedQuery);
+            const currentRoots = describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath));
+            return matches.filter(item => owningSearchRoot(currentRoots, item.path)?.available);
         } catch (error) {
             console.error('Error searching file content:', error);
             return [];
@@ -456,67 +410,18 @@ export function registerWorkspaceHandlers() {
 
             // Then search content using ripgrep
             try {
-                const rgPath = getRipgrepPath();
-                const rgArgs = [
-                    '--type', 'md',
-                    '-i',
-                    '--json',
-                    ...RIPGREP_EXCLUDE_ARGS_ARRAY,
+                const contentMatches = await searchFileContent(
+                    await listContentSearchRoots(scanSearchRoots(describeWorkspaceSearchRoots(getWorkspaceRoots(workspacePath))).map(root => root.path)),
                     trimmedQuery,
-                    ...await listContentSearchRoots(getWorkspaceRoots(workspacePath))
-                ];
-
-                let stdout = '';
-                try {
-                    const result = await execFileAsync(rgPath, rgArgs, { maxBuffer: 5 * 1024 * 1024 });
-                    stdout = result.stdout;
-                } catch (execError: any) {
-                    // ripgrep returns exit code 1 when no matches found, which is not an error
-                    if (execError.code === 1) {
-                        stdout = execError.stdout || '';
+                    { typeArgs: ['--type', 'md'] },
+                );
+                for (const data of contentMatches) {
+                    const existing = allResults.find(r => r.path === data.path);
+                    if (existing) {
+                        existing.matches = data.matches;
+                        existing.isContentMatch = true;
                     } else {
-                        throw execError;
-                    }
-                }
-
-                if (stdout) {
-                    const lines = stdout.split('\n').filter(line => line.trim());
-                    const contentMatches = new Map<string, any>();
-
-                    for (const line of lines) {
-                        try {
-                            const item = JSON.parse(line);
-                            if (item.type === 'match') {
-                                const filePath = path.normalize(item.data.path.text);
-                                if (!contentMatches.has(filePath)) {
-                                    contentMatches.set(filePath, {
-                                        path: filePath,
-                                        isContentMatch: true,
-                                        matches: []
-                                    });
-                                }
-
-                                contentMatches.get(filePath).matches.push({
-                                    line: item.data.line_number,
-                                    text: item.data.lines.text.trim(),
-                                    start: item.data.submatches[0]?.start || 0,
-                                    end: item.data.submatches[0]?.end || item.data.lines.text.length
-                                });
-                            }
-                        } catch (e) {
-                            // Skip invalid JSON lines
-                        }
-                    }
-
-                    // Merge content matches with existing results
-                    for (const [filePath, data] of contentMatches) {
-                        const existing = allResults.find(r => r.path === filePath);
-                        if (existing) {
-                            existing.matches = data.matches;
-                            existing.isContentMatch = true;
-                        } else {
-                            allResults.push(data);
-                        }
+                        allResults.push(data);
                     }
                 }
             } catch (error: any) {
@@ -565,9 +470,9 @@ export function registerWorkspaceHandlers() {
             const windowId = getWindowId(window);
             if (windowId === null) return [];
 
-            const state = windowStates.get(windowId);
-            if (!state || !state.workspacePath) return [];
-            scope = state.workspacePath;
+            const activeWorkspacePath = resolveActiveWorkspacePath(windowStates.get(windowId));
+            if (!activeWorkspacePath) return [];
+            scope = activeWorkspacePath;
         }
 
         // Get recent files for this workspace from store
@@ -592,9 +497,10 @@ export function registerWorkspaceHandlers() {
         if (windowId === null) return;
 
         const state = windowStates.get(windowId);
-        if (!state || !state.workspacePath) return;
+        const workspacePath = resolveProjectForFile(state, filePath) ?? resolveActiveWorkspacePath(state);
+        if (!workspacePath) return;
 
-        addWorkspaceRecentFile(state.workspacePath, filePath);
+        addWorkspaceRecentFile(workspacePath, filePath);
     });
 
     // Get entire workspace state - no routing, no BS
@@ -777,9 +683,9 @@ export function registerWorkspaceHandlers() {
             if (!isDirectory && filePath.endsWith('.md')) {
               const window = BrowserWindow.fromWebContents(event.sender);
               const wId = window ? getWindowId(window) : null;
-              const wState = wId !== null ? windowStates.get(wId) : null;
-              if (wState?.workspacePath) {
-                deletedSyncId = getSyncId(filePath, wState.workspacePath);
+              const ownerPath = wId !== null ? resolveProjectForFile(windowStates.get(wId), filePath) : null;
+              if (ownerPath) {
+                deletedSyncId = getSyncId(filePath, ownerPath);
               }
             }
 
@@ -984,7 +890,21 @@ export function registerWorkspaceHandlers() {
             if (!window) {
                 throw new Error('No window found for event sender');
             }
-            window.webContents.send('open-document', { path: absoluteFilePath });
+            // Name the rail project so the open lands in that project's
+            // editor, not whichever one is on screen. A root outside the rail
+            // (an attached folder) has no editor of its own, so it is omitted.
+            const windowId = getWindowId(window);
+            const state = windowId !== null ? windowStates.get(windowId) : undefined;
+            const railWorkspacePath = workspacePath && state && getWindowProjectPaths(state).includes(workspacePath)
+                ? workspacePath
+                : undefined;
+            if (railWorkspacePath && railWorkspacePath !== resolveActiveWorkspacePath(state)) {
+                // The open waits for that project's editor, so bring it on screen.
+                window.webContents.send(WORKSPACE_ACTIVATE_CHANNEL, { workspacePath: railWorkspacePath });
+            }
+            window.webContents.send('open-document', railWorkspacePath
+                ? { path: absoluteFilePath, workspacePath: railWorkspacePath }
+                : { path: absoluteFilePath });
 
             return { success: true };
         } catch (error: any) {
@@ -996,7 +916,7 @@ export function registerWorkspaceHandlers() {
     safeHandle('open-in-default-app', async (event, filePath: string) => {
         try {
             // Open file in the OS default application
-            const result = await shell.openPath(filePath);
+            const result = await systemShell.openPath(filePath);
             if (result) {
                 // openPath returns an error string if it failed, empty string on success
                 return { success: false, error: result };
@@ -1041,10 +961,14 @@ export function registerWorkspaceHandlers() {
         return { success: true, text: clipboard.readText() };
     });
 
+    safeHandle('read-image-from-windows-clipboard', async () => {
+        return readWindowsClipboardImage();
+    });
+
     safeHandle('show-in-finder', async (event, filePath: string) => {
 
         try {
-            shell.showItemInFolder(filePath);
+            systemShell.showItemInFolder(filePath);
             return { success: true };
         } catch (error: any) {
             console.error('Error showing in finder:', error);

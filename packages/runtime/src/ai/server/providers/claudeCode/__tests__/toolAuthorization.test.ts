@@ -46,6 +46,18 @@ describe('handleToolPermissionWithService', () => {
       expect(deps.requestToolPermission).toHaveBeenCalledWith(expect.objectContaining(hints));
     });
 
+    it('tells the permission service when the user must decide (#1740)', async () => {
+      const deps = createDeps();
+      await handleToolPermissionWithService(deps, createParams({ requiresUserDecision: true }));
+      expect(deps.requestToolPermission).toHaveBeenCalledWith(expect.objectContaining({ requiresUserDecision: 'escalated' }));
+    });
+
+    it('marks a PreToolUse hook ask so nothing remembered answers it (#1741)', async () => {
+      const deps = createDeps();
+      await handleToolPermissionWithService(deps, createParams({ options: { signal: new AbortController().signal, decisionReasonType: 'hook' } }));
+      expect(deps.requestToolPermission).toHaveBeenCalledWith(expect.objectContaining({ requiresUserDecision: 'hook-ask' }));
+    });
+
     it('allow decision includes updatedInput', async () => {
       const deps = createDeps();
       const result = await handleToolPermissionWithService(deps, createParams());
@@ -113,6 +125,13 @@ describe('handleToolPermissionFallback', () => {
       deps.permissions.sessionApprovedPatterns.add(generateToolPattern('Bash', input));
       const result = await handleToolPermissionFallback(deps, createParams());
       assertZodCompliantAllow(result);
+    });
+
+    it('a PreToolUse hook ask prompts even when the pattern is approved this session (#1741)', async () => {
+      const deps = createDeps();
+      deps.permissions.sessionApprovedPatterns.add(generateToolPattern('Bash', { command: 'npm test' }));
+      void handleToolPermissionFallback(deps, createParams({ options: { signal: new AbortController().signal, decisionReasonType: 'hook' } }));
+      await vi.waitFor(() => expect(deps.permissions.pendingToolPermissions.size).toBe(1));
     });
 
     it('WebFetch wildcard allow includes updatedInput', async () => {

@@ -22,6 +22,10 @@ import * as rtl from '@testing-library/react';
 import { createStore, Provider as JotaiProvider } from 'jotai';
 import type { TranscriptViewMessage } from '../../../../ai/server/transcript/TranscriptProjector';
 import type { CustomToolWidgetProps } from '../CustomToolWidgets/index';
+import type { InteractiveWidgetHost } from '../CustomToolWidgets/InteractiveWidgetHost';
+import { exitPlanModeDenialReason } from '../../../../ai/exitPlanModeDeferral';
+import { store as globalStore } from '../../../../store/store';
+import { setInteractiveWidgetHost } from '../../../../store/atoms/interactiveWidgetHost';
 
 const { render, screen, fireEvent, waitFor } = rtl;
 
@@ -1255,6 +1259,52 @@ describe('GitCommitConfirmationWidget', () => {
     expect(screen.getByTestId('git-commit-error').textContent).toContain('HOOK_DETAIL: lint failed');
   });
 
+  it.each([
+    ['committed', 'Commit hash: abc1234', 'Changes Committed'],
+    ['error', 'Error: hook failed', 'Commit Failed'],
+  ])('waits for the server result before showing auto-commit %s', async (state, result, title) => {
+    const { interactiveWidgetHostAtom } = await import('../../../../store/atoms/interactiveWidgetHost');
+    const testStore = createStore();
+    const gitCommit = vi.fn();
+    testStore.set(interactiveWidgetHostAtom('auto-result'), {
+      autoCommitEnabled: true, gitCommit, trackEvent: vi.fn(),
+    } as unknown as import('../CustomToolWidgets/InteractiveWidgetHost').InteractiveWidgetHost);
+    const message = makeToolMessage('git_commit_proposal', {
+      commitMessage: 'fix: wait for result', filesToStage: ['file.ts'],
+    });
+    const tree = (msg: typeof message) => <JotaiProvider store={testStore}>
+      <GitCommitConfirmationWidget message={msg} isExpanded={false} onToggle={() => {}} sessionId="auto-result" />
+    </JotaiProvider>;
+    const { rerender } = render(tree(message));
+    expect(screen.queryByText('Changes Committed')).toBeNull();
+    expect(screen.getByTestId('git-commit-widget').dataset.state).toBe('committing');
+    expect(gitCommit).not.toHaveBeenCalled();
+    rerender(tree({ ...message, toolCall: { ...message.toolCall!, result,
+      ...(state === 'error' ? { isError: true } : {}) } }));
+    expect(screen.getByTestId('git-commit-widget').dataset.state).toBe(state);
+    expect(screen.getByText(title).textContent).toBe(title);
+    expect(gitCommit).not.toHaveBeenCalled();
+  });
+
+  // #1890: the host's recorded decision wins over the live preference.
+  it.each([
+    [true, false, 'pending'],
+    [false, true, 'committing'],
+  ])('renders from the host decision (preference=%s, autoApproved=%s)', async (pref, autoApproved, state) => {
+    const { interactiveWidgetHostAtom } = await import('../../../../store/atoms/interactiveWidgetHost');
+    const testStore = createStore();
+    testStore.set(interactiveWidgetHostAtom('host-decision'), {
+      autoCommitEnabled: pref, gitCommit: vi.fn(), trackEvent: vi.fn(),
+    } as unknown as import('../CustomToolWidgets/InteractiveWidgetHost').InteractiveWidgetHost);
+    const message = makeToolMessage('git_commit_proposal', {
+      commitMessage: 'fix: x', filesToStage: ['file.ts'], autoApproved,
+    });
+    render(<JotaiProvider store={testStore}>
+      <GitCommitConfirmationWidget message={message} isExpanded={false} onToggle={() => {}} sessionId="host-decision" />
+    </JotaiProvider>);
+    expect(screen.getByTestId('git-commit-widget').dataset.state).toBe(state);
+  });
+
   it('sends cancel through the interactive host', async () => {
     const { interactiveWidgetHostAtom } = await import('../../../../store/atoms/interactiveWidgetHost');
 
@@ -1530,6 +1580,40 @@ describe('ExitPlanModeWidget', () => {
     const widget = screen.getByTestId('exit-plan-mode-widget');
     expect(widget.dataset.state).toBe('denied');
     expect(screen.getByText('Continued Planning')).toBeDefined();
+  });
+
+  // Starting a new session stops this one with a non-approval, which used to
+  // read as "Denied". The recorded reason is the only record after a reload.
+  it('shows a plan handed to a new session as deferred, live and after a reload', async () => {
+    const host = { exitPlanModeStartNewSession: vi.fn().mockResolvedValue(undefined) };
+    setInteractiveWidgetHost('deferred-plan-live', host as unknown as InteractiveWidgetHost);
+    const live = render(
+      <JotaiProvider store={globalStore}>
+        <ExitPlanModeWidget
+          message={makeToolMessage('ExitPlanMode', { planFilePath: 'plan.md' })}
+          isExpanded={false}
+          onToggle={() => {}}
+          sessionId="deferred-plan-live"
+        />
+      </JotaiProvider>
+    );
+    await rtl.act(async () => { fireEvent.click(screen.getByTestId('exit-plan-mode-new-session')); });
+    expect(host.exitPlanModeStartNewSession).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('exit-plan-mode-widget').dataset.state).toBe('deferred');
+    live.unmount();
+
+    const reason = exitPlanModeDenialReason({ approved: false, deferredTo: { kind: 'session' } });
+    render(
+      <Wrapper>
+        <ExitPlanModeWidget
+          message={makeToolMessage('ExitPlanMode', { planFilePath: 'plan.md' }, reason)}
+          isExpanded={false}
+          onToggle={() => {}}
+          sessionId="deferred-plan-reloaded"
+        />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('exit-plan-mode-widget').dataset.state).toBe('deferred');
   });
 
   it('shows plan file path as clickable link', () => {
@@ -2365,5 +2449,40 @@ describe('VisualDisplayWidget', () => {
     const enlarged = await screen.findByTestId('zoomable-image');
     await waitFor(() => expect(enlarged.getAttribute('src')).toBe(`data:image/png;base64,${pixel}`));
     expect(readFile).toHaveBeenCalledWith('/tmp/arch-mock/b.png');
+  });
+
+  it('holds a remounted image row at its loaded height until the image is back', async () => {
+    // The virtual list unmounts rows that leave its buffer. A remount that
+    // shrank to the "Loading..." box made the list move the reader back to
+    // the image, so they could not reach the bottom.
+    const { VisualDisplayWidget } = await import('../CustomToolWidgets/VisualDisplayWidget');
+    const pixel = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    let readCount = 0;
+    const readFile = vi.fn(() => (++readCount === 1
+      ? Promise.resolve({ success: true, content: pixel })
+      : new Promise<{ success: boolean; content?: string }>(() => {})));
+    const message = makeToolMessage(
+      'mcp__nimbalyst__display_to_user',
+      { items: [{ description: 'Remount shot', image: { path: '/tmp/remount-height/shot.png' } }] },
+      'ok',
+    );
+    const widget = (
+      <Wrapper>
+        <VisualDisplayWidget message={message} isExpanded={false} onToggle={() => {}} sessionId="visual-remount" readFile={readFile} />
+      </Wrapper>
+    );
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ height: 352 } as DOMRect);
+    try {
+      const first = render(widget);
+      fireEvent.load(await screen.findByAltText('Remount shot'));
+      first.unmount();
+
+      const second = render(widget);
+      screen.getByText('Loading...');
+      const row = second.container.querySelector('.visual-display-image') as HTMLElement;
+      expect(row.style.minHeight).toBe('352px');
+    } finally {
+      rect.mockRestore();
+    }
   });
 });

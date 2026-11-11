@@ -637,7 +637,11 @@ export function registerSettingsHandlers() {
         const order = Array.isArray(paths) ? paths.filter(path => typeof path === 'string') : [];
         const windowId = getWindowIdForWindow(BrowserWindow.fromWebContents(event.sender));
         const state = windowId === null ? undefined : windowStates.get(windowId);
-        if (state) state.projectRailOrder = order;
+        if (state) {
+            state.projectRailOrder = order;
+            // The renderer now owns the rail; a reload must not resurrect the saved one.
+            state.restoredRail = undefined;
+        }
         setOpenProjectPaths(order);
     });
 
@@ -664,8 +668,8 @@ export function registerSettingsHandlers() {
     // suspected stall point on cold start. The renderer races this call against
     // a timeout (see useOnboarding.ts), so we want a main-side breadcrumb that
     // tells us whether the handler ever ran and how long the underlying store
-    // read took. Logs the elapsed time at info level so it lands in main.log on
-    // packaged builds.
+    // read took. Slow reads and failures remain visible in packaged builds;
+    // successful fast reads are debug-only.
     safeHandle('onboarding:get', async () => {
         const t0 = Date.now();
         try {
@@ -674,7 +678,7 @@ export function registerSettingsHandlers() {
             if (elapsed > 50) {
                 logger.main.warn(`[SettingsHandlers] onboarding:get slow read: ${elapsed}ms`);
             } else {
-                logger.main.info(`[SettingsHandlers] onboarding:get ok (${elapsed}ms)`);
+                logger.main.debug(`[SettingsHandlers] onboarding:get ok (${elapsed}ms)`);
             }
             return state;
         } catch (err) {
