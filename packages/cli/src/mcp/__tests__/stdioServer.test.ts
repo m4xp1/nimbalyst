@@ -17,9 +17,10 @@ import { PAGE_TOOL_NAMES, pageToolContract } from '@nimbalyst/collab-protocol';
 import { handleMessage, runStdioServer } from '../stdioServer.js';
 import { TeamScopeRefusal, ToolMap, textResult } from '../toolMap.js';
 import { resolvePluginWorkspace } from '../pluginWorkspace.js';
+import { pluginServerSetup } from '../pluginEntry.js';
 import { writeMigratedTo } from '../../localWiki/locate.js';
 import { createLocalToolMap, LOCAL_SERVER_INSTRUCTIONS, localWikiContext } from '../serverTools.js';
-import { detectPluginInstall, startUpdateCheck, type PluginInstall } from '../updateCheck.js';
+import { detectNpmInstall, detectPluginInstall, startUpdateCheck, type PluginInstall } from '../updateCheck.js';
 
 const EDITOR_TOOLS = ['mindmap_get_document', 'mindmap_apply_operations', 'excalidraw_get_elements', 'excalidraw_add_elements', 'excalidraw_add_arrows', 'excalidraw_remove_elements'];
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -45,6 +46,10 @@ beforeAll(async () => {
       '@nimbalyst/local-wiki': path.join(repoRoot, 'packages/local-wiki/src/index.ts'),
       '@nimbalyst/collab-protocol': path.join(repoRoot, 'packages/collab-protocol/src/index.ts'),
       '@nimbalyst/runtime/core/pageMarkSyntax': path.join(repoRoot, 'packages/runtime/src/core/pageMarkSyntax.ts'),
+      // As in scripts/build.mjs: the session-inputs server `nim hook` runs.
+      '@nimbalyst/wiki-plugin/session-inputs': path.join(repoRoot, 'packages/extensions/knowledge/src/sessionInputs/server.ts'),
+      '@nimbalyst/runtime/core/citationSyntax': path.join(repoRoot, 'packages/runtime/src/core/citationSyntax.ts'),
+      '@nimbalyst/runtime/core/textColorSyntax': path.join(repoRoot, 'packages/runtime/src/core/textColorSyntax.ts'),
     },
     logLevel: 'silent',
   });
@@ -401,6 +406,13 @@ describe('re-pointing the server at another project', () => {
     expect(LOCAL_SERVER_INSTRUCTIONS).toContain('`capture` skill');
     expect(LOCAL_SERVER_INSTRUCTIONS).toContain('listMarks');
   });
+
+  it('the local server steers the agent to its own tools, not a separately installed `nim` on PATH', () => {
+    // A user on plugin 0.11.0 had an agent read `nim --version` from an older global install and report the wrong version.
+    expect(LOCAL_SERVER_INSTRUCTIONS).toContain('`openWikiInBrowser`');
+    expect(LOCAL_SERVER_INSTRUCTIONS).toContain('`wikiDoctor`');
+    expect(LOCAL_SERVER_INSTRUCTIONS).toMatch(/`nim` command on the shell's PATH is a separate install/);
+  });
 });
 
 describe('plugin workspace', () => {
@@ -417,11 +429,13 @@ describe('plugin workspace', () => {
 
 describe('plugin update check', () => {
   const install: PluginInstall = {
+    kind: 'plugin',
     agent: 'claude',
     marketplace: 'nimbalyst',
     version: '0.5.0',
-    manifestUrl: 'https://example.test/plugin.json',
+    url: 'https://example.test/plugin.json',
   };
+  const cachedAs = (latestVersion: string | null, checkedAt: number, ok = true) => ({ [install.url]: { checkedAt, latestVersion, ok } });
   const manifestFetch = (version: string) => (async () => new Response(JSON.stringify({ version }))) as unknown as typeof fetch;
 
   it('appends the notice once, to the first successful tool result after a newer version is fetched, and caches it', async () => {
@@ -430,7 +444,7 @@ describe('plugin update check', () => {
       const cacheFile = path.join(dir, 'nested', 'update-check.json');
       const check = startUpdateCheck({ install, env: {}, cacheFile, now: () => 1000, fetchImpl: manifestFetch('0.6.0'), log: () => {} });
       await check.settled;
-      expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toEqual({ checkedAt: 1000, latestVersion: '0.6.0' });
+      expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toEqual(cachedAs('0.6.0', 1000));
 
       const tools = new ToolMap()
         .register({ definition: { name: 'ok', description: 'Ok.', inputSchema: { type: 'object', properties: {} } }, call: async () => textResult('done') })
@@ -449,12 +463,12 @@ describe('plugin update check', () => {
     }
   });
 
-  it('uses a fresh cache without fetching, refetches a stale one, and stays quiet when opted out or offline', async () => {
+  it('uses a fresh cache without fetching, refetches a stale one, and stays quiet when opted out, in CI or offline', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'nim-update-'));
     try {
       const cacheFile = path.join(dir, 'update-check.json');
       const day = 24 * 60 * 60 * 1000;
-      writeFileSync(cacheFile, JSON.stringify({ checkedAt: 0, latestVersion: '0.7.0' }));
+      writeFileSync(cacheFile, JSON.stringify(cachedAs('0.7.0', 0)));
       const failFetch = (async () => {
         throw new Error('offline');
       }) as unknown as typeof fetch;
@@ -473,20 +487,28 @@ describe('plugin update check', () => {
       await optedOut.settled;
       expect(fetched).toBe(false);
       expect(optedOut.takeNotice()).toBeNull();
+      const inCi = startUpdateCheck({ install, env: { CI: 'true' }, cacheFile, now: () => 2 * day, fetchImpl: noFetch });
+      await inCi.settled;
+      expect(fetched).toBe(false);
+      expect(inCi.takeNotice()).toBeNull();
 
-      // Offline with a stale cache: the cached version still counts, and the cache is left alone.
+      // Offline with a stale cache: the cached version still counts, and the failure is recorded
+      // so the next start an hour later retries instead of every start.
       const logs: string[] = [];
       const offline = startUpdateCheck({ install, env: {}, cacheFile, now: () => 2 * day, fetchImpl: failFetch, log: (line) => logs.push(line) });
       await offline.settled;
       expect(logs[0]).toContain('offline');
-      expect(JSON.parse(readFileSync(cacheFile, 'utf8')).checkedAt).toBe(0);
+      expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toEqual(cachedAs('0.7.0', 2 * day, false));
       expect(offline.takeNotice()).toContain('0.7.0');
+      const soonAfter = startUpdateCheck({ install, env: {}, cacheFile, now: () => 2 * day + 1000, fetchImpl: noFetch, log: () => {} });
+      await soonAfter.settled;
+      expect(fetched).toBe(false);
 
-      // A stale cache is replaced by what the fetch finds; the same version as installed is no notice.
-      const current = startUpdateCheck({ install, env: {}, cacheFile, now: () => 2 * day, fetchImpl: manifestFetch('0.5.0'), log: () => {} });
+      // An hour after the failure the fetch runs again; the same version as installed is no notice.
+      const current = startUpdateCheck({ install, env: {}, cacheFile, now: () => 2 * day + 60 * 60 * 1000, fetchImpl: manifestFetch('0.5.0'), log: () => {} });
       await current.settled;
       expect(current.takeNotice()).toBeNull();
-      expect(JSON.parse(readFileSync(cacheFile, 'utf8')).latestVersion).toBe('0.5.0');
+      expect(JSON.parse(readFileSync(cacheFile, 'utf8'))[install.url].latestVersion).toBe('0.5.0');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -507,13 +529,22 @@ describe('plugin update check', () => {
 
       const codex = detectPluginInstall({ PWD: '/repo' }, codexRoot, codexRoot);
       expect(codex).toMatchObject({ agent: 'codex', marketplace: 'nimbalyst-wiki', version: '0.5.0' });
-      expect(codex?.manifestUrl).toContain('nimbalyst-wiki/main/.codex-plugin/plugin.json');
+      expect(codex?.url).toContain('nimbalyst-wiki/main/.codex-plugin/plugin.json');
+      // The `nimbalyst` marketplace installs from the generated mirror too, so it reads the mirror's manifest.
       const claude = detectPluginInstall({ CLAUDE_PROJECT_DIR: '/repo' }, '/repo', claudeRoot);
       expect(claude).toMatchObject({ agent: 'claude', marketplace: 'nimbalyst' });
-      expect(claude?.manifestUrl).toContain('nimbalyst/main/plugins/nimbalyst-wiki/.claude-plugin/plugin.json');
+      expect(claude?.url).toBe('https://raw.githubusercontent.com/nimbalyst/nimbalyst-wiki/main/.claude-plugin/plugin.json');
 
       expect(detectPluginInstall({}, '/repo', otherRoot)).toBeNull();
       expect(detectPluginInstall({}, '/repo', path.join(repoRoot, 'plugins/nimbalyst-wiki'))).toBeNull();
+
+      // `nim mcp` as each agent's plugin config starts it through npx, in the project: Claude Code
+      // passes the plugin root; Codex can't, so its install is found under the CLI's own version.
+      const machine = (env: NodeJS.ProcessEnv) => ({ env, home });
+      expect(pluginServerSetup(machine({ CLAUDE_PROJECT_DIR: '/repo' }), '/repo', { root: claudeRoot }, '0.5.0')).toEqual({ workspace: '/repo', install: claude });
+      expect(pluginServerSetup(machine({ CLAUDE_PROJECT_DIR: '/repo' }), '/repo', { root: otherRoot }, '0.5.0').install).toEqual({ kind: 'unmanaged', reason: 'checkout' });
+      expect(pluginServerSetup(machine({ PWD: '/npx/clobbered' }), '/repo', { agent: 'codex' }, '0.5.0')).toEqual({ workspace: '/repo', install: { ...codex, agent: 'codex' } });
+      expect(pluginServerSetup(machine({}), '/repo', { agent: 'codex' }, '0.6.0').install).toEqual({ kind: 'unmanaged', reason: 'checkout' });
 
       const notice = startUpdateCheck({ install: { ...codex!, version: '0.4.0' }, env: {}, cacheFile: path.join(home, 'c.json'), now: () => 0, fetchImpl: manifestFetch('0.5.0'), log: () => {} });
       await notice.settled;
@@ -521,5 +552,21 @@ describe('plugin update check', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('classifies the npm or pnpm install a running nim belongs to, and what npm cannot update', () => {
+    const bin = (...parts: string[]) => path.join(path.sep, ...parts, 'node_modules', '@nimbalyst', 'cli', 'dist', 'bin', 'cli.js');
+    expect(detectNpmInstall(bin('usr', 'local', 'lib'), '0.9.0')).toMatchObject({
+      kind: 'npm',
+      manager: 'npm',
+      global: true,
+      packageDir: path.resolve(path.sep, 'usr', 'local', 'lib', 'node_modules', '@nimbalyst', 'cli'),
+      url: 'https://registry.npmjs.org/@nimbalyst/cli/latest',
+    });
+    expect(detectNpmInstall(bin('home', 'me', 'Library', 'pnpm', 'global', '5', 'node_modules', '.pnpm', '@nimbalyst+cli@0.9.0'), '0.9.0')).toMatchObject({ manager: 'pnpm', global: true });
+    expect(detectNpmInstall(bin('work', 'app'), '0.9.0')).toMatchObject({ manager: 'npm', global: false });
+    expect(detectNpmInstall(bin('home', 'me', '.npm', '_npx', 'abc123'), '0.9.0')).toEqual({ kind: 'unmanaged', reason: 'npx' });
+    expect(detectNpmInstall(path.join(packageDir, 'dist', 'bin', 'cli.js'), '0.9.0')).toEqual({ kind: 'unmanaged', reason: 'checkout' });
+    expect(detectNpmInstall(path.join(path.sep, 'Applications', 'Nimbalyst.app', 'Contents', 'Resources', 'nim', 'dist', 'bin', 'cli-bundled.js'), '0.9.0')).toEqual({ kind: 'unmanaged', reason: 'app' });
   });
 });

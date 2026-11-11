@@ -9,7 +9,7 @@
  * visibility, and panel height. No props needed for panel state.
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { store } from '@nimbalyst/runtime/store';
@@ -18,10 +18,11 @@ import { TerminalTab } from './TerminalTab';
 import { usePostHog } from 'posthog-js/react';
 import {
   terminalListAtom,
+  terminalListWorkspaceAtom,
+  terminalsForWorkspace,
   activeTerminalIdAtom,
-  terminalPanelVisibleAtom,
-  terminalPanelHeightAtom,
-  terminalPanelHydratedAtom,
+  terminalPanelStateAtomFamily,
+  setTerminalPanelHeight,
   closeTerminalPanelAtom,
   loadTerminals,
   setActiveTerminal,
@@ -78,14 +79,19 @@ export const TerminalBottomPanel: React.FC<TerminalBottomPanelProps> = ({
   minHeight = 150,
   maxHeight = 600,
 }) => {
-  // Panel state from Jotai atoms
-  const visible = useAtomValue(terminalPanelVisibleAtom);
-  const height = useAtomValue(terminalPanelHeightAtom);
-  const panelStateHydrated = useAtomValue(terminalPanelHydratedAtom);
+  // Panel state for this project; each project in a multi-project window keeps its own
+  const { visible, height } = useAtomValue(terminalPanelStateAtomFamily(workspacePath));
   const closePanel = useSetAtom(closeTerminalPanelAtom);
 
-  // Terminal list state from Jotai atoms
-  const terminals = useAtomValue(terminalListAtom);
+  // Terminal list state from Jotai atoms. After a project switch the shared list
+  // still belongs to the old project until the new one loads, so only use it
+  // while it matches this project (#1818).
+  const loadedTerminals = useAtomValue(terminalListAtom);
+  const terminalListWorkspace = useAtomValue(terminalListWorkspaceAtom);
+  const terminals = useMemo(
+    () => terminalsForWorkspace(loadedTerminals, terminalListWorkspace, workspacePath),
+    [loadedTerminals, terminalListWorkspace, workspacePath]
+  );
   const activeTerminalId = useAtomValue(activeTerminalIdAtom);
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef<number>(0);
@@ -133,17 +139,18 @@ export const TerminalBottomPanel: React.FC<TerminalBottomPanelProps> = ({
     };
   }, [workspacePath]);
 
-  // Track analytics and persist visibility when panel visibility changes
+  // Track opens. Visibility is persisted by the atom that changes it, so switching
+  // to a project whose panel is already open is not an open.
+  const lastVisibility = useRef({ workspacePath, visible });
   useEffect(() => {
-    if (!panelStateHydrated) return;
-    if (visible && posthog) {
+    const previous = lastVisibility.current;
+    lastVisibility.current = { workspacePath, visible };
+    if (visible && !previous.visible && previous.workspacePath === workspacePath && posthog) {
       posthog.capture('terminal_panel_opened', {
         terminalCount: terminals.length,
       });
     }
-    // Persist visibility state per-workspace
-    window.electronAPI.terminal.setPanelVisible(workspacePath, visible);
-  }, [visible, workspacePath, posthog, terminals.length, panelStateHydrated]);
+  }, [visible, workspacePath, posthog, terminals.length]);
 
   // Create new terminal
   const handleCreateTerminal = useCallback(async () => {
@@ -271,8 +278,8 @@ export const TerminalBottomPanel: React.FC<TerminalBottomPanelProps> = ({
       Math.max(resizeStartHeight.current + deltaY, minHeight),
       maxHeight
     );
-    store.set(terminalPanelHeightAtom, newHeight);
-  }, [isResizing, minHeight, maxHeight]);
+    setTerminalPanelHeight(workspacePath, newHeight);
+  }, [isResizing, minHeight, maxHeight, workspacePath]);
 
   const handleMouseUp = useCallback(() => {
     if (isResizing) {

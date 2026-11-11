@@ -50,3 +50,10 @@ it('refuses older releases through launch, repeated checks, and channel changes'
     autoUpdater.removeAllListeners();
   }
 });
+
+it('keeps upstream update discovery without automatic download or install', () => {
+  new AutoUpdaterService();
+  expect(autoUpdater.autoDownload).toBe(false);
+  expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({ provider: 'github', owner: 'nimbalyst', repo: 'nimbalyst' });
+});

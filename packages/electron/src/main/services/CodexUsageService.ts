@@ -19,6 +19,8 @@ import type {
 } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/types';
 import { logger } from '../utils/logger';
 import { codexAuthService } from './CodexAuthService';
+import { usageHistoryStore } from './UsageHistoryStore';
+import { codexUsageWeekSamples, type UsageWeekRecord } from '../../shared/usageHistory';
 
 export interface CodexUsageWindow {
   slot: 'primary' | 'secondary';
@@ -63,6 +65,8 @@ export interface CodexUsageData {
   };
   limitsAvailable?: boolean;
   source?: 'account' | 'session';
+  /** Recorded weekly readings, attached by the main process; see shared/usageHistory.ts. */
+  weeklyHistory?: UsageWeekRecord[];
   lastUpdated: number; // Unix timestamp
   error?: string;
   refreshing?: boolean;
@@ -182,9 +186,19 @@ class CodexUsageServiceImpl {
       }
       if (lifecycle !== this.lifecycle) return { limits: [], limitsAvailable: false, lastUpdated: 0 };
       if (generation !== this.generation) continue;
-      this.cachedUsage = usage;
+      this.cachedUsage = this.withWeeklyHistory(usage);
       this.broadcastUpdate();
-      return usage;
+      return this.cachedUsage;
+    }
+  }
+
+  private withWeeklyHistory(usage: CodexUsageData): CodexUsageData {
+    if (!this.accountScope || usage.source !== 'account' || usage.error) return { ...usage, weeklyHistory: [] };
+    try {
+      return { ...usage, weeklyHistory: usageHistoryStore.record('codex', codexUsageWeekSamples(usage), Date.now(), this.accountScope) };
+    } catch (error) {
+      logger.main.error('[CodexUsageService] Failed to record scoped weekly history:', error);
+      return { ...usage, weeklyHistory: [] };
     }
   }
 

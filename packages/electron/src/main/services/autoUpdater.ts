@@ -66,11 +66,10 @@ export class AutoUpdaterService {
     log.transports.file.level = 'info';
     autoUpdater.logger = log;
 
-    // Configure auto-updater. autoDownload=true: both background polls and the
-    // manual "Check for Updates" trigger download immediately, then surface a
-    // single "Ready to install" toast. Per maintainer direction on #327.
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Keep upstream release discovery, but the fork downloads and installs
+    // only after an explicit user action.
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
 
     // electron-updater's stock Authenticode check times out at 20s, which a
     // freshly downloaded installer can exceed while Defender scans it.
@@ -128,11 +127,7 @@ export class AutoUpdaterService {
         releaseDate: info.releaseDate
       };
 
-      // With autoDownload=true the download starts immediately. Per maintainer
-      // direction on #327 we no longer surface an "Update Available" toast - the
-      // download runs in the background and only the "Ready to install" toast
-      // (update-downloaded) is shown. The update-available event is still
-      // broadcast so renderer state stays in sync.
+      // Discovery still informs the renderer; it does not start a download.
       this.sendToAllWindows('update-available', info);
     });
 

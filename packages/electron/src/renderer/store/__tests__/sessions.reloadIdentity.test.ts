@@ -31,6 +31,28 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
 }
 
 describe('preserveReloadIdentity', () => {
+  it('preserves surviving row identities through append, removal and reorder', () => {
+    const messages = [makeMessage(1, 'one'), makeMessage(2, 'two')];
+    const appended = preserveReloadIdentity(makeSession({ messages }), makeSession({
+      messages: [makeMessage(1, 'one'), makeMessage(2, 'two'), makeMessage(3, 'three')],
+    }));
+    expect(appended.messages[0]).toBe(messages[0]);
+    expect(appended.messages[1]).toBe(messages[1]);
+    const reordered = preserveReloadIdentity(appended, makeSession({
+      messages: [makeMessage(3, 'three'), makeMessage(1, 'one')],
+    }));
+    expect(reordered.messages.map(m => m.id)).toEqual([3, 1]);
+    expect(reordered.messages[0]).toBe(appended.messages[2]);
+    expect(reordered.messages[1]).toBe(messages[0]);
+  });
+
+  it('does not reuse a row from a replaced transcript generation', () => {
+    const old = { ...makeMessage(1, 'same'), transcriptGeneration: 1 };
+    const replacement = { ...makeMessage(1, 'same'), transcriptGeneration: 2 };
+    const result = preserveReloadIdentity(makeSession({ messages: [old] }), makeSession({ messages: [replacement] }));
+    expect(result.messages[0]).toBe(replacement);
+  });
+
   it('reuses the existing messages array when reloaded content is identical', () => {
     const currentMessages = [makeMessage(1, 'hello')];
     const current = makeSession({ messages: currentMessages });
@@ -341,6 +363,79 @@ describe('canonical generation load/reload reconciliation', () => {
         prompt,
         { ...message(2, 1, 7, 'Second request'), type: 'user_message', createdAt: new Date(3000) },
         { ...message(3, 2, 7, 'Answer'), createdAt: new Date(4000) },
+      ];
+      await run(store, { sessionId: id, workspacePath: '/repo' });
+      expect(store.get(sessionStoreAtom(id))!.messages.map((m) => m.id)).toEqual([1, 2, 3]);
+    });
+    // #1608: a copy no saved row acknowledges (its send failed, or a retry of
+    // the same text was matched to the failed copy instead) stayed pinned below
+    // every later turn. Sends are serial, so an answered later prompt retires it.
+    it.each([
+      { variant: 'a failed send', copies: [2000], laterText: 'Next request' },
+      { variant: 'a retried send', copies: [2000, 2500], laterText: '/compact' },
+      { variant: 'a reply with an unparseable time', copies: [2000], laterText: 'Next request', malformed: true },
+    ])(`${name} retires an unacknowledged prompt copy once a later prompt is answered: $variant`, async ({ variant, copies, laterText, malformed }) => {
+      const store = createStore();
+      const id = `optimistic-orphan-${name}-${variant}`;
+      const prompt = {
+        ...message(1, 0, 7, 'First request'),
+        type: 'user_message' as const,
+        createdAt: new Date(1000),
+      };
+      const pending = copies.map((time, i) => ({
+        ...makeMessage(-7 - i, '/compact'),
+        type: 'user_message' as const,
+        createdAt: new Date(time),
+      }));
+      let snapshot: TranscriptViewMessage[] = [prompt];
+      vi.stubGlobal('window', {
+        electronAPI: {
+          aiLoadSession: vi.fn(async () =>
+            makeSession({ id, model: 'claude:test', messages: snapshot }),
+          ),
+        },
+      });
+      store.set(sessionStoreAtom(id), makeSession({ id, messages: [prompt, ...pending] }));
+      await run(store, { sessionId: id, workspacePath: '/repo' });
+      expect(store.get(sessionStoreAtom(id))!.messages.map((m) => m.id)).toEqual([1, ...pending.map((m) => m.id)]);
+      snapshot = [
+        prompt,
+        { ...message(2, 1, 7, laterText), type: 'user_message', createdAt: new Date(3000) },
+        { ...message(3, 2, 7, 'Answer'), createdAt: new Date(4000) },
+        ...(malformed
+          ? [{ ...message(4, 3, 7, 'Note'), createdAt: 'not a date' as unknown as Date }]
+          : []),
+      ];
+      await run(store, { sessionId: id, workspacePath: '/repo' });
+      expect(store.get(sessionStoreAtom(id))!.messages.map((m) => m.id)).toEqual(
+        malformed ? [1, 2, 3, 4] : [1, 2, 3],
+      );
+    });
+    // The copy of a prompt sent after an answered turn is still waiting on its
+    // saved row (slow turn setup, #1620); the answered earlier prompt must not
+    // retire it.
+    it(`${name} keeps a prompt copy sent after an answered turn until its saved row arrives`, async () => {
+      const store = createStore();
+      const id = `optimistic-waiting-${name}`;
+      const answered: TranscriptViewMessage[] = [
+        { ...message(1, 0, 7, 'First request'), type: 'user_message', createdAt: new Date(3000) },
+        { ...message(2, 1, 7, 'Answer'), createdAt: new Date(4000) },
+      ];
+      const copy = { ...makeMessage(-9, 'Slow request'), type: 'user_message' as const, createdAt: new Date(5000) };
+      let snapshot = answered;
+      vi.stubGlobal('window', {
+        electronAPI: {
+          aiLoadSession: vi.fn(async () =>
+            makeSession({ id, model: 'claude:test', messages: snapshot }),
+          ),
+        },
+      });
+      store.set(sessionStoreAtom(id), makeSession({ id, messages: [...answered, copy] }));
+      await run(store, { sessionId: id, workspacePath: '/repo' });
+      expect(store.get(sessionStoreAtom(id))!.messages.map((m) => m.id)).toEqual([1, 2, -9]);
+      snapshot = [
+        ...answered,
+        { ...message(3, 2, 7, 'Slow request'), type: 'user_message', createdAt: new Date(6000) },
       ];
       await run(store, { sessionId: id, workspacePath: '/repo' });
       expect(store.get(sessionStoreAtom(id))!.messages.map((m) => m.id)).toEqual([1, 2, 3]);

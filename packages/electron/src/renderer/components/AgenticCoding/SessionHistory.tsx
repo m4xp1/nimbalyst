@@ -1,4 +1,5 @@
 import { filterSearchText } from '@nimbalyst/runtime/utils/searchText';
+import { useSessionSelectionFallback } from '../../hooks/useSessionSelectionFallback';
 import { createCommittedRankBuilder, createSessionOrder, getLiveSessionOrderTimestamp } from './sessionHistoryOrder';
 import {selectedMachineAtom} from '../../store/atoms/remoteMachines';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -48,7 +49,7 @@ import { activeWorkspacePathAtom } from '../../store/atoms/openProjects';
 import { useGitRepoProbe } from '../../hooks/useGitRepoProbe';
 import { workstreamStateAtom } from '../../store/atoms/workstreamState';
 import { sessionProcessingAtom, sessionUnreadAtom, sessionHasPendingInteractivePromptAtom, activeSessionIdAtom as globalActiveSessionIdAtom, sessionPinnedUpdateAtom } from '../../store/atoms/sessions';
-import { collapsedGroupsAtom, compactRowsAtom, setCompactRowsAtom, sortOrderAtom, setCollapsedGroupsAtom, setSortOrderAtom } from '../../store/atoms/agentMode';
+import { collapsedGroupsAtom, compactRowsAtom, setCompactRowsAtom, showContextUsageAtom, setShowContextUsageAtom, sortOrderAtom, setCollapsedGroupsAtom, setSortOrderAtom } from '../../store/atoms/agentMode';
 import {
   recentlyRenamedSessionAtom,
   selectSessionActionAtom,
@@ -84,6 +85,7 @@ import { createMetaAgentSession } from '../../utils/metaAgentUtils';
 import { HelpTooltip } from '../../help';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
+import { runWorkspaceGuardedRequest, useResetOnWorkspaceChange } from './useResetOnWorkspaceChange';
 import { usePostHog } from 'posthog-js/react';
 import { projectAppearanceAtom } from '../../store/atoms/projectAppearance';
 import { WorkspaceSummaryHeader, generateWorkspaceAccentColor } from '../WorkspaceSummaryHeader';
@@ -231,6 +233,8 @@ const SessionHistoryComponent: React.FC = () => {
   const controlledSortOrder = useAtomValue(sortOrderAtom);
   const compactRows = useAtomValue(compactRowsAtom);
   const setCompactRows = useSetAtom(setCompactRowsAtom);
+  const showContextUsage = useAtomValue(showContextUsageAtom);
+  const setShowContextUsage = useSetAtom(setShowContextUsageAtom);
   const setCollapsedGroupsAction = useSetAtom(setCollapsedGroupsAtom);
   const setSortOrderAction = useSetAtom(setSortOrderAtom);
   const onCollapsedGroupsChange = setCollapsedGroupsAction;
@@ -481,6 +485,15 @@ const SessionHistoryComponent: React.FC = () => {
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const searchFiltersRef = useRef<HTMLDivElement>(null);
+  // Clearing searchQuery changes the filter key, so the filter effect below also drops content-search results.
+  const trackWorkspaceRequest = useResetOnWorkspaceChange(workspacePath, () => {
+    setSearchQuery('');
+    setContentSearchTriggered(false);
+    setIsSearching(false);
+    setError(null);
+    setPendingSearchQuery(null);
+    setSearchFilters(DEFAULT_SEARCH_FILTERS);
+  });
 
   // Tag filter state (parity with Kanban tag picker; session-only, no persistence)
   const allWorkspaceTags = useAtomValue(sessionKanbanTagsAtom);
@@ -663,59 +676,59 @@ const SessionHistoryComponent: React.FC = () => {
   const executeSearch = async (query: string, filters: SearchFilters = searchFilters) => {
     const id = ++contentSearchRequest.current.id, key = contentSearchRequest.current.key;
     const current = () => id === contentSearchRequest.current.id && key === contentSearchRequest.current.key;
-    try {
-      setIsSearching(true);
-      setError(null);
-
-      const result = await window.electronAPI.invoke('sessions:search', workspacePath, query.trim(), {
+    const workspaceCurrent = trackWorkspaceRequest();
+    setIsSearching(true);
+    setError(null);
+    await runWorkspaceGuardedRequest({
+      isCurrent: () => workspaceCurrent() && current(),
+      request: () => window.electronAPI.invoke('sessions:search', workspacePath, query.trim(), {
         includeArchived: showArchived,
         timeRange: filters.timeRange,
         direction: filters.direction,
-      });
+      }),
+      onResult: (result) => {
+        if (result.success && Array.isArray(result.sessions)) {
+          let searchResults: SessionItem[] = result.sessions.map((s: any) => ({
+            id: s.id,
+            title: s.title || 'Untitled Session',
+            createdAt: s.createdAt,
+            updatedAt: s.updatedAt,
+            provider: s.provider || 'claude',
+            model: s.model,
+            sessionType: s.sessionType || 'session',
+            messageCount: s.messageCount || 0,
+            isArchived: s.isArchived || false,
+            isPinned: s.isPinned || false,
+            worktreeId: s.worktreeId || null,
+            childCount: s.childCount || 0,
+            uncommittedCount: s.uncommittedCount || 0,
+            parentSessionId: s.parentSessionId || null,
+            workspaceId: s.workspaceId || workspacePath,
+          }));
 
-      if (!current()) return;
-      if (result.success && Array.isArray(result.sessions)) {
-        let searchResults: SessionItem[] = result.sessions.map((s: any) => ({
-          id: s.id,
-          title: s.title || 'Untitled Session',
-          createdAt: s.createdAt,
-          updatedAt: s.updatedAt,
-          provider: s.provider || 'claude',
-          model: s.model,
-          sessionType: s.sessionType || 'session',
-          messageCount: s.messageCount || 0,
-          isArchived: s.isArchived || false,
-          isPinned: s.isPinned || false,
-          worktreeId: s.worktreeId || null,
-          childCount: s.childCount || 0,
-          uncommittedCount: s.uncommittedCount || 0,
-          parentSessionId: s.parentSessionId || null,
-          workspaceId: s.workspaceId || workspacePath,
-        }));
+          // Filter out worktree sessions in non-agent mode
+          if (mode !== 'agent') {
+            searchResults = searchResults.filter((session: SessionItem) => !session.worktreeId);
+          }
 
-        // Filter out worktree sessions in non-agent mode
-        if (mode !== 'agent') {
-          searchResults = searchResults.filter((session: SessionItem) => !session.worktreeId);
+          setSessions(searchResults);
         }
-
-        setSessions(searchResults);
-      }
-    } catch (err) {
-      if (!current()) return;
-      console.error('[SessionHistory] Failed to search sessions:', err);
-      setError('Failed to search sessions');
-    } finally {
-      if (current()) setIsSearching(false);
-    }
+      },
+      onError: (err) => {
+        console.error('[SessionHistory] Failed to search sessions:', err);
+        setError('Failed to search sessions');
+      },
+      onSettled: () => setIsSearching(false),
+    });
   };
 
   // Search message content in database (heavy operation)
   // Checks if FTS index exists and prompts user to build if needed for large databases
-  const searchMessageContent = async (query: string) => {
-    try {
-      // Check FTS index status before searching
-      const { indexExists, messageCount } = await window.electronAPI.ai.getFtsIndexStatus(workspacePath);
-
+  const searchMessageContent = (query: string) => runWorkspaceGuardedRequest({
+    isCurrent: trackWorkspaceRequest(),
+    // Check FTS index status before searching
+    request: () => window.electronAPI.ai.getFtsIndexStatus(workspacePath),
+    onResult: async ({ indexExists, messageCount }) => {
       // If index doesn't exist and database is large, prompt user to build
       if (!indexExists && messageCount > 5000) {
         setIndexMessageCount(messageCount);
@@ -726,11 +739,12 @@ const SessionHistoryComponent: React.FC = () => {
 
       // Otherwise proceed with search
       await executeSearch(query);
-    } catch (err) {
+    },
+    onError: (err) => {
       console.error('[SessionHistory] Failed to search sessions:', err);
       setError('Failed to search sessions');
-    }
-  };
+    },
+  });
 
   // Load all sessions on mount and when refreshTrigger or showArchived changes
   useEffect(() => {
@@ -929,19 +943,7 @@ const SessionHistoryComponent: React.FC = () => {
     };
   }, []);
 
-  // Auto-select first session when there's no active session
-  // This ensures a session is always selected when switching to Agent mode
-  useEffect(() => {
-    if (!activeSessionId && sessions.length > 0 && onSessionSelect) {
-      // Small delay to ensure AgentMode is fully mounted
-      const timer = setTimeout(() => {
-        // console.log('[SessionHistory] Auto-selecting first session:', sessions[0].id);
-        onSessionSelect(sessions[0].id);
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [activeSessionId, sessions, onSessionSelect]);
+  useSessionSelectionFallback(workspacePath, activeSessionId, sessions[0]?.id, onSessionSelect);
 
   // Function to trigger content search (database query for message content)
   const searchMessageContents = () => {
@@ -2629,6 +2631,9 @@ const SessionHistoryComponent: React.FC = () => {
         // keep existing entries in sync, and unconditionally re-setting the
         // atom Map every fetch makes every subscriber re-render -- which
         // brought the renderer back into a re-render loop here.
+        // GitHub #1887: a fetch for a project this window has since left must
+        // not add that project's sessions to the shared registry.
+        if (store.get(activeWorkspacePathAtom) !== workspacePath) return;
         const currentRegistry = store.get(sessionRegistryAtom);
         let nextRegistry: Map<string, SessionMeta> | null = null;
         for (const result of successfulResults) {
@@ -3236,6 +3241,19 @@ const SessionHistoryComponent: React.FC = () => {
               >
                 <span>Compact rows</span>
                 {compactRows && (
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M13 4L6 11L3 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </button>
+              <button
+                className={`session-history-context-usage-option flex items-center justify-between w-full px-3 py-2 text-[13px] border-none text-[var(--nim-text)] cursor-pointer transition-colors duration-150 text-left gap-2 hover:bg-[var(--nim-bg-hover)] [&>span]:flex-1 [&_svg]:shrink-0 [&_svg]:text-[var(--nim-primary)] ${showContextUsage ? 'bg-[var(--nim-bg-selected)] font-medium' : ''}`}
+                onClick={() => { setShowContextUsage(!showContextUsage); setSortDropdownOpen(false); }}
+                role="menuitemcheckbox"
+                aria-checked={showContextUsage}
+              >
+                <span>Show context usage</span>
+                {showContextUsage && (
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M13 4L6 11L3 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>

@@ -530,11 +530,6 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
     commitDate?: string;
     error?: string;
   } | null>(null);
-  // Latch when the widget has rendered as auto-committed. This must persist
-  // even if the user later disables auto-commit -- the commit has already
-  // happened, so the widget should stay in the success state.
-  const [wasAutoCommitted, setWasAutoCommitted] = useState(false);
-
   // Diff peek state — encapsulated by useDiffPeek hook (shared with FilesEditedSidebar).
   const { peekSupported, registerRowEl, togglePeek, isActive, popoverElement } = useDiffPeek({
     getDiff: host?.gitFileDiff,
@@ -546,6 +541,8 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
   // The repo this proposal commits into, resolved in the main process from the
   // files. One proposal is one repo, so this is a single value.
   const repoPath: string | undefined = args.repoPath;
+  const targetWorktree: { path: string; branch: string | null } | undefined =
+    args.targetWorktree && typeof args.targetWorktree.path === 'string' ? args.targetWorktree : undefined;
   const repoLabel = useMemo(
     () => (repoPath ? repoPath.split('/').filter(Boolean).pop() : undefined),
     [repoPath]
@@ -573,15 +570,6 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
     setExpandedFolders(new Set(allPaths));
   }, [directoryTree]);
 
-
-  // Latch wasAutoCommitted once the auto-commit success branch fires. Without
-  // this, toggling auto-commit off after a successful auto-commit would re-render
-  // the widget into the pending interactive UI even though the commit happened.
-  useEffect(() => {
-    if (host?.autoCommitEnabled && !isCommitting && !wasAutoCommitted) {
-      setWasAutoCommitted(true);
-    }
-  }, [host?.autoCommitEnabled, isCommitting, wasAutoCommitted]);
 
   // Determine which result to show (tool result wins once available; local is only for pending UI)
   // Extra commits beyond the one `commitHash` names, and files that landed
@@ -916,62 +904,23 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
     return null;
   }
 
-  // When auto-commit is enabled AND we're not currently committing, the server
-  // already committed in the MCP handler before the widget rendered. Show the
-  // committed success state directly. If isCommitting is true, the user just
-  // toggled auto-commit on and handleConfirm is running — let the normal commit
-  // flow handle the UI (shows "Committing..." then completed state).
-  // wasAutoCommitted latches once we've shown the auto-commit success UI so
-  // toggling auto-commit off afterwards doesn't revert the widget to "pending".
-  if ((host?.autoCommitEnabled || wasAutoCommitted) && !isCommitting) {
+  // Auto-approve is a preference, not evidence that the server committed.
+  // Wait for its result without issuing a second git:commit from the widget.
+  // #1890: the host records its own decision in the arguments; use it so the
+  // widget never spins on a proposal the host is holding for the user. The
+  // preference predicate covers only the moment before the host row lands.
+  const hostAutoApproved: boolean | undefined =
+    typeof args.autoApproved === 'boolean' ? args.autoApproved : undefined;
+  const autoApproved = hostAutoApproved ?? (!!host?.autoCommitEnabled && !targetWorktree);
+  if (autoApproved && !isCommitting) {
     return (
-      <div
-        data-testid="git-commit-widget"
-        data-state="committed"
-        className="git-commit-widget rounded-lg bg-[var(--nim-bg-secondary)] border border-[var(--nim-success)] overflow-hidden"
-      >
-        <div className="git-commit-widget__header flex items-center gap-2 p-2 border-b border-[var(--nim-border)] bg-[var(--nim-bg-secondary)]">
-          <MaterialSymbol icon="check_circle" size={16} className="text-[var(--nim-success)]" />
-          <span className="text-sm font-semibold text-[var(--nim-text)] flex-1">Changes Committed</span>
+      <div data-testid="git-commit-widget" data-state="committing"
+        className="git-commit-widget rounded-lg bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] overflow-hidden">
+        <div className="git-commit-widget__header flex items-center gap-2 p-2">
+          <MaterialSymbol icon="progress_activity" size={16} className="animate-spin" />
+          <span className="text-sm font-semibold">Committing changes…</span>
         </div>
-        <div className="git-commit-widget__success-content p-2 bg-[color-mix(in_srgb,var(--nim-success)_8%,var(--nim-bg))] flex flex-col gap-2">
-          <div className="text-[0.8125rem] font-medium text-[var(--nim-text)] leading-normal whitespace-pre-wrap font-mono">{initialCommitMessage}</div>
-          <div className="mt-1 pt-2 border-t border-[var(--nim-border)]">
-            <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--nim-text-muted)] mb-1.5">
-              {initialFilesToStage.length} file{initialFilesToStage.length !== 1 ? 's' : ''} committed
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {initialFilesToStage.map((filePath) => {
-                const fileName = getFilePathBasename(filePath);
-                const status = fileStatusMap.get(filePath) || 'modified';
-                return (
-                  <div key={filePath} className="text-xs" title={filePath}>
-                    <span className={`font-mono ${getStatusColorClass(status)}`}>
-                      {fileName}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="mt-2 pt-2 border-t border-[var(--nim-border)]">
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={host?.autoCommitEnabled ?? false}
-                onChange={(e) => {
-                  host?.setAutoCommitEnabled(e.target.checked);
-                  host?.trackEvent(
-                    e.target.checked ? 'auto_commit_enabled' : 'auto_commit_disabled',
-                    { source: 'commit_success_widget' }
-                  );
-                }}
-                className="accent-[var(--nim-primary)] w-3.5 h-3.5 cursor-pointer"
-              />
-              <span className="text-[0.75rem] text-[var(--nim-text-muted)]">Auto-approve future commits</span>
-            </label>
-          </div>
-        </div>
+        <div className="p-2 text-[0.8125rem] whitespace-pre-wrap font-mono">{initialCommitMessage}</div>
       </div>
     );
   }
@@ -1001,6 +950,17 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
       </div>
 
       <div className="git-commit-widget__content p-2 flex flex-col gap-3">
+        {/* #1756: an explicit sibling worktree, not the session's checkout.
+            Never auto-committed, so the user sees where it lands first. */}
+        {targetWorktree && (
+          <div className="git-commit-widget__target-worktree flex items-start gap-1.5 p-2 rounded border border-[var(--nim-warning)] bg-[var(--nim-bg)] text-[0.8125rem] text-[var(--nim-text)] select-text">
+            <MaterialSymbol icon="alt_route" size={14} className="text-[var(--nim-warning)] mt-0.5" />
+            <span className="min-w-0 break-all">
+              Commits to another worktree{targetWorktree.branch ? <> on branch <code>{targetWorktree.branch}</code></> : ' (detached HEAD)'} at <code>{targetWorktree.path}</code>
+            </span>
+          </div>
+        )}
+
         {/* Reasoning */}
         {reasoning && (
           <div className="git-commit-widget__reasoning flex flex-col gap-1.5">
@@ -1078,9 +1038,8 @@ export const GitCommitConfirmationWidget: React.FC<CustomToolWidgetProps> = ({
                 host?.trackEvent(e.target.checked ? 'auto_commit_enabled' : 'auto_commit_disabled', { source: 'commit_widget' });
                 // When enabling auto-commit on a pending proposal, trigger the commit
                 // immediately — same code path as clicking "Confirm & Commit".
-                // Without this, the widget re-renders showing success (because
-                // autoCommitEnabled is now true) but no commit actually happens,
-                // leaving the MCP tool call hanging.
+                // The server already chose manual approval for this proposal;
+                // changing the preference alone would leave its call waiting.
                 if (e.target.checked) {
                   handleConfirm();
                 }

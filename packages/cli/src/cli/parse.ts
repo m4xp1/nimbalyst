@@ -40,6 +40,11 @@ const BOOLEAN_FLAGS = new Set([
   'help',
   'h',
   'version',
+  'dry-run',
+  'check',
+  'versions',
+  'refresh-cache',
+  'keep-identity',
 ]);
 
 /**

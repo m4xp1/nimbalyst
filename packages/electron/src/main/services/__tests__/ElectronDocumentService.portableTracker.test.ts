@@ -7,7 +7,12 @@ import { load, dump } from 'js-yaml';
 import { SQLiteDatabase } from '../../database/sqlite/SQLiteDatabase';
 import { createSQLiteStoreAdapter } from '../../database/sqlite/SQLiteStoreAdapter';
 
-const state = vi.hoisted(() => ({ db: null as any, models: new Map<string, any>() }));
+const state = vi.hoisted(() => ({ db: null as any, models: new Map<string, any>(), localNumbers: new Map<string, { prefix: string; counter: number }>() }));
+vi.mock('../tracker/workspaceLocalKeyStore', () => ({ workspaceLocalKeyStore: {
+  read: (workspace: string) => state.localNumbers.get(workspace) ?? {},
+  write: (workspace: string, next: { prefix: string; counter: number }) => state.localNumbers.set(workspace, next),
+  takenPrefixes: () => [],
+} }));
 const watchState = vi.hoisted(() => ({ entries: [] as Array<{ changed: (id: string, current: () => boolean) => Promise<void>; track: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }>, gate: undefined as Promise<void> | undefined }));
 vi.mock('../tracker/portableTrackerWatch', () => ({ createPortableTrackerWatch: vi.fn(async (_workspace: string, changed: (id: string, current: () => boolean) => Promise<void>) => {
   const entry = { changed, track: vi.fn(), dispose: vi.fn() }; watchState.entries.push(entry);
@@ -36,7 +41,7 @@ afterEach(async () => {
   service?.destroy(); service = undefined;
   await sqlite?.close(); sqlite = undefined;
   if (workspace) await fs.rm(workspace, { recursive: true, force: true });
-  state.models.clear();
+  state.models.clear(); state.localNumbers.clear();
   watchState.entries.length = 0; watchState.gate = undefined; vi.restoreAllMocks();
 });
 
@@ -138,7 +143,7 @@ describe('portable card application routes', () => {
       const model = load(await fs.readFile(path.join(builtins, name), 'utf8')) as any;
       state.models.set(model.type, model); directories[model.type] = `cards/${model.type}`;
     }
-    expect(state.models.size).toBe(10);
+    expect([...state.models.keys()].sort()).toEqual(['bug', 'capture', 'citation', 'decision', 'github-issue', 'github-pr', 'idea', 'milestone', 'plan', 'release', 'source', 'task']);
     await fs.mkdir(path.join(workspace, '.nimbalyst'));
     await fs.writeFile(path.join(workspace, '.nimbalyst/tracker-storage.yaml'), dump({ version: 1, mode: 'files', directories }));
     sqlite = new SQLiteDatabase({ dbDir: path.join(workspace, 'private-test-db'), schemaDir: path.resolve(__dirname, '../../database/sqlite/schemas'), log: () => {} });

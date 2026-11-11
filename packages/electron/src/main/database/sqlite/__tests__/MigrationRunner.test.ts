@@ -16,6 +16,7 @@ import * as path from 'path';
 import { Worker } from 'node:worker_threads';
 import { getMigrations, runMigrations, type Migration } from '../MigrationRunner';
 import { SQLiteDatabase } from '../SQLiteDatabase';
+import { diskStampUpsertSql, parseDiskStamp } from '../../../services/projectFileSyncDiskCache';
 
 /**
  * Stage a no-op .sql for every migration the runner expects, and return their
@@ -251,5 +252,108 @@ describe('runMigrations against the real schema dir', () => {
       await sqlite.close();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('applies 0055 once across reopens and round-trips tracker_transactions.base_sync_id', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nim-mig-0055-'));
+    const open = async () => {
+      const sqlite = new SQLiteDatabase({ dbDir: tmpDir, schemaDir: path.resolve(__dirname, '..', 'schemas'), slowQueryThresholdMs: 1000, sampleRate: 0 });
+      await sqlite.initialize();
+      return sqlite;
+    };
+    let sqlite = await open();
+    try {
+      await sqlite.query(
+        `INSERT INTO tracker_transactions (client_mutation_id, item_id, workspace_path, state, kind, payload, base_sync_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ['m1', 'item', '/workspace', 'queued', 'update', '{}', 42],
+      );
+      // A second launch must neither re-run the ALTER (duplicate column) nor lose the value.
+      await sqlite.close();
+      sqlite = await open();
+      const handle = sqlite.getRawHandle()!;
+      expect(handle.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE version = 55`).get()).toEqual({ n: 1 });
+      const { rows } = await sqlite.query<{ base_sync_id: number | null }>(`SELECT base_sync_id FROM tracker_transactions WHERE client_mutation_id = $1`, ['m1']);
+      expect(rows.map(row => Number(row.base_sync_id))).toEqual([42]);
+    } finally {
+      await sqlite.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('applies 0054: the stamp upsert moves only the disk columns of an existing baseline row', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nim-mig-0054-'));
+    const sqlite = new SQLiteDatabase({
+      dbDir: tmpDir,
+      schemaDir: path.resolve(__dirname, '..', 'schemas'),
+      slowQueryThresholdMs: 1000,
+      sampleRate: 0,
+    });
+    try {
+      await sqlite.initialize();
+      await sqlite.query(
+        `INSERT INTO project_file_sync_baseline (project_id, sync_id, content_hash, last_synced_mtime, updated_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        ['p', 's1', 'agreed', 100, new Date()],
+      );
+      // Two rows in one statement: one existing, one without a baseline yet.
+      await sqlite.query(diskStampUpsertSql(2), [
+        'p', 's1', 'ignored', 999, new Date(), 'disk-1', 12, 200,
+        'p', 's2', 'base-2', 300, new Date(), 'disk-2', 34, 300,
+      ]);
+      const { rows } = await sqlite.query<Record<string, unknown>>(
+        `SELECT sync_id, content_hash, last_synced_mtime, disk_hash, disk_size, disk_mtime
+         FROM project_file_sync_baseline WHERE project_id = $1 ORDER BY sync_id`,
+        ['p'],
+      );
+      expect(rows.map((r) => [r.sync_id, r.content_hash, Number(r.last_synced_mtime)])).toEqual([
+        ['s1', 'agreed', 100],
+        ['s2', 'base-2', 300],
+      ]);
+      expect(rows.map((r) => parseDiskStamp(r))).toEqual([
+        { hash: 'disk-1', size: 12, mtime: 200 },
+        { hash: 'disk-2', size: 34, mtime: 300 },
+      ]);
+    } finally {
+      await sqlite.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('fork .12 and upstream .83 schema convergence', () => {
+  it.each(['fork .12', 'upstream .83'] as const)('preserves content and searchable updates when upgrading %s', baseline => {
+    const Native = require('better-sqlite3');
+    const db = new Native(':memory:');
+    const schemaDir = path.resolve(__dirname, '..', 'schemas');
+    try {
+      db.exec('CREATE TABLE _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+      for (const migration of getMigrations(schemaDir).filter(m => m.version <= (baseline === 'fork .12' ? 52 : 55))) {
+        if (migration.sqlFile) db.exec(fs.readFileSync(migration.sqlFile, 'utf8'));
+        else if (migration.sql) db.exec(migration.sql);
+        else if (migration.run) migration.run(db);
+        db.prepare('INSERT INTO _migrations(version,name) VALUES (?,?)').run(migration.version, migration.name);
+      }
+      if (baseline === 'fork .12') {
+        db.exec(fs.readFileSync(path.join(__dirname, 'fixtures', '0053_fork_fts_update_order.sql'), 'utf8'));
+        db.prepare('INSERT INTO _migrations(version,name) VALUES (?,?)').run(53, 'fts_update_order');
+      }
+      db.prepare('INSERT INTO ai_sessions(id,provider) VALUES (?,?)').run('synthetic', 'test');
+      db.prepare(`INSERT INTO ai_agent_messages(session_id,source,direction,content,searchable_text) VALUES (?,?,?,?,?)`)
+        .run('synthetic', 'test', 'input', 'original content', 'checkpoint original');
+      runMigrations(db, schemaDir);
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ai_agent_messages_latest_assistant_text'").get())
+        .toEqual({ name: 'idx_ai_agent_messages_latest_assistant_text' });
+      for (const word of ['continued', 'revised', 'restored']) {
+        db.prepare('UPDATE ai_agent_messages SET searchable_text=? WHERE session_id=?').run(word, 'synthetic');
+        expect(db.prepare('SELECT rowid, bm25(ai_agent_messages_fts) AS rank FROM ai_agent_messages_fts WHERE ai_agent_messages_fts MATCH ?').all(word))
+          .toMatchObject([{ rowid: 1, rank: expect.any(Number) }]);
+        expect(db.prepare('SELECT content FROM ai_agent_messages WHERE session_id=?').get('synthetic'))
+          .toEqual({ content: 'original content' });
+      }
+      expect(runMigrations(db, schemaDir).applied).toEqual([]);
+      expect(db.prepare('SELECT name FROM _migrations WHERE version=53').get())
+        .toEqual({ name: baseline === 'fork .12' ? 'fts_update_order' : 'index_hygiene' });
+    } finally { db.close(); }
   });
 });

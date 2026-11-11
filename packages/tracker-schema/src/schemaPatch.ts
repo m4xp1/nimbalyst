@@ -79,6 +79,8 @@ export interface TrackerSchemaPatch {
   draftByDefault?: boolean;
   /** Retire the tracker: items are kept and keyed, but become read-only. */
   archived?: boolean;
+  /** `false` stops local numbers (`NIM.75`) for a builtin type; see `TrackerDataModel.localNumbers`. */
+  localNumbers?: boolean;
   /** Structured schema history, using the same entry shape as tracker item activity. */
   activity?: unknown[];
   /** Shallow-merged onto the seed's roles map. */
@@ -232,6 +234,7 @@ export function resolveTrackerSchemaPatch(
   if (patch.sharing !== undefined) resolved.sharing = patch.sharing;
   if (patch.draftByDefault !== undefined) resolved.draftByDefault = patch.draftByDefault;
   if (patch.archived !== undefined) resolved.archived = patch.archived;
+  if (patch.localNumbers !== undefined) resolved.localNumbers = patch.localNumbers;
   if (patch.activity !== undefined) {
     (resolved as TrackerDataModel & { activity?: unknown[] }).activity = [...patch.activity];
   }
@@ -315,7 +318,7 @@ export function diffTrackerSchema(
   const scalarKeys: Array<keyof TrackerDataModel> = [
     'displayName', 'displayNamePlural', 'icon', 'color', 'inlineTemplate',
     'creatable', 'primaryCapable', 'supportsTags', 'sharing', 'draftByDefault',
-    'archived',
+    'archived', 'localNumbers',
   ];
   const patchRecord = patch as unknown as Record<string, unknown>;
   const modes = Object.fromEntries(Object.entries(target.modes).filter(([key, value]) => seed.modes[key as keyof typeof seed.modes] !== value));

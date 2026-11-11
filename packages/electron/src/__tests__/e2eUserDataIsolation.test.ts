@@ -16,14 +16,21 @@
  * settings (sync config, signed-in accounts, open workspaces).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
-import { buildTestEnv } from '../../e2e/helpers';
+import { buildTestEnv, resolveTestRendererUrl, buildElectronArgs } from '../../e2e/helpers';
 
 const REAL_USER_DATA_FRAGMENT = path.join('@nimbalyst', 'electron');
 
 describe('E2E launcher userData isolation', () => {
+  it('selects the isolated profile before static main-process imports execute', () => {
+    const mine = path.join(os.tmpdir(), 'nimbalyst-launch-profile');
+    expect(buildElectronArgs('/synthetic/main.js', '/synthetic/workspace', mine))
+      .toContain(`--user-data-dir=${mine}`);
+    expect(buildElectronArgs(undefined, '/synthetic/workspace', mine))
+      .toEqual([`--user-data-dir=${mine}`, '--workspace', '/synthetic/workspace']);
+  });
   it('pins Electron at an isolated temp userData directory', () => {
     const env = buildTestEnv('http://127.0.0.1:5273');
 
@@ -93,5 +100,20 @@ describe('E2E launcher agent isolation', () => {
     expect(env.NIMBALYST_ALLOW_CODEX_ACCESS).toBe('0');
     expect(env.NIMBALYST_ALLOW_OPENAI_API).toBe('0');
     expect(env.CODEX_HOME.startsWith(env.NIMBALYST_USER_DATA_DIR)).toBe(true);
+  });
+});
+
+describe('built E2E renderer isolation', () => {
+  it('never probes a running dev app for an explicit built main or packaged executable', async () => {
+    const probe = vi.fn(async () => 'http://127.0.0.1:5273');
+    expect(await resolveTestRendererUrl('/synthetic/main.js', undefined, probe)).toBe('');
+    expect(await resolveTestRendererUrl(undefined, '/synthetic/Nimbalyst.exe', probe)).toBe('');
+    expect(probe).not.toHaveBeenCalled();
+    expect(buildTestEnv('').ELECTRON_RENDERER_URL).toBeUndefined();
+  });
+  it('retains the ordinary dev launcher when no build is selected', async () => {
+    const probe = vi.fn(async () => 'http://127.0.0.1:5273');
+    expect(await resolveTestRendererUrl(undefined, undefined, probe)).toBe('http://127.0.0.1:5273');
+    expect(probe).toHaveBeenCalledOnce();
   });
 });

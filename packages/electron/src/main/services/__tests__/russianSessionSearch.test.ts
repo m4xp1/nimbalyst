@@ -14,7 +14,7 @@ CREATE TABLE ai_sessions (id text PRIMARY KEY, workspace_id text, title text, pr
  session_type text DEFAULT 'session', mode text, agent_role text, created_by_session_id text,
  worktree_id text, parent_session_id text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
  is_archived boolean DEFAULT false, is_pinned boolean DEFAULT false, branched_from_session_id text,
- branch_point_message_id bigint, branched_at timestamptz);
+ branch_point_message_id bigint, branched_at timestamptz, metadata jsonb DEFAULT '{}'::jsonb);
 CREATE TABLE ai_agent_messages (id serial PRIMARY KEY, session_id text, source text, direction text, content text,
  searchable integer, searchable_text text, message_kind text, created_at timestamptz DEFAULT now());`;
 

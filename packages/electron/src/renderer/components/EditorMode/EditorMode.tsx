@@ -1,3 +1,4 @@
+import { usePendingFileOpen } from '../../hooks/usePendingFileOpen';
 import React, { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import { useSetAtom, useAtomValue, useAtom } from 'jotai';
 import type { ConfigTheme } from '@nimbalyst/runtime';
@@ -45,6 +46,7 @@ import {
 import { refreshFileTree } from '../../store/listeners/fileTreeListeners';
 import { bindActiveFileToTabs } from '../../store/atoms/fileTree';
 import { requestConfirmation } from '../../dialogs/requestConfirmation';
+import { openFileAsWikiPage } from '../../utils/agentEditedPage';
 
 export interface EditorModeRef {
   closeActiveTab: () => void;
@@ -891,6 +893,8 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
     }
   }, [tabsActions]);
 
+  usePendingFileOpen(workspacePath, () => onModeChange?.('files'));
+
   // Handle workspace file selection
   // CRITICAL: Use tabsRef.current to avoid stale closure bug
   // The tabs object changes on every render, so capturing it in a useCallback
@@ -910,6 +914,12 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
       isInitializedRef
     });
   }, []); // No dependencies - uses refs for all mutable state
+
+  // A transcript link: a Local wiki page opens in Pages, anything else here.
+  const handleChatFileOpen = useCallback(async (filePath: string) => {
+    if (await openFileAsWikiPage(filePath, workspacePath, 'agent_tool')) return;
+    await handleWorkspaceFileSelect(filePath);
+  }, [workspacePath, handleWorkspaceFileSelect]);
 
   // Handle opening session - switches to Agent Mode since ChatSidebar manages its own single session
   const handleOpenSessionInChat = useCallback(async (sessionId: string) => {
@@ -1460,9 +1470,9 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
             onToggleCollapse={toggleAIChatCollapsed}
             width={aiChatWidth}
             onWidthChange={setAIChatWidth}
-            documentContext={{ filePath: currentFilePath || '' }}
+            documentContext={{ filePath: currentFilePath || '', fileName: currentFileName || undefined }}
             getDocumentContext={getDocumentContext}
-            onFileOpen={handleWorkspaceFileSelect}
+            onFileOpen={handleChatFileOpen}
             onSwitchToAgentMode={onSwitchToAgentMode ? (sid?: string) => onSwitchToAgentMode(undefined, sid) : undefined}
           />
         )}

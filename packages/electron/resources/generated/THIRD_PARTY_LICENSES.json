@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-08T21:37:40.335Z",
+  "generatedAt": "2026-11-11T05:40:21.683Z",
   "scope": {
     "workspaceRoots": [
       "packages/electron",
@@ -37,7 +37,7 @@
     "description": "Production dependencies reachable from Electron, runtime, and built-in extension workspaces."
   },
   "summary": {
-    "packageCount": 1003,
+    "packageCount": 1005,
     "reviewRequiredCount": 0,
     "approvedExceptionCount": 3,
     "licenseCounts": {
@@ -50,7 +50,7 @@
       "EPL-2.0": 1,
       "ISC": 67,
       "LGPL-3.0": 1,
-      "MIT": 815,
+      "MIT": 817,
       "Python-2.0": 1,
       "SEE LICENSE IN README.md": 1,
       "Unlicense": 2
@@ -59,7 +59,7 @@
     "approvedExceptions": [
       {
         "name": "@anthropic-ai/claude-agent-sdk",
-        "version": "0.3.300",
+        "version": "0.3.321",
         "license": "Anthropic Commercial",
         "reason": "Anthropic commercial license (https://code.claude.com/docs/en/legal-and-compliance). Permits use by developers writing code locally, which is exactly how Nimbalyst integrates the SDK. Used unmodified."
       },
@@ -127,9 +127,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@anthropic-ai/claude-agent-sdk@0.3.300",
+      "id": "@anthropic-ai/claude-agent-sdk@0.3.321",
       "name": "@anthropic-ai/claude-agent-sdk",
-      "version": "0.3.300",
+      "version": "0.3.321",
       "rawLicense": "SEE LICENSE IN README.md",
       "selectedLicense": null,
       "reviewRequired": false,
@@ -1731,9 +1731,33 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/clipboard@0.44.0",
+      "id": "@lexical/a11y@0.53.0",
+      "name": "@lexical/a11y",
+      "version": "0.53.0",
+      "rawLicense": "MIT",
+      "selectedLicense": "MIT",
+      "reviewRequired": false,
+      "reviewReasons": [],
+      "approved": false,
+      "approvalReason": null,
+      "approvalLicense": null,
+      "issues": [],
+      "installPaths": [
+        "node_modules/@lexical/a11y"
+      ],
+      "licenseFiles": [
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\@lexical\\a11y\\LICENSE",
+          "text": "MIT License\n\nCopyright (c) Meta Platforms, Inc. and affiliates.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        }
+      ],
+      "noticeFiles": []
+    },
+    {
+      "id": "@lexical/clipboard@0.53.0",
       "name": "@lexical/clipboard",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1755,9 +1779,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/code@0.44.0",
+      "id": "@lexical/code@0.53.0",
       "name": "@lexical/code",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1779,9 +1803,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/code-core@0.44.0",
+      "id": "@lexical/code-core@0.53.0",
       "name": "@lexical/code-core",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1803,9 +1827,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/code-prism@0.44.0",
+      "id": "@lexical/code-prism@0.53.0",
       "name": "@lexical/code-prism",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1827,9 +1851,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/code-shiki@0.44.0",
+      "id": "@lexical/code-shiki@0.53.0",
       "name": "@lexical/code-shiki",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1851,9 +1875,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/devtools-core@0.44.0",
+      "id": "@lexical/devtools-core@0.53.0",
       "name": "@lexical/devtools-core",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1875,9 +1899,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/dragon@0.44.0",
+      "id": "@lexical/dragon@0.53.0",
       "name": "@lexical/dragon",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1899,9 +1923,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/extension@0.44.0",
+      "id": "@lexical/extension@0.53.0",
       "name": "@lexical/extension",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1923,9 +1947,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/file@0.44.0",
+      "id": "@lexical/file@0.53.0",
       "name": "@lexical/file",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1947,9 +1971,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/hashtag@0.44.0",
+      "id": "@lexical/hashtag@0.53.0",
       "name": "@lexical/hashtag",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1971,9 +1995,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/history@0.44.0",
+      "id": "@lexical/history@0.53.0",
       "name": "@lexical/history",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -1995,9 +2019,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/html@0.44.0",
+      "id": "@lexical/html@0.53.0",
       "name": "@lexical/html",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2019,9 +2043,33 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/link@0.44.0",
+      "id": "@lexical/internal@0.53.0",
+      "name": "@lexical/internal",
+      "version": "0.53.0",
+      "rawLicense": "MIT",
+      "selectedLicense": "MIT",
+      "reviewRequired": false,
+      "reviewReasons": [],
+      "approved": false,
+      "approvalReason": null,
+      "approvalLicense": null,
+      "issues": [],
+      "installPaths": [
+        "node_modules/@lexical/internal"
+      ],
+      "licenseFiles": [
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\@lexical\\internal\\LICENSE",
+          "text": "MIT License\n\nCopyright (c) Meta Platforms, Inc. and affiliates.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        }
+      ],
+      "noticeFiles": []
+    },
+    {
+      "id": "@lexical/link@0.53.0",
       "name": "@lexical/link",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2043,9 +2091,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/list@0.44.0",
+      "id": "@lexical/list@0.53.0",
       "name": "@lexical/list",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2067,9 +2115,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/mark@0.44.0",
+      "id": "@lexical/mark@0.53.0",
       "name": "@lexical/mark",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2091,9 +2139,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/markdown@0.44.0",
+      "id": "@lexical/markdown@0.53.0",
       "name": "@lexical/markdown",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2115,9 +2163,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/overflow@0.44.0",
+      "id": "@lexical/overflow@0.53.0",
       "name": "@lexical/overflow",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2139,9 +2187,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/plain-text@0.44.0",
+      "id": "@lexical/plain-text@0.53.0",
       "name": "@lexical/plain-text",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2163,9 +2211,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/react@0.44.0",
+      "id": "@lexical/react@0.53.0",
       "name": "@lexical/react",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2187,9 +2235,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/rich-text@0.44.0",
+      "id": "@lexical/rich-text@0.53.0",
       "name": "@lexical/rich-text",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2211,9 +2259,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/selection@0.44.0",
+      "id": "@lexical/selection@0.53.0",
       "name": "@lexical/selection",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2235,9 +2283,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/table@0.44.0",
+      "id": "@lexical/table@0.53.0",
       "name": "@lexical/table",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2259,9 +2307,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/text@0.44.0",
+      "id": "@lexical/text@0.53.0",
       "name": "@lexical/text",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2283,9 +2331,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/utils@0.44.0",
+      "id": "@lexical/utils@0.53.0",
       "name": "@lexical/utils",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2307,9 +2355,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@lexical/yjs@0.44.0",
+      "id": "@lexical/yjs@0.53.0",
       "name": "@lexical/yjs",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -2451,9 +2499,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@openai/codex@0.167.0-alpha.3.2",
+      "id": "@openai/codex@0.167.0",
       "name": "@openai/codex",
-      "version": "0.167.0-alpha.3.2",
+      "version": "0.167.0",
       "rawLicense": "Apache-2.0",
       "selectedLicense": "Apache-2.0",
       "reviewRequired": false,
@@ -2471,9 +2519,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@openai/codex-sdk@0.167.0-alpha.3.2",
+      "id": "@openai/codex-sdk@0.167.0",
       "name": "@openai/codex-sdk",
-      "version": "0.167.0-alpha.3.2",
+      "version": "0.167.0",
       "rawLicense": "Apache-2.0",
       "selectedLicense": "Apache-2.0",
       "reviewRequired": false,
@@ -2579,9 +2627,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@preact/signals-core@1.14.1",
+      "id": "@preact/signals-core@1.14.5",
       "name": "@preact/signals-core",
-      "version": "1.14.1",
+      "version": "1.14.5",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3601,9 +3649,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/core@4.0.2",
+      "id": "@shikijs/core@4.5.0",
       "name": "@shikijs/core",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3625,9 +3673,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/engine-javascript@4.0.2",
+      "id": "@shikijs/engine-javascript@4.5.0",
       "name": "@shikijs/engine-javascript",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3649,9 +3697,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/engine-oniguruma@4.0.2",
+      "id": "@shikijs/engine-oniguruma@4.5.0",
       "name": "@shikijs/engine-oniguruma",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3673,9 +3721,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/langs@4.0.2",
+      "id": "@shikijs/langs@4.5.0",
       "name": "@shikijs/langs",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3697,9 +3745,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/primitive@4.0.2",
+      "id": "@shikijs/primitive@4.5.0",
       "name": "@shikijs/primitive",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3721,9 +3769,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/themes@4.0.2",
+      "id": "@shikijs/themes@4.5.0",
       "name": "@shikijs/themes",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -3745,9 +3793,9 @@
       "noticeFiles": []
     },
     {
-      "id": "@shikijs/types@4.0.2",
+      "id": "@shikijs/types@4.5.0",
       "name": "@shikijs/types",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -4917,6 +4965,48 @@
         {
           "fileName": "LICENSE",
           "relativePath": "node_modules\\@types\\hast\\LICENSE",
+          "text": "    MIT License\n\n    Copyright (c) Microsoft Corporation.\n\n    Permission is hereby granted, free of charge, to any person obtaining a copy\n    of this software and associated documentation files (the \"Software\"), to deal\n    in the Software without restriction, including without limitation the rights\n    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n    copies of the Software, and to permit persons to whom the Software is\n    furnished to do so, subject to the following conditions:\n\n    The above copyright notice and this permission notice shall be included in all\n    copies or substantial portions of the Software.\n\n    THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n    SOFTWARE\n"
+        }
+      ],
+      "noticeFiles": []
+    },
+    {
+      "id": "@types/hast@3.0.5",
+      "name": "@types/hast",
+      "version": "3.0.5",
+      "rawLicense": "MIT",
+      "selectedLicense": "MIT",
+      "reviewRequired": false,
+      "reviewReasons": [],
+      "approved": false,
+      "approvalReason": null,
+      "approvalLicense": null,
+      "issues": [],
+      "installPaths": [
+        "node_modules/@shikijs/types/node_modules/@types/hast",
+        "node_modules/@shikijs/primitive/node_modules/@types/hast",
+        "node_modules/@shikijs/core/node_modules/@types/hast",
+        "node_modules/shiki/node_modules/@types/hast"
+      ],
+      "licenseFiles": [
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\@shikijs\\types\\node_modules\\@types\\hast\\LICENSE",
+          "text": "    MIT License\n\n    Copyright (c) Microsoft Corporation.\n\n    Permission is hereby granted, free of charge, to any person obtaining a copy\n    of this software and associated documentation files (the \"Software\"), to deal\n    in the Software without restriction, including without limitation the rights\n    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n    copies of the Software, and to permit persons to whom the Software is\n    furnished to do so, subject to the following conditions:\n\n    The above copyright notice and this permission notice shall be included in all\n    copies or substantial portions of the Software.\n\n    THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n    SOFTWARE\n"
+        },
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\@shikijs\\primitive\\node_modules\\@types\\hast\\LICENSE",
+          "text": "    MIT License\n\n    Copyright (c) Microsoft Corporation.\n\n    Permission is hereby granted, free of charge, to any person obtaining a copy\n    of this software and associated documentation files (the \"Software\"), to deal\n    in the Software without restriction, including without limitation the rights\n    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n    copies of the Software, and to permit persons to whom the Software is\n    furnished to do so, subject to the following conditions:\n\n    The above copyright notice and this permission notice shall be included in all\n    copies or substantial portions of the Software.\n\n    THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n    SOFTWARE\n"
+        },
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\@shikijs\\core\\node_modules\\@types\\hast\\LICENSE",
+          "text": "    MIT License\n\n    Copyright (c) Microsoft Corporation.\n\n    Permission is hereby granted, free of charge, to any person obtaining a copy\n    of this software and associated documentation files (the \"Software\"), to deal\n    in the Software without restriction, including without limitation the rights\n    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n    copies of the Software, and to permit persons to whom the Software is\n    furnished to do so, subject to the following conditions:\n\n    The above copyright notice and this permission notice shall be included in all\n    copies or substantial portions of the Software.\n\n    THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n    SOFTWARE\n"
+        },
+        {
+          "fileName": "LICENSE",
+          "relativePath": "node_modules\\shiki\\node_modules\\@types\\hast\\LICENSE",
           "text": "    MIT License\n\n    Copyright (c) Microsoft Corporation.\n\n    Permission is hereby granted, free of charge, to any person obtaining a copy\n    of this software and associated documentation files (the \"Software\"), to deal\n    in the Software without restriction, including without limitation the rights\n    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n    copies of the Software, and to permit persons to whom the Software is\n    furnished to do so, subject to the following conditions:\n\n    The above copyright notice and this permission notice shall be included in all\n    copies or substantial portions of the Software.\n\n    THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n    SOFTWARE\n"
         }
       ],
@@ -13970,9 +14060,9 @@
       "noticeFiles": []
     },
     {
-      "id": "lexical@0.44.0",
+      "id": "lexical@0.53.0",
       "name": "lexical",
-      "version": "0.44.0",
+      "version": "0.53.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,
@@ -18482,30 +18572,6 @@
       "approvalLicense": null,
       "issues": [],
       "installPaths": [
-        "packages/runtime/node_modules/react-error-boundary"
-      ],
-      "licenseFiles": [
-        {
-          "fileName": "LICENSE",
-          "relativePath": "packages\\runtime\\node_modules\\react-error-boundary\\LICENSE",
-          "text": "The MIT License (MIT)\nCopyright (c) 2020 Brian Vaughn\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
-        }
-      ],
-      "noticeFiles": []
-    },
-    {
-      "id": "react-error-boundary@6.1.2",
-      "name": "react-error-boundary",
-      "version": "6.1.2",
-      "rawLicense": "MIT",
-      "selectedLicense": "MIT",
-      "reviewRequired": false,
-      "reviewReasons": [],
-      "approved": false,
-      "approvalReason": null,
-      "approvalLicense": null,
-      "issues": [],
-      "installPaths": [
         "node_modules/react-error-boundary"
       ],
       "licenseFiles": [
@@ -19918,9 +19984,9 @@
       "noticeFiles": []
     },
     {
-      "id": "shiki@4.0.2",
+      "id": "shiki@4.5.0",
       "name": "shiki",
-      "version": "4.0.2",
+      "version": "4.5.0",
       "rawLicense": "MIT",
       "selectedLicense": "MIT",
       "reviewRequired": false,

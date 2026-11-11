@@ -1,6 +1,25 @@
 import type { TranscriptViewMessage } from '@nimbalyst/runtime/ai/server/transcript/TranscriptProjector';
 import deepEqual from 'fast-deep-equal';
 
+/** Keep unchanged rows stable even when projection adds, removes or moves rows. */
+export function preserveTranscriptMessageIdentity(
+  current: TranscriptViewMessage[],
+  next: TranscriptViewMessage[],
+): TranscriptViewMessage[] {
+  if (current === next) return current;
+  const previousById = new Map(current.map(message => [message.id, message]));
+  let unchanged = current.length === next.length;
+  const messages = next.map((message, index) => {
+    const previous = previousById.get(message.id);
+    // Equality includes generation, sequence and all tool/metadata fields:
+    // matching text alone must never hide a real update or a rebuilt generation.
+    const retained = previous && deepEqual(previous, message) ? previous : message;
+    if (retained !== current[index]) unchanged = false;
+    return retained;
+  });
+  return unchanged ? current : messages;
+}
+
 /** Missing tags are legacy data, never authority over a tagged generation. */
 export function latestTranscriptGeneration(
   messages: readonly { transcriptGeneration?: number }[],
@@ -98,6 +117,18 @@ export function reconcileTranscriptMessages(
     const time = messageTime(message);
     return time > newest ? time : newest;
   }, 0);
+  // A copy no saved row acknowledged (its send failed, or a retry of the same
+  // text acknowledged the failed copy instead) is orphaned once a later prompt
+  // has been saved and answered: sends are serial, so nothing saved can still
+  // be on its way for it. Without this it stays pinned below every turn (#1608).
+  const newestReply = ordered.reduce((newest, message) => {
+    const time = messageTime(message);
+    return message.type !== 'user_message' && time > newest ? time : newest;
+  }, 0);
+  const answeredPrompt = ordered.reduce((newest, message) => {
+    const time = messageTime(message);
+    return message.type === 'user_message' && time < newestReply && time > newest ? time : newest;
+  }, 0);
   const pending = [...optimistic.values()].filter((message) => {
     if (message.type !== 'user_message') return messageTime(message) >= newestCanonical;
     const match = acknowledgements.findIndex(
@@ -107,7 +138,7 @@ export function reconcileTranscriptMessages(
           optimisticAcknowledgmentText(message.text) &&
         messageTime(persisted) >= messageTime(message),
     );
-    if (match < 0) return true;
+    if (match < 0) return messageTime(message) >= answeredPrompt;
     acknowledgements.splice(match, 1);
     return false;
   });

@@ -37,6 +37,7 @@ vi.mock('../../services/GitSyncService', async importOriginal => {
     resolveGitSyncTargets: vi.fn(async () => ({pull:{remote:'origin'},push:{remote:'origin'}})) };
 });
 import { resolveGitPush } from '../../services/GitSyncService';
+vi.mock('../../services/ai/proposalCommitTarget', () => ({ resolveProposalCommitPaths: vi.fn() }));
 import { registerGitHandlers } from '../GitHandlers';
 
 beforeEach(() => {

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const f = vi.hoisted(() => ({ getRateLimits: vi.fn(), rate: null as null | (() => void), account: null as null | (() => void), send: vi.fn(), readFile: vi.fn() }));
+const f = vi.hoisted(() => ({ getRateLimits: vi.fn(), rate: null as null | (() => void), account: null as null | (() => void), send: vi.fn(), readFile: vi.fn(), history: vi.fn() }));
 vi.mock('fs/promises', () => ({ readFile: f.readFile }));
 vi.mock('../CodexAuthService', () => ({ codexAuthService: {
   getRateLimits: f.getRateLimits,
@@ -9,10 +9,11 @@ vi.mock('../CodexAuthService', () => ({ codexAuthService: {
 } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: f.send } }] } }));
 vi.mock('../../utils/logger', () => ({ logger: { main: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } } }));
+vi.mock('../UsageHistoryStore', () => ({ usageHistoryStore: { record: f.history } }));
 import { codexUsageService as service } from '../CodexUsageService';
 function snapshot(scope: string, percent: number) { return { accountScope: scope, rateLimits: { limitId: 'codex', primary: { usedPercent: percent, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: null, credits: null, individualLimit: null, planType: 'pro', rateLimitReachedType: null }, rateLimitsByLimitId: null, rateLimitResetCredits: null }; }
 function reply(scope: string, percent: number) { f.getRateLimits.mockImplementation(async (identified?: (s: string | null) => void) => { identified?.(scope); return snapshot(scope, percent); }); }
-beforeEach(() => { vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.getRateLimits.mockReset(); f.send.mockClear(); service.initialize(); });
+beforeEach(() => { vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.getRateLimits.mockReset(); f.history.mockReset().mockReturnValue([]); f.send.mockClear(); service.initialize(); });
 afterEach(() => { service.stop(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 describe('account-bound Codex usage refresh', () => {
   it('clears the old workspace before new limits arrive, including the same-email switch', async () => {
@@ -49,6 +50,7 @@ describe('account-bound Codex usage refresh', () => {
     complete(snapshot('A', 100));
     expect((await pending).limits[0].windows[0].usedPercent).toBe(8);
     expect(f.send.mock.calls.some(([,v]) => v.limits?.[0]?.windows?.[0]?.usedPercent === 100)).toBe(false);
+    expect(f.history.mock.calls.map(call => call[3])).toEqual(['B']);
   });
   it('does not publish or launch another reader after shutdown during a pending refresh', async () => {
     let complete!: (v: any) => void;
@@ -74,4 +76,15 @@ describe('account-bound Codex usage refresh', () => {
     expect(service.getCachedUsage()?.limits[0].windows[0].usedPercent).toBe(19);
     complete(snapshot('A', 21)); await pending;
   });
+});
+
+it('includes the known account history in refresh replies and hides it after a failed read', async () => {
+  reply('A', 50);
+  const weekly = [{ meter: 'codex:codex:secondary', label: 'Weekly', utilization: 50, resetsAt: '2033-05-18T03:33:20Z', lastSeenAt: 1 }];
+  f.history.mockReturnValue(weekly);
+  expect((await service.refresh()).weeklyHistory).toEqual(weekly);
+  expect(f.history).toHaveBeenLastCalledWith('codex', expect.any(Array), expect.any(Number), 'A');
+  f.getRateLimits.mockRejectedValue(new Error('synthetic missing auth'));
+  expect((await service.refresh()).weeklyHistory).toEqual([]);
+  expect(f.history).toHaveBeenCalledOnce();
 });

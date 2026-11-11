@@ -22,7 +22,7 @@ for (const database of ['sqlite', 'pglite'] as const) test.describe.serial(`Port
 
   const invoke = (channel: string, ...args: any[]) => page.evaluate(({ channel, args }) =>
     (window as any).electronAPI.invoke(channel, ...args), { channel, args });
-  const cards = (): Promise<any[]> => invoke('document-service:tracker-items-list');
+  const cards = (): Promise<any[]> => invoke('document-service:tracker-items-list', workspace);
   async function call(name: string, args: any = {}) {
     const actualName = toolNames.find(candidate => candidate === name || candidate.endsWith(`__${name}`));
     expect(actualName, `MCP exposes ${name}`).toBeTruthy();

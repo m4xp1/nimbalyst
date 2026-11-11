@@ -35,6 +35,7 @@ import type {
 } from '@nimbalyst/collab-protocol';
 import { appendSyncClientParams } from './syncClientInfo';
 import { UnconfirmedPushes, type PushedFileRef } from './projectSyncPushConfirmations';
+import { planProjectSyncPushBatches, projectSyncPushEntryBytes, type ProjectSyncPushFile } from './projectSyncPushBatches';
 import type { PersonalJwt, PersonalMemberId } from '../auth/jwtScopes';
 
 
@@ -63,6 +64,13 @@ export interface ProjectSyncManifestFile {
   hasYjs: boolean;
   yjsSeq: number;
 }
+
+/**
+ * Builds the manifest from current disk. `fullRehash` asks the builder to
+ * re-read every file instead of reusing hashes cached by size + mtime; only an
+ * explicit resync passes it.
+ */
+export type ProjectSyncManifestBuilder = (opts: { fullRehash: boolean }) => Promise<ProjectSyncManifestFile[]>;
 
 export interface ProjectSyncResponse {
   updatedFiles: ProjectSyncFileUpdate[];
@@ -151,12 +159,14 @@ export class ProjectSyncProvider {
   // Per-project manifest builder. Called on every (re)connect so the server
   // always diffs against *current* disk state, never a stale startup snapshot
   // (NIM-853, Layer 1).
-  private manifestProviders = new Map<string, () => Promise<ProjectSyncManifestFile[]>>();
+  private manifestProviders = new Map<string, ProjectSyncManifestBuilder>();
   private pendingPushes = new Map<string, PendingPush>(); // requestId -> pending ack
   // Whether the server behind a socket acks pushes, learned from its first
   // projectSyncResponse. Absent until then.
   private pushAckSockets = new WeakMap<WebSocket, boolean>();
   private unconfirmedPushes = new UnconfirmedPushes();
+  // Sockets whose sync response asked for files; only a push ack proves them healthy.
+  private socketsOwingPushes = new WeakSet<WebSocket>();
 
   // Event callbacks
   private onFileUpdateCallbacks = new Set<(projectId: string, file: ProjectSyncFileUpdate) => void>();
@@ -170,7 +180,7 @@ export class ProjectSyncProvider {
 
   // MARK: - Connection
 
-  async connect(projectId: string, getManifest: () => Promise<ProjectSyncManifestFile[]>): Promise<void> {
+  async connect(projectId: string, getManifest: ProjectSyncManifestBuilder): Promise<void> {
     if (this.connections.has(projectId)) return;
 
     // Remember the builder so reconnects re-announce fresh disk state.
@@ -191,7 +201,8 @@ export class ProjectSyncProvider {
       this.connections.set(projectId, ws);
 
       ws.onopen = () => {
-        this.reconnectAttempts.set(projectId, 0);
+        // Backoff is not reset here: a socket that opens and then dies during
+        // the push would otherwise retry every 2s forever. See noteHealthy.
         this.notifyStatus(projectId, true);
         // Build the manifest from *current* disk, send it, then drain the queue.
         // Ordering preserved: sync request before replayed pushes.
@@ -263,18 +274,19 @@ export class ProjectSyncProvider {
    * Re-announce current disk state so the server re-offers what this client
    * lacks, through the normal receive path (timestamps, conflicts, deletes).
    * No-op when the project is not connected; the next connect does the same.
+   * `fullRehash` re-reads every file rather than trusting cached hashes.
    */
-  resync(projectId: string): Promise<void> {
-    return this.sendFreshSyncRequest(projectId);
+  resync(projectId: string, opts: { fullRehash?: boolean } = {}): Promise<void> {
+    return this.sendFreshSyncRequest(projectId, opts.fullRehash === true);
   }
 
   /** Rebuild the manifest from current disk state and send the sync request. */
-  private async sendFreshSyncRequest(projectId: string): Promise<void> {
+  private async sendFreshSyncRequest(projectId: string, fullRehash = false): Promise<void> {
     const getManifest = this.manifestProviders.get(projectId);
     if (!getManifest) return;
     let manifest: ProjectSyncManifestFile[];
     try {
-      manifest = await getManifest();
+      manifest = await getManifest({ fullRehash });
     } catch (err) {
       console.error(`[ProjectSync] Failed to build manifest for ${projectId}:`, err);
       return;
@@ -314,6 +326,7 @@ export class ProjectSyncProvider {
       case 'projectSyncResponse': {
         const msg = envelope as ProjectSyncResponseMessage;
         this.notePushAckSupport(projectId, msg.pushAck === true);
+        this.noteSyncResponseBatch(projectId, msg);
         // Settled before the await, so a later push of the same file supersedes it.
         const confirmedPushes = this.unconfirmedPushes.settle(projectId, msg);
         await this.handleSyncResponse(projectId, msg, confirmedPushes);
@@ -332,6 +345,7 @@ export class ProjectSyncProvider {
         // Future: handle Yjs updates
         break;
       case 'fileContentPushAck':
+        this.reconnectAttempts.set(projectId, 0);
         this.handlePushAck(JSON.parse(raw) as FileContentPushAckMessage);
         break;
       case 'error': {
@@ -447,16 +461,33 @@ export class ProjectSyncProvider {
     return this.sendAwaitingAck(projectId, msg, [{ syncId, contentHash, lastModifiedAt }]);
   }
 
-  async pushFileBatch(
-    projectId: string,
-    files: Array<{
-      syncId: string;
-      content: string;
-      relativePath: string;
-      title: string;
-      lastModifiedAt: number;
-    }>
-  ): Promise<ProjectFilePushOutcome> {
+  /**
+   * Push files in frames of bounded size, one at a time, each after the last
+   * one's ack, so what is stored stops being re-requested even if a later frame
+   * fails. When the socket that started the push is gone, the frames not yet
+   * sent are reported unconfirmed and are not queued: the next sync request
+   * asks for whatever the server still lacks.
+   */
+  async pushFileBatch(projectId: string, files: ProjectSyncPushFile[]): Promise<ProjectFilePushOutcome> {
+    const outcome: ProjectFilePushOutcome = { stored: [], rejected: [], unconfirmed: [] };
+    const ws = this.connections.get(projectId);
+    const stillOpen = () => ws !== undefined && this.connections.get(projectId) === ws && ws.readyState === WebSocket.OPEN;
+    const batches = planProjectSyncPushBatches(files, projectSyncPushEntryBytes);
+    for (let i = 0; i < batches.length; i++) {
+      const msg = stillOpen() ? await this.encryptBatch(batches[i]) : undefined;
+      if (!msg || !stillOpen()) {
+        for (const rest of batches.slice(i)) outcome.unconfirmed.push(...rest.map(f => f.syncId));
+        break;
+      }
+      const result = await this.sendAwaitingAck(projectId, msg, msg.files.map(({ syncId, contentHash, lastModifiedAt }) => ({ syncId, contentHash, lastModifiedAt })));
+      outcome.stored.push(...result.stored);
+      outcome.rejected.push(...result.rejected);
+      outcome.unconfirmed.push(...result.unconfirmed);
+    }
+    return outcome;
+  }
+
+  private async encryptBatch(files: ProjectSyncPushFile[]): Promise<FileContentBatchPushMessage> {
     const key = this.config.encryptionKey;
 
     const entries = await Promise.all(
@@ -481,12 +512,7 @@ export class ProjectSyncProvider {
       })
     );
 
-    const msg: FileContentBatchPushMessage = {
-      type: 'fileContentBatchPush',
-      files: entries,
-      requestId: crypto.randomUUID(),
-    };
-    return this.sendAwaitingAck(projectId, msg, entries.map(({ syncId, contentHash, lastModifiedAt }) => ({ syncId, contentHash, lastModifiedAt })));
+    return { type: 'fileContentBatchPush', files: entries, requestId: crypto.randomUUID() };
   }
 
   deleteFile(projectId: string, syncId: string): void {
@@ -666,6 +692,18 @@ export class ProjectSyncProvider {
     pending.resolve({ stored: [], rejected: [], unconfirmed: syncIds });
   }
 
+  /**
+   * A socket proves healthy, and resets the reconnect backoff, when a push on
+   * it is acked or when its sync response asks for nothing. A response that
+   * asks for files waits for the ack instead.
+   */
+  private noteSyncResponseBatch(projectId: string, msg: ProjectSyncResponseMessage): void {
+    const ws = this.connections.get(projectId);
+    if (!ws) return;
+    if (msg.needFromClient.length > 0) this.socketsOwingPushes.add(ws);
+    if (msg.isLastBatch !== false && !this.socketsOwingPushes.has(ws)) this.reconnectAttempts.set(projectId, 0);
+  }
+
   /** A closed socket will never deliver the acks it owed. */
   private settlePendingPushes(projectId: string): void {
     for (const [requestId, pending] of this.pendingPushes) {
@@ -691,6 +729,9 @@ export class ProjectSyncProvider {
     const attempts = this.reconnectAttempts.get(projectId) ?? 0;
     const delay = Math.min(2000 * Math.pow(2, attempts), 30000);
     this.reconnectAttempts.set(projectId, attempts + 1);
+    if (attempts > 0) {
+      console.warn(`[ProjectSync] ${projectId} closed before proving healthy ${attempts + 1} times in a row; reconnecting in ${delay}ms`);
+    }
 
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(projectId);
