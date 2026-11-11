@@ -66,6 +66,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Custom Claude models: models listed under `modelPicker` in Claude's user, project, or local settings appear in the Claude Code and Claude Code CLI pickers and are sent to the user's gateway by name (`behavesAs` sets context window and effort/thinking support; `replaceBuiltInOptions` hides the built-in models). CLI sessions follow a loopback `ANTHROPIC_BASE_URL` from Claude settings; non-loopback URLs are not followed
 - OpenAI Codex (SDK / app-server transport with MCP support)
 - Windows fork: weekly Codex usage history is bound to the native account/workspace identity. Account changes and stale quota replies cannot populate another account's current limits or saved history.
+- Windows fork: Codex Usage can follow ChatGPT Desktop or select an independently signed-in ChatGPT workspace. The picker, quota indicator, and subscription turns use the selected scope. Explicit API connections keep their own credential route.
 - OpenAI Codex over ACP
 - GitHub Copilot CLI (ACP)
 - Grok Build (ACP)
@@ -127,6 +128,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Pending review banner (approve/reject AI changes)
 - Red/green diff display per tool call
 - Approve all / reject all pending changes
+- The Windows fork shares path identity across Edited Files, Review, Chat with Session, and File viewer. Keep clears the pending marker after review. All Uncommitted Files uses current Git status in the workspace repositories.
 - Interactive prompts (durable, persist across restarts):
   - AskUserQuestion
   - PromptForUserInput (multi-field choices, reordering, editable text, and confirmations)
@@ -145,6 +147,9 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Image attachment support
 - A named file or page context indicator above the chat input, with a separate short preview of selected text, consistent across Files, Agent and Wiki modes (shared, Local and Personal pages). Selection chips show selected text, mockup annotations and extension-provided items from node-like editors such as Excalidraw; each selection chip has an × to drop it from the prompt while keeping the document context, and node-like editors can report multiple selections at once
 - Queued prompts display; messages queued while the agent works (typed by the user or sent by other sessions) are delivered together in one turn, each labeled with its author, with slash commands and differing document context kept as separate turns
+- Desktop Codex app-server composer offers Queue, Send now, and Stop during a turn. Send now adds the follow-up to that turn. Files attached to a follow-up can be sent through Queue.
+- Add to chat turns selected Markdown or transcript text into a draft annotation for the active session. Draft markers reopen their comments, and the composer list can navigate back to them. Saving an empty comment removes its marker.
+- Smart Commit remembers the model, reasoning effort, and optional temporary Codex session setting across sessions. A temporary session proposes a message for selected paths and shows the proposal for confirmation.
 - Slash command typeahead
 - Action prompts dropdown in composer (reusable prompt presets defined in `nimbalyst-local/ai-actions.md`; pick to insert verbatim into the draft, with undo support)
 
@@ -575,7 +580,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Reorder project rail icons by dragging, Move up/down, or Sort by name; order persists without changing the active project.
 - Drag a project from one window's rail to another window's rail to move it there, or drop it outside every window to open it in a new window at that spot. A window whose last project is dragged away closes.
 - Project Manager (Cmd+P)
-- System tray with session status and click-to-navigate
+- System tray with session status and click-to-navigate. The Windows icon uses an outline for visibility on light backgrounds.
 - macOS menu bar fleet monitoring -- follow active sessions, see which need attention, and open them from the menu bar
 - Dock badge for sessions needing attention
 - OS notifications for session events

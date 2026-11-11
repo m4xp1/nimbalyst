@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.83.0+m4xp1.2]
+
+### Added
+- Add multiple draft chat annotations from Markdown and transcript selections, with links back to their sources.
+- Queue a follow-up, send it into the active Codex turn, or stop the turn. Smart Commit remembers model, effort, and temporary-session settings.
+- Choose a separate ChatGPT workspace in Codex Usage for Nimbalyst subscription requests.
+
+### Fixed
+- Keep and Keep All update review markers. The right pane resolves paths consistently and lists current Git changes in All Uncommitted Files.
+- Open Markdown with complex formatting and offer the unsaved edit in Source Mode if rich-text save cannot preserve the original formatting.
+- Keep the Windows tray icon legible on light backgrounds while an agent is working.
+
 ## [0.83.0+m4xp1.1] - 2026-11-11
 
 ### Changed
