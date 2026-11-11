@@ -51,6 +51,7 @@ test('opens a checkpoint with tables and a pending review without rewriting the 
 
   await tab.locator(PLAYWRIGHT_TEST_SELECTORS.unifiedDiffAcceptAllButton).dispatchEvent('click');
   await expect(tab.locator(PLAYWRIGHT_TEST_SELECTORS.unifiedDiffHeader)).toHaveCount(0);
+  await expect.poll(() => page.evaluate(file => window.electronAPI.history.getPendingTags(file), filePath)).toEqual([]);
   expect(await fs.readFile(filePath, 'utf8')).toBe(agentContent);
   await closeTabByFileName(page, 'CHECKPOINT.md');
 });

@@ -1054,6 +1054,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     } else if (canUseLexical && isMarkdown) {
       applyToEditor = (content) => {
         const transformers = getEditorTransformers();
+        // reloadFromDisk verifies the committed editor state immediately.
         editor!.update(() => {
           // Clearing a selected node without moving selection first makes
           // Lexical throw "selection has been lost ..." (NIM-2005).
@@ -1061,7 +1062,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           const root = $getRoot();
           root.clear();
           $convertFromEnhancedMarkdownString(content, transformers);
-        }, { tag: externalContentUpdateTags(editor) });
+        }, { discrete: true, tag: externalContentUpdateTags(editor) });
         setReloadVersion((v) => v + 1);
       };
     } else if (canUseSetContent) {
