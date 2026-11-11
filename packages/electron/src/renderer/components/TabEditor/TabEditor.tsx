@@ -26,6 +26,7 @@ import {
   REJECT_DIFF_COMMAND,
   CLEAR_DIFF_TAG_COMMAND,
   INCREMENTAL_APPROVAL_COMMAND,
+  groupDiffChanges,
   $hasDiffNodes,
   $approveDiffs,
   $rejectDiffs
@@ -1925,14 +1926,11 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               await new Promise((resolve) => setTimeout(resolve, 100));
               diffTrace('TabEditor.applyDiffState post-dispatch settle done', { filePath, t: performance.now() });
 
-              // Table cells and source-only edits can differ on disk without
-              // producing inline Lexical diff nodes. Reload the agent's bytes
-              // and keep the review controls, just as for a large document.
-              const diffRendered = editorRef.current.getEditorState().read(() =>
-                $hasDiffNodes(editorRef.current!),
-              );
-              if (!diffRendered && newContent !== oldContent) {
-                presentWithoutInline('changed source produced no inline diff nodes');
+              // Match the review header's definition of a navigable change.
+              // Modified container markers alone can still leave its group
+              // list empty, so keep the whole-file review controls available.
+              if (newContent !== oldContent && groupDiffChanges(editorRef.current).length === 0) {
+                presentWithoutInline('changed source produced no reviewable inline groups');
               } else {
                 report('applied');
               }
