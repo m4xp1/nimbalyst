@@ -2302,6 +2302,7 @@ importers:
         version: 3.2.0(vite@7.3.6(@types/node@20.19.43)(jiti@2.7.0)(terser@5.46.1)(yaml@2.8.3))
 
   packages/search-text: {}
+
   packages/tracker-builtins:
     devDependencies:
       esbuild:
