@@ -30,6 +30,7 @@ const testState = vi.hoisted(() => ({
     status: "modified";
     staged: boolean;
   }>,
+  workspaceRoots: [] as string[],
   workstreamSessions: ["active-session", "other-session"],
 }));
 
@@ -47,6 +48,8 @@ vi.mock("jotai", () => ({
         return testState.uncommittedFiles;
       case "worktree-changed-files":
         return testState.changedWorktreeFiles;
+      case "workspace-roots":
+        return testState.workspaceRoots;
       case "workstream-sessions":
         return testState.workstreamSessions;
       default:
@@ -77,6 +80,8 @@ vi.mock("virtua", () => ({
     </div>
   ),
 }));
+
+vi.mock("../../../store/atoms/fileTree", () => ({ workspaceRootPathsAtom: "workspace-roots" }));
 
 vi.mock("../../../store/atoms/sessionFiles", () => ({
   sessionFileEditsAtom: (sessionId: string) =>

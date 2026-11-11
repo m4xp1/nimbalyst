@@ -116,6 +116,32 @@ describe('HistoryManager across multiple workspace roots', () => {
     expect(files.sort()).toEqual([`${ATTACHED}/src/b.ts`, `${PRIMARY}/src/a.ts`]);
   });
 
+  it('matches Windows path aliases and treats wildcard characters as literal folder names', async () => {
+    const workspace = 'C:\\Workspace\\primary';
+    const attached = 'D:\\External\\work_%';
+    roots.mockImplementation((root) => root === workspace ? [workspace, attached] : [root]);
+    await seedPending('c:/workspace/PRIMARY/src/keep.md');
+    await seedPending('d:\\external\\WORK_%\\src\\attached.md');
+    await seedPending('d:/external/work-other/src/outside.md');
+
+    const files = await history.getPendingFilesForSession(workspace, SESSION);
+    expect(files.sort()).toEqual(['c:/workspace/PRIMARY/src/keep.md', 'd:\\external\\WORK_%\\src\\attached.md']);
+    const { count } = await history.clearAllPending(workspace);
+    expect(count).toBe(2);
+    expect(await history.getPendingFilesForSession('D:/external/work-other', SESSION))
+      .toEqual(['d:/external/work-other/src/outside.md']);
+  });
+
+  it('invalidates the actual workspace after accepting a nested file tag', async () => {
+    const file = `${ATTACHED}/docs/deep/review.md`;
+    await history.createTag(PRIMARY, file, 'accept-fixture', 'baseline', SESSION, 'fixture-tool');
+    expect(await history.getPendingFilesForSession(PRIMARY, SESSION)).toContain(file);
+
+    await history.updateTagStatus(file, 'accept-fixture', 'reviewed');
+
+    expect(await history.getPendingFilesForSession(PRIMARY, SESSION)).not.toContain(file);
+  });
+
   it('clears pending tags under an attached folder and leaves other roots alone', async () => {
     const { count, clearedFiles } = await history.clearAllPending(PRIMARY);
     expect(count).toBe(2);

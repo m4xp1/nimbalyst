@@ -449,25 +449,25 @@ export function initFileStateListeners(workspacePath: string): () => void {
       // emits one broadcast).
       const eventWorkspacePath = data?.workspacePath;
       if (!eventWorkspacePath) return;
+      const eventWorkspaceKey = commitPathKey(eventWorkspacePath, eventWorkspacePath);
 
       // Debounce per workspace so a burst of createTag emissions coalesces into
       // a single refresh pass (mirrors GIT_STATUS_DEBOUNCE_MS behavior).
-      const existingTimer = pendingCountDebounceTimers.get(eventWorkspacePath);
+      const existingTimer = pendingCountDebounceTimers.get(eventWorkspaceKey);
       if (existingTimer) clearTimeout(existingTimer);
 
-      pendingCountDebounceTimers.set(eventWorkspacePath, setTimeout(async () => {
-        pendingCountDebounceTimers.delete(eventWorkspacePath);
+      pendingCountDebounceTimers.set(eventWorkspaceKey, setTimeout(async () => {
+        pendingCountDebounceTimers.delete(eventWorkspaceKey);
 
         const sessionsInWorkspace = Array.from(sessionWorkspaceRegistry.entries())
-          .filter(([, wsPath]) => wsPath === eventWorkspacePath)
-          .map(([sessionId]) => sessionId);
+          .filter(([, wsPath]) => commitPathKey(wsPath, wsPath) === eventWorkspaceKey);
 
         await Promise.all(
-          sessionsInWorkspace.map(async (sessionId) => {
+          sessionsInWorkspace.map(async ([sessionId, sessionWorkspacePath]) => {
             try {
               const pendingFiles: string[] = await window.electronAPI.invoke(
                 'history:get-pending-files-for-session',
-                eventWorkspacePath,
+                sessionWorkspacePath,
                 sessionId
               );
               store.set(setSessionPendingReviewFilesAtom, { sessionId, pendingFiles });

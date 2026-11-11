@@ -8,6 +8,19 @@ describe('shared commit eligibility',()=>{
 
 it('reconciles a fresh session status without losing dirty files outside that response',async()=>{
  const {reconcileCommitStatus}=await import('../commitSelection');
- const result=reconcileCommitStatus(['C:/repo/old.txt','C:/attached/staged.txt'],{'old.txt':{status:'unchanged'},'new.txt':{status:'modified'}},'C:/repo');
+ const result=reconcileCommitStatus(['C:/repo/old.txt','C:/attached/staged.txt'],{'old.txt':{status:'unchanged'},'new.txt':{status:'modified',gitStatusCode:' M'}},'C:/repo');
  expect(result).toEqual(['C:/attached/staged.txt','C:/repo/new.txt']);
+});
+
+it('removes synthetic untracked paths and retains real additions and deletions', async () => {
+  const { filesWithinCommitRoots, reconcileCommitStatus } = await import('../commitSelection');
+  const base = 'C:/fixture/repo';
+  const temp = 'C:/fixture/temporary-clone/ghost.md';
+  const dirty = reconcileCommitStatus([temp, base + '/stale.md'], {
+    [temp]: { status: 'untracked' },
+    'new.md': { status: 'untracked', gitStatusCode: '??' },
+    'removed.md': { status: 'deleted', gitStatusCode: ' D' },
+  }, base);
+  expect(dirty).toEqual([base + '/stale.md', base + '/new.md', base + '/removed.md']);
+  expect(filesWithinCommitRoots([temp, ...dirty, 'c:/fixture/repo/NEW.md'], [base], base)).toEqual(dirty);
 });

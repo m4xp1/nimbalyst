@@ -13,6 +13,7 @@
 import React, { useCallback, useRef, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { store } from '@nimbalyst/runtime/store';
+import { commitPathKey } from '@nimbalyst/runtime/ui/git/commitSelection';
 import { TabsProvider, useTabs, useTabsActions, useTabNavigationShortcuts } from '../../contexts/TabsContext';
 import { useNavigationDialogs } from '../../dialogs/useNavigationDialogs';
 import { TabManager } from '../TabManager/TabManager';
@@ -302,8 +303,11 @@ const WorkstreamEditorTabsInner = forwardRef<WorkstreamEditorTabsRef, Workstream
       ref,
       () => ({
         openFile: (filePath: string, location?: EditorRevealPosition) => {
-          // Check if tab already exists
-          const existing = tabsActions.findTabByPath(filePath);
+          const key = commitPathKey(filePath, basePath);
+          const existing = tabsActions.findTabByPath(filePath) ?? tabs.find(tab =>
+            tab.kind !== 'tracker' && !isFeedbackRequestTab(tab.filePath)
+              && commitPathKey(tab.filePath, basePath) === key,
+          );
           if (existing) {
             tabsActions.switchTab(existing.id);
           } else {
@@ -315,7 +319,7 @@ const WorkstreamEditorTabsInner = forwardRef<WorkstreamEditorTabsRef, Workstream
           // Queued either way: the registry replays it when the editor for this
           // path registers, so an already-open tab and a fresh one behave alike.
           if (location) {
-            revealEditorPosition(filePath, location);
+            revealEditorPosition(existing?.filePath ?? filePath, location);
           }
         },
         openTracker: (trackerItemId: string) => {
@@ -354,7 +358,7 @@ const WorkstreamEditorTabsInner = forwardRef<WorkstreamEditorTabsRef, Workstream
           };
         },
       }),
-      [tabs, activeTabId, tabsActions]
+      [tabs, activeTabId, tabsActions, basePath]
     );
 
     const handleTabClose = useCallback((tabId: string) => {
