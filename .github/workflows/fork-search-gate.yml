@@ -51,6 +51,7 @@ jobs:
           packages/runtime/src/ai/server/protocols/__tests__/CodexAppServerProtocol.test.ts
           packages/runtime/src/ai/server/providers/__tests__/OpenAICodexProvider.test.ts
           packages/runtime/src/editor/markdown/__tests__/MarkdownSource.test.ts
+          packages/runtime/src/editor/plugins/CommentPlugin/__tests__/commenterMode.test.tsx
           packages/electron/src/main/__tests__/HistoryManager.multiRoot.test.ts
           packages/electron/src/main/services/ai/__tests__/aiServiceIpcChannels.test.ts
           packages/electron/src/main/services/ai/__tests__/claudeCliInputIntegrationRoundTrip.test.ts
