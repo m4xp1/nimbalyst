@@ -1,16 +1,33 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const f = vi.hoisted(() => ({ spawn: vi.fn(), clients: [] as any[], scope: 'work' as string | null, percent: 90, fail: false, subject: 'same-user' as unknown }));
+const f = vi.hoisted(() => ({
+  spawn: vi.fn(), clients: [] as any[], scope: 'work' as string | null, percent: 90, fail: false,
+  subject: 'same-user' as unknown, selection: null as string | null, credentials: vi.fn(),
+}));
 vi.mock('node:child_process', () => ({ spawn: f.spawn }));
+vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: f.credentials }));
+vi.mock('../../utils/store', () => ({
+  getAppSetting: () => f.selection,
+  setAppSetting: (_key: string, value: string | null) => { f.selection = value; },
+}));
 vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/codexAppServerBinary', () => ({ resolveCodexBinaryPath: () => '/synthetic/codex', getCodexVendorPathEntries: () => [] }));
 vi.mock('../shellEnvironment', () => ({ getEnhancedPath: () => '' }));
-vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
+vi.mock('electron', () => ({ app: { getPath: () => '/synthetic/nimbalyst' }, BrowserWindow: { getAllWindows: () => [] } }));
 vi.mock('../../utils/logger', () => ({ logger: { main: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } } }));
 vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', () => ({ JsonRpcClient: class {
-  request = vi.fn(async (method: string) => {
+  request = vi.fn(async (method: string, params?: { accountId?: string }) => {
     if (method === 'initialize') return {};
     if (method === 'account/read') return { account: { type: 'chatgpt', email: 'same@example.test', planType: 'pro' }, requiresOpenaiAuth: true };
-    if (method === 'accountSession/list') return { activeSessionId: 'login', sessions: f.scope ? [{ sessionId: 'login', userId: f.subject, email: 'same@example.test', isActive: true, selectedWorkspaceAccountId: f.scope }] : [] };
+    if (method === 'accountSession/switch') f.scope = params?.accountId ?? null;
+    if (method === 'accountSession/list' || method === 'accountSession/switch') {
+      return {
+        activeSessionId: 'login',
+        sessions: f.scope ? [{
+          sessionId: 'login', userId: f.subject, isActive: true, selectedWorkspaceAccountId: f.scope,
+          workspaces: [{ accountId: 'personal', name: 'Personal' }, { accountId: 'work', name: 'GPT' }],
+        }] : [],
+      };
+    }
     if (method === 'account/rateLimits/read') { if (f.fail) throw new Error('synthetic quota failure'); return { accountId: f.scope, rateLimits: { primary: { usedPercent: f.percent } } }; }
     throw new Error('Unexpected RPC: ' + method);
   });
@@ -20,6 +37,9 @@ vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', (
 import { codexAuthService as service } from '../CodexAuthService';
 beforeEach(() => {
   vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.scope = 'work'; f.fail = false; f.subject = 'same-user'; f.clients.length = 0;
+  f.selection = null;
+  f.spawn.mockClear();
+  f.credentials.mockReset();
   f.spawn.mockImplementation(() => ({ killed: false, kill: vi.fn(), stdin: { end: vi.fn() }, stderr: { setEncoding: vi.fn(), on: vi.fn() }, on: vi.fn() }));
 });
 afterEach(() => { service.shutdown(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
@@ -69,4 +89,39 @@ it('rejects an invalid external subject instead of treating it as an application
   await expect(service.getRateLimits()).rejects.toThrow('invalid account identity');
   expect(f.clients[0].request.mock.calls.some(([method]: any[]) => method === 'account/rateLimits/read')).toBe(false);
   expect(f.clients[0].close).toHaveBeenCalled();
+});
+
+it('switches and reads quota in the app-owned home, invalidating the old turn auth', async () => {
+  f.selection = 'work';
+  const previous = service.workspaceAuth();
+  await service.selectWorkspace('personal');
+  expect(f.selection).toBe('personal');
+  expect(() => previous.assertCurrent()).toThrow('workspace changed');
+  expect(f.clients[0].request).toHaveBeenCalledWith('accountSession/switch', {
+    sessionId: 'login', accountId: 'personal', allowBrowserLogin: false,
+  });
+  await expect(service.getRateLimits()).resolves.toMatchObject({ accountScope: expect.stringContaining('personal') });
+  expect(f.spawn.mock.calls.map(([, , options]) => options.env.CODEX_HOME)).toEqual([
+    expect.stringContaining('codex-workspace-auth'),
+  ]);
+  expect(f.clients[0].close).not.toHaveBeenCalled();
+});
+
+it('reads only app-owned credentials and rejects any mismatch with the selected workspace', async () => {
+  f.selection = 'work';
+  const getTokens = service.workspaceAuth().getTokens!;
+  f.credentials.mockResolvedValue(JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: { access_token: 'synthetic-access', account_id: 'personal' },
+  }));
+  await expect(getTokens(false)).rejects.toThrow(/match the selected workspace/);
+  expect(f.credentials).toHaveBeenCalledWith(expect.stringMatching(/codex-workspace-auth[/\\]auth\.json$/), 'utf8');
+  f.credentials.mockResolvedValue(JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: { access_token: 'synthetic-access', account_id: 'work' },
+  }));
+  await expect(getTokens(true)).resolves.toEqual({ accessToken: 'synthetic-access', chatgptAccountId: 'work' });
+  expect(f.clients[0].request).toHaveBeenCalledWith('account/read', { refreshToken: true });
+  f.scope = 'personal';
+  await expect(service.getRateLimits()).rejects.toThrow('selected Codex workspace');
 });

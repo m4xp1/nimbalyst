@@ -59,6 +59,8 @@ export interface AIInputProps {
   onChange: (value: string) => void;
   onSend: (message?: string) => void;
   onCancel?: () => void;
+  onSteer?: () => void;
+  isSteering?: boolean;
   disabled?: boolean;
   isLoading?: boolean;
   placeholder?: string;
@@ -177,6 +179,8 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
     onChange,
     onSend,
     onCancel,
+    onSteer,
+    isSteering,
     disabled,
     isLoading,
     promptSuggestion,
@@ -1145,7 +1149,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       const isTypeaheadVisible = typeaheadMatch && currentOptions.length > 0;
       if (e.key === 'Enter' && e.shiftKey && (e.metaKey || e.ctrlKey) && !isTypeaheadVisible) {
         e.preventDefault();
-        if (value.trim() && !disabled && isLoading && onQueue) {
+        if (value.trim() && !disabled && isLoading && !isSteering && onQueue) {
           handleQueue();
         }
         return;
@@ -1157,7 +1161,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       // Skip if attachments are still being processed (e.g., image compression)
       if (e.key === 'Enter' && !e.shiftKey && !isTypeaheadVisible && !e.nativeEvent.isComposing) {
         e.preventDefault();
-        if (value.trim() && !disabled && processingAttachments.length === 0) {
+        if (value.trim() && !disabled && !isSteering && processingAttachments.length === 0) {
           endDictationForSubmit();
           onSend(value);
         }
@@ -1647,7 +1651,22 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
               isSaving={isSaving}
             />
           ) : isLoading ? (
-            onCancel && (
+            <>
+              {onQueue && (
+                <button type="button" className="ai-chat-queue-button h-9 rounded border border-nim px-2 text-xs disabled:opacity-40"
+                  aria-label="Queue message" title="Send after this turn" onClick={handleQueue}
+                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
+                  Queue
+                </button>
+              )}
+              {onSteer && (
+                <button type="button" className="ai-chat-steer-button h-9 rounded bg-nim-primary px-2 text-xs text-white disabled:opacity-40"
+                  title="Send to the active Codex turn" onClick={onSteer}
+                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
+                  Send now
+                </button>
+              )}
+            {onCancel && (
               <button
                 className="ai-chat-cancel-button w-9 h-9 flex items-center justify-center bg-red-600 border-none rounded-md text-white cursor-pointer transition-all duration-200 animate-pulse hover:bg-red-700 hover:scale-105 hover:animate-none"
                 onClick={() => {
@@ -1661,7 +1680,8 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
                   <path d="M12 4L4 12M4 4L12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </button>
-            )
+            )}
+            </>
           ) : (
             <button
               className="ai-chat-send-button w-9 h-9 flex items-center justify-center bg-[var(--nim-primary)] border-none rounded-md text-white cursor-pointer transition-all duration-200 shrink-0 hover:enabled:bg-[var(--nim-primary-hover)] hover:enabled:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"

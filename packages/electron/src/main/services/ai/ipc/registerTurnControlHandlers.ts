@@ -1,3 +1,5 @@
+import { relative } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { sessionInbox } from '../sessionInboxService';
 import { safeHandle } from '../../../utils/ipcRegistry';
 import { logger } from '../../../utils/logger';
@@ -10,11 +12,20 @@ import {
   type AIProviderType,
   type SessionData,
   AI_PROVIDER_TYPES,
+  ModelIdentifier,
 } from '@nimbalyst/runtime/ai/server/types';
+import { parseEffortLevel } from '@nimbalyst/runtime/ai/server/effortLevels';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
+import { OpenAICodexProvider } from '@nimbalyst/runtime/ai/server/providers/OpenAICodexProvider';
+import type { CodexSteerRequest, CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
+import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { safeSend } from '../aiServiceUtils';
 import { cancelTurnSetup } from '../turnSetupStages';
 import type { AIServiceContext } from './AIServiceContext';
+
+function getCodexProvider(sessionId: string): OpenAICodexProvider | null {
+  return ProviderFactory.getProvider('openai-codex', sessionId) as OpenAICodexProvider | null;
+}
 
 /**
  * Stopping and compacting an in-flight turn.
@@ -34,7 +45,6 @@ export function registerTurnControlHandlers(ctx: AIServiceContext): void {
 
     // Use repository directly - we just need session metadata (provider type),
     // not the full session load with messages
-    const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
     const session = await AISessionsRepository.get(sessionId);
     if (!session) {
       console.warn(`[AIService] Cancel failed - session not found: ${sessionId}`);
@@ -125,6 +135,77 @@ export function registerTurnControlHandlers(ctx: AIServiceContext): void {
     ctx.interruptCurrentTurn(sessionId, { userSendNow: true })
   );
 
+  safeHandle('ai:getSteerTarget', async (_event, sessionId: string): Promise<CodexSteerTarget> => {
+    if (typeof sessionId !== 'string' || !sessionId) return { supported: false, turnId: null };
+    return getCodexProvider(sessionId)?.getSteerTarget(sessionId)
+      ?? { supported: OpenAICodexProvider.supportsConfiguredSteering(), turnId: null };
+  });
+
+  safeHandle('ai:steerCurrentTurn', async (_event, request: CodexSteerRequest): Promise<CodexSteerResult> => {
+    if (!request || typeof request.sessionId !== 'string' || !request.sessionId ||
+        typeof request.workspacePath !== 'string' || !request.workspacePath ||
+        typeof request.expectedTurnId !== 'string' || !request.expectedTurnId ||
+        typeof request.message !== 'string' ||
+        (request.prompt !== undefined && typeof request.prompt !== 'string') ||
+        (request.annotations !== undefined && !Array.isArray(request.annotations)) ||
+        !(request.prompt ?? request.message).trim()) {
+      return { success: false, code: 'rejected', error: 'A session, active turn, workspace, and message are required.' };
+    }
+    const { sessionId, workspacePath, expectedTurnId } = request;
+    const provider = getCodexProvider(sessionId);
+    if (!provider) {
+      return { success: false, code: 'no-active-turn', error: 'The selected Codex turn is no longer active.' };
+    }
+    const target = provider.getSteerTarget(sessionId);
+    if (!target.supported) {
+      return { success: false, code: 'unsupported', error: 'This Codex transport does not support steering.' };
+    }
+    if (target.turnId !== expectedTurnId) {
+      return { success: false, code: 'no-active-turn', error: 'The selected Codex turn is no longer active.' };
+    }
+
+    const session = await AISessionsRepository.get(sessionId);
+    if (session?.provider !== 'openai-codex' ||
+        ![session.workspacePath, session.worktreePath, session.worktreeProjectPath]
+          .some(root => root && relative(root, workspacePath) === '')) {
+      return { success: false, code: 'rejected', error: 'The Codex session is outside this workspace.' };
+    }
+    if (provider !== getCodexProvider(sessionId)) {
+      return { success: false, code: 'no-active-turn', error: 'The selected Codex turn is no longer active.' };
+    }
+    return provider.steerCurrentTurn(request);
+  });
+
+  safeHandle('ai:generateTemporaryCommitMessage', async (_event, request: {
+    sessionId: string;
+    workspacePath: string;
+    model: string;
+    effort: string;
+    prompt: string;
+  }) => {
+    const model = ModelIdentifier.tryParse(request?.model);
+    if (model?.provider !== 'openai-codex' ||
+        !request.sessionId || !request.workspacePath ||
+        typeof request.prompt !== 'string' || !request.prompt.trim() || request.prompt.length > 100_000) {
+      throw new Error('Temporary Smart Commit requires a Codex model and a bounded Git diff.');
+    }
+    const session = await AISessionsRepository.get(request.sessionId);
+    if (!session?.workspacePath || relative(session.workspacePath, request.workspacePath) !== '' ||
+        !ctx.isProviderEnabledForWorkspace(model.provider, session.workspacePath)) {
+      throw new Error('Codex is unavailable for this commit workspace.');
+    }
+    const temporaryId = randomUUID();
+    const provider = ProviderFactory.createProvider(model.provider, temporaryId) as OpenAICodexProvider;
+    try {
+      await provider.initialize({ model: model.model, skipLogging: true });
+      return await provider.generateTemporaryCommitMessage(
+        session.worktreePath || session.workspacePath, request.prompt, parseEffortLevel(request.effort),
+      );
+    } finally {
+      ProviderFactory.destroyProvider(temporaryId, model.provider);
+    }
+  });
+
   // #1252: compact via the provider's real RPC. The renderer used to send
   // the literal string "/compact" as a user turn, which only ever worked for
   // providers whose SDK happens to interpret slash commands -- for Codex it
@@ -149,7 +230,6 @@ export function registerTurnControlHandlers(ctx: AIServiceContext): void {
     // app launch and so has no provider instance. The conversation still
     // exists on the agent's side, so hand the provider what it needs to reach
     // it instead of refusing (#574).
-    const { AISessionsRepository } = await import('@nimbalyst/runtime/storage/repositories/AISessionsRepository');
     const storedSession = await AISessionsRepository.get(sessionId);
     if (!provider && storedSession?.provider) {
       // Only for a type that declares `rpc`: everything else has nothing to

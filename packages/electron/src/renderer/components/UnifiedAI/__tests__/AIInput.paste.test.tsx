@@ -96,6 +96,54 @@ describe('Windows clipboard image paste', () => {
   });
 });
 
+describe('sending follow-ups to an active turn', () => {
+  function renderFollowUp(isSteering = false, supported = true) {
+    const handlers = { onQueue: vi.fn(), onSteer: vi.fn(), onCancel: vi.fn(), onSend: vi.fn() };
+    const store = createStore();
+    render(<Provider store={store}>
+      <AIInput value="Clarify the requirements" onChange={vi.fn()} sessionId="follow-up-test"
+        remoteSession isLoading isSteering={isSteering} {...handlers}
+        onSteer={supported ? handlers.onSteer : undefined} />
+    </Provider>);
+    return handlers;
+  }
+
+  it('routes queueing, steering and stopping to different commands', () => {
+    const handlers = renderFollowUp();
+    fireEvent.click(screen.getByRole('button', { name: 'Queue message' }));
+    expect(handlers.onQueue).toHaveBeenCalledExactlyOnceWith('Clarify the requirements');
+    expect(handlers.onSteer).not.toHaveBeenCalled();
+    expect(handlers.onCancel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+    expect(handlers.onSteer).toHaveBeenCalledTimes(1);
+    expect(handlers.onQueue).toHaveBeenCalledTimes(1);
+    expect(handlers.onCancel).not.toHaveBeenCalled();
+    expect(handlers.onSend).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }));
+    expect(handlers.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dispatch a second copy from either keyboard shortcut while steering', () => {
+    const handlers = renderFollowUp(true);
+    const input = screen.getByRole('textbox');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, shiftKey: true });
+    expect(handlers.onQueue).not.toHaveBeenCalled();
+    expect(handlers.onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Send now' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Cancel request' }).disabled).toBe(false);
+  });
+
+  it('does not offer steering when the active transport does not support it', () => {
+    const handlers = renderFollowUp(false, false);
+    expect(screen.queryByRole('button', { name: 'Send now' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Queue message' }));
+    expect(handlers.onQueue).toHaveBeenCalledExactlyOnceWith('Clarify the requirements');
+  });
+});
+
 describe('dictation in the agent input', () => {
   function renderInput(enabled: boolean) {
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { invoke: vi.fn(async () => ({})) } });

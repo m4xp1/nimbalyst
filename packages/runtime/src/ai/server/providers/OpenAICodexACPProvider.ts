@@ -17,6 +17,7 @@
 
 import path from 'path';
 import { BaseAgentProvider } from './BaseAgentProvider';
+import { OpenAICodexProvider } from './OpenAICodexProvider';
 import { buildUserMessageAddition } from './documentContextUtils';
 import { describeUnusableWorkspacePath } from './workspacePreconditions';
 import { buildClaudeCodeSystemPrompt, buildMetaAgentSystemPrompt, type MetaAgentWorkflowPreset } from '../../prompt';
@@ -269,6 +270,11 @@ export class OpenAICodexACPProvider extends BaseAgentProvider {
     workspacePath?: string,
     attachments?: ChatAttachment[]
   ): AsyncIterableIterator<StreamChunk> {
+    const workspaceAuth = this.config?.apiKey ? undefined : OpenAICodexProvider.getWorkspaceAuth();
+    if (workspaceAuth?.getTokens) {
+      yield { type: 'error', error: 'Select the OpenAI Codex app-server provider to use the independent ChatGPT workspace.' };
+      return;
+    }
     const unusableWorkspace = describeUnusableWorkspacePath(workspacePath);
     if (unusableWorkspace || !workspacePath) {
       yield { type: 'error', error: unusableWorkspace ?? 'No project folder is set for this session.' };
@@ -368,6 +374,7 @@ export class OpenAICodexACPProvider extends BaseAgentProvider {
       };
 
       const isResumedSession = !!existingSessionId;
+      workspaceAuth?.assertCurrent();
       const session = isResumedSession
         ? await this.protocol.resumeSession(existingSessionId, sessionOptions)
         : await this.protocol.createSession(sessionOptions);
@@ -387,6 +394,7 @@ export class OpenAICodexACPProvider extends BaseAgentProvider {
         attachments as any,
       );
 
+      workspaceAuth?.assertCurrent();
       for await (const event of this.protocol.sendMessage(session, {
         content: messageWithAttachmentHints,
         attachments,

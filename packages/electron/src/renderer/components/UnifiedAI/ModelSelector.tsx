@@ -20,6 +20,7 @@ import { getClaudeCodeModelLabel } from '../../utils/modelUtils';
 import { advancedSettingsAtom, aiProviderSettingsAtom } from '../../store/atoms/appSettings';
 import { setWindowModeAtom } from '../../store/atoms/windowMode';
 import { navigateToSettingsAtom } from '../../store/atoms/settingsNavigation';
+import { codexWorkspaceRevisionAtom } from '../../store/atoms/codexUsageAtoms';
 import type { SettingsCategory } from '../Settings/SettingsSidebar';
 import { AlphaBadge } from '../common/AlphaBadge';
 import { HelpTooltip } from '../../help';
@@ -84,6 +85,7 @@ export function ModelSelector({
   const [loading, setLoading] = useState(false);
   const aiProviderSettings = useAtomValue(aiProviderSettingsAtom);
   const advancedSettings = useAtomValue(advancedSettingsAtom);
+  const codexWorkspaceRevision = useAtomValue(codexWorkspaceRevisionAtom);
   const { providers } = aiProviderSettings;
   const setWindowMode = useSetAtom(setWindowModeAtom);
   const navigateToSettings = useSetAtom(navigateToSettingsAtom);
@@ -111,28 +113,6 @@ export function ModelSelector({
   const role = useRole(context, { role: 'menu' });
   const { getReferenceProps, getFloatingProps } = useInteractions([dismiss, role]);
 
-  const loadModels = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await window.electronAPI.aiGetModels();
-      if (response.success && response.grouped) {
-        setModels(response.grouped);
-        // Labels and effort/thinking support for custom Claude gateway models.
-        registerClaudeCustomModelsFromCatalog(Object.values(response.grouped).flat() as AIModel[]);
-        const meta = response as {
-          providerLabels?: Record<string, string>;
-          providerIcons?: Record<string, string>;
-        };
-        if (meta.providerLabels) setProviderLabels(meta.providerLabels);
-        if (meta.providerIcons) setProviderIcons(meta.providerIcons);
-      }
-    } catch (error) {
-      console.error('Failed to load models:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   React.useLayoutEffect(() => {
     if (openRequest === undefined || openRequest === lastOpenRequestRef.current) return;
     lastOpenRequestRef.current = openRequest;
@@ -144,9 +124,29 @@ export function ModelSelector({
   // background, so mounting a new session input never turns a click into a
   // network/CLI discovery boundary.
   useEffect(() => {
+    let current = true;
     setModels({});
-    void loadModels();
-  }, [providers, loadModels]);
+    setLoading(true);
+    void (async () => {
+      try {
+        const response = await window.electronAPI.aiGetModels();
+        if (!current || !response.success || !response.grouped) return;
+        setModels(response.grouped);
+        registerClaudeCustomModelsFromCatalog(Object.values(response.grouped).flat() as AIModel[]);
+        const meta = response as {
+          providerLabels?: Record<string, string>;
+          providerIcons?: Record<string, string>;
+        };
+        if (meta.providerLabels) setProviderLabels(meta.providerLabels);
+        if (meta.providerIcons) setProviderIcons(meta.providerIcons);
+      } catch (error) {
+        if (current) console.error('Failed to load models:', error);
+      } finally {
+        if (current) setLoading(false);
+      }
+    })();
+    return () => { current = false; };
+  }, [providers, codexWorkspaceRevision]);
 
   const handleModelSelect = (modelId: string) => {
     resetTypeahead();

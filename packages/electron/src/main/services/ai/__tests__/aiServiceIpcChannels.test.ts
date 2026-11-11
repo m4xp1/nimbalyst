@@ -17,9 +17,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // vi.mock factories are hoisted above module-level consts, so the collector
 // array has to be hoisted with them.
-const { registered, handlers, pushChange, getProvider } = vi.hoisted(() => ({
+const { registered, handlers, pushChange, getProvider, createProvider, destroyProvider } = vi.hoisted(() => ({
   registered: [] as string[], handlers: new Map<string, (...args: any[]) => any>(),
-  pushChange: vi.fn(), getProvider: vi.fn(),
+  pushChange: vi.fn(), getProvider: vi.fn(), createProvider: vi.fn(), destroyProvider: vi.fn(),
 }));
 vi.mock('electron', async () => ({
   app: (await import('../../../../../test-stubs/privateUserData')).testApp,
@@ -51,7 +51,7 @@ vi.mock('@nimbalyst/runtime/ai/server', () => ({
   GeminiAntigravityProvider: class {},
   OpenAICodexProvider: class {},
   ModelRegistry: {},
-  ProviderFactory: { getProvider },
+  ProviderFactory: { getProvider, createProvider, destroyProvider },
   SessionManager: class {},
   isAskUserQuestionProvider: () => false,
 }));
@@ -86,6 +86,7 @@ import type { AIServiceContext } from '../ipc/AIServiceContext';
 import { AIService } from '../AIService';
 import { logger } from '../../../utils/logger';
 import { resetPushOutcomeWarnings } from '@nimbalyst/runtime/sync/pushOutcome';
+import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 
 /**
  * A context whose every member throws when called. Registration must only
@@ -148,6 +149,9 @@ const EXPECTED_CHANNELS: Record<string, string[]> = {
   registerTurnControlHandlers: [
     'ai:cancelRequest',
     'ai:interruptCurrentTurn',
+    'ai:getSteerTarget',
+    'ai:steerCurrentTurn',
+    'ai:generateTemporaryCommitMessage',
     'ai:compactSession',
   ],
   registerSettingsHandlers: [
@@ -183,6 +187,56 @@ const EXPECTED_CHANNELS: Record<string, string[]> = {
   ],
 };
 
+it('steers the captured turn only for the session workspace', async () => {
+  const steerCurrentTurn = vi.fn().mockResolvedValue({ success: true, turnId: 'turn-a' });
+  const provider = { getSteerTarget: () => ({ supported: true, turnId: 'turn-a' }), steerCurrentTurn };
+  getProvider.mockImplementation((type, id) => type === 'openai-codex' && id === 'session-a'
+    ? provider
+    : null);
+  const session = {
+    id: 'session-a', provider: 'openai-codex', workspacePath: '/primary', worktreePath: '/worktree',
+    messages: [], createdAt: 0, updatedAt: 0,
+  };
+  vi.mocked(AISessionsRepository.get).mockResolvedValueOnce(session).mockResolvedValueOnce(session);
+  registerTurnControlHandlers(stubContext);
+  const request = { sessionId: 'session-a', expectedTurnId: 'turn-a', message: 'Focus on tests' };
+
+  await expect(handlers.get('ai:getSteerTarget')!(null, request.sessionId)).resolves.toEqual({
+    supported: true, turnId: 'turn-a',
+  });
+  await expect(handlers.get('ai:steerCurrentTurn')!(null, { ...request, expectedTurnId: 'stale', workspacePath: '/worktree' }))
+    .resolves.toMatchObject({ success: false, code: 'no-active-turn' });
+  await expect(handlers.get('ai:steerCurrentTurn')!(null, { ...request, workspacePath: '/different' }))
+    .resolves.toMatchObject({ success: false, code: 'rejected' });
+  expect(steerCurrentTurn).not.toHaveBeenCalled();
+  await expect(handlers.get('ai:steerCurrentTurn')!(null, { ...request, workspacePath: '/worktree' }))
+    .resolves.toEqual({ success: true, turnId: 'turn-a' });
+  expect(steerCurrentTurn).toHaveBeenCalledExactlyOnceWith({ ...request, workspacePath: '/worktree' });
+});
+
+it('uses a separate subscription provider for a temporary proposal and rejects another workspace', async () => {
+  const initialize = vi.fn().mockResolvedValue(undefined);
+  const generateTemporaryCommitMessage = vi.fn().mockResolvedValue('Fix widget');
+  createProvider.mockReturnValueOnce({ initialize, generateTemporaryCommitMessage });
+  const session = {
+    id: 'existing-session', provider: 'openai-codex', workspacePath: '/primary', worktreePath: '/worktree',
+    messages: [], createdAt: 0, updatedAt: 0,
+  };
+  vi.mocked(AISessionsRepository.get).mockResolvedValueOnce(session).mockResolvedValueOnce(session);
+  registerTurnControlHandlers({ ...stubContext, isProviderEnabledForWorkspace: () => true });
+  const handler = handlers.get('ai:generateTemporaryCommitMessage')!;
+  const request = { sessionId: session.id, model: 'openai-codex:gpt-6-luna', effort: 'high', prompt: 'Review one diff' };
+
+  await expect(handler(null, { ...request, workspacePath: '/different' })).rejects.toThrow('unavailable');
+  await expect(handler(null, { ...request, workspacePath: '/primary' })).resolves.toBe('Fix widget');
+  expect(createProvider).toHaveBeenCalledExactlyOnceWith('openai-codex', expect.any(String));
+  const temporaryId = createProvider.mock.calls[0][1];
+  expect(temporaryId).not.toBe(session.id);
+  expect(initialize).toHaveBeenCalledExactlyOnceWith({ model: 'gpt-6-luna', skipLogging: true });
+  expect(generateTemporaryCommitMessage).toHaveBeenCalledExactlyOnceWith('/worktree', request.prompt, 'high');
+  expect(destroyProvider).toHaveBeenCalledExactlyOnceWith(temporaryId, 'openai-codex');
+});
+
 const REGISTRARS: Record<string, (ctx: AIServiceContext) => void> = {
   registerInitHandlers,
   registerSessionHandlers,
@@ -207,12 +261,12 @@ describe('AIService IPC registrars', () => {
     });
   }
 
-  it('registers all 63 channels across the modules, with no duplicates', () => {
+  it('registers all 66 channels across the modules, with no duplicates', () => {
     for (const register of Object.values(REGISTRARS)) {
       register(stubContext);
     }
-    expect(registered).toHaveLength(63);
-    expect(new Set(registered).size).toBe(63);
+    expect(registered).toHaveLength(66);
+    expect(new Set(registered).size).toBe(66);
   });
 });
 

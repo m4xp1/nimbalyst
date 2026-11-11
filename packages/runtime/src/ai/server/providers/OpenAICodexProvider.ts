@@ -1,5 +1,6 @@
 import { codexAccessAllowed } from '../../codexAccessPolicy';
 import { codexSessionConfigurationKey } from '../protocols/codexAppServer/windowsSandbox';
+import type { CodexWorkspaceAuth } from '../protocols/codexAppServer/workspaceAuth';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -24,7 +25,9 @@ import {
 import { AgentCapabilities, BUILTIN_AGENT_CAPABILITIES } from '../agentCapabilities';
 import type { FileChangeFidelity } from '../providerFileTracking';
 import { CodexSDKProtocol } from '../protocols/CodexSDKProtocol';
-import { CodexAppServerProtocol, type CodexAppServerHostBindings } from '../protocols/CodexAppServerProtocol';
+import { CodexAppServerProtocol, type CodexAppServerHostBindings, type CodexAppServerMessage } from '../protocols/CodexAppServerProtocol';
+import type { CodexSteerRequest, CodexSteerResult, CodexSteerTarget } from '../protocols/codexAppServer/turnSteering';
+import { clampEffortLevel, type EffortLevel } from '../effortLevels';
 import {setCodexShellTrackingHost} from '../protocols/codexAppServer/shellTracking';
 import { AgentProtocol, ProtocolEvent, ProtocolSession } from '../protocols/ProtocolInterface';
 import { isNonRenderingAppServerItemStarted } from '../transcript/parsers/CodexAppServerRawParser';
@@ -65,6 +68,8 @@ export type CodexTransport = 'sdk' | 'app-server';
  */
 export interface CodexProtocol extends AgentProtocol {
   setApiKey?(apiKey: string): void;
+  getSteerableTurnId?(session: ProtocolSession): string | null;
+  steerTurn?(session: ProtocolSession, expectedTurnId: string, prompt: string): Promise<CodexSteerResult>;
 }
 
 interface ProtocolSessionIdleScheduler {
@@ -351,6 +356,15 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   // structured "sign in to continue" error chunk instead of spawning a child
   // that will fail with an opaque 401 from api.openai.com.
   private static codexAuthGate: (() => Promise<{ requiresOpenaiAuth: boolean }>) | null = null;
+  private static workspaceAuthResolver: (() => CodexWorkspaceAuth) | undefined;
+
+  public static setWorkspaceAuthResolver(resolver?: () => CodexWorkspaceAuth): void {
+    OpenAICodexProvider.workspaceAuthResolver = resolver;
+  }
+
+  public static getWorkspaceAuth(): CodexWorkspaceAuth | undefined {
+    return OpenAICodexProvider.workspaceAuthResolver?.();
+  }
 
   public static setCodexAuthGate(gate: (() => Promise<{ requiresOpenaiAuth: boolean }>) | null): void {
     OpenAICodexProvider.codexAuthGate = gate;
@@ -588,21 +602,31 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     // must not override the selected app-server transport.
     const transport = OpenAICodexProvider.codexTransportResolver?.()
       ?? (deps?.loadSdkModule ? 'sdk' : 'app-server');
+    const workspaceAuth = apiKey ? undefined : OpenAICodexProvider.workspaceAuthResolver?.();
     const useSdk = !deps?.loadAppServerModels && transport === 'sdk';
     if (!useSdk) {
       try {
         const candidates = deps?.loadAppServerModels
           ? await deps.loadAppServerModels(workspacePath)
           : await new CodexAppServerProtocol({ apiKey, resolveCodexPathOverride: resolvePackagedCodexBinaryPath })
-            .discoverModels({ workspacePath: workspacePath || process.cwd() });
+            .discoverModels({
+              workspacePath: workspacePath || process.cwd(),
+              ...(workspaceAuth && { raw: { codexWorkspaceAuth: workspaceAuth } }),
+            });
         // The runtime catalog is authoritative, including an intentionally empty
         // catalog. Never add static models that this runtime did not advertise.
+        workspaceAuth?.assertCurrent();
         return OpenAICodexProvider.mapSdkModelResult(candidates);
       } catch (error) {
+        if (workspaceAuth?.getTokens) {
+          console.warn('[Codex] Model discovery unavailable for the selected ChatGPT workspace.');
+          return [];
+        }
         console.warn('[Codex] Model discovery unavailable; using the offline catalog:', error);
         return OpenAICodexProvider.getFallbackModels();
       }
     }
+    if (workspaceAuth?.getTokens) return [];
     const sdkModels = await OpenAICodexProvider.getModelsFromSdk(apiKey, deps);
     const apiModels = await OpenAICodexProvider.getModelsFromOpenAI(apiKey);
     return OpenAICodexProvider.getPreferredModels(sdkModels, apiModels);
@@ -627,8 +651,9 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   static async discoverSkills(workspacePath: string): Promise<string[]> {
     if (!codexAccessAllowed()) return [];
     if (OpenAICodexProvider.codexTransportResolver?.() === 'sdk') return [];
+    const workspaceAuth = OpenAICodexProvider.workspaceAuthResolver?.();
     return new CodexAppServerProtocol({ resolveCodexPathOverride: resolvePackagedCodexBinaryPath })
-      .discoverSkills({ workspacePath });
+      .discoverSkills({ workspacePath, raw: { codexWorkspaceAuth: workspaceAuth } });
   }
 
   private static async getModelsFromSdk(
@@ -1006,6 +1031,11 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     }
 
     const agentRole = await this.getAgentRole(sessionId);
+    const smartCommitTurn = documentContext?.smartCommitTurn;
+    if (smartCommitTurn && this.transport !== 'app-server') {
+      yield { type: 'error', error: 'Smart Commit model settings require the Codex app-server transport.' };
+      return;
+    }
     const isMetaAgent = agentRole === 'meta-agent';
     const workflowPreset = isMetaAgent ? await this.getWorkflowPreset(sessionId) : 'default';
     const systemPrompt = buildCodexSystemPrompt({
@@ -1117,7 +1147,15 @@ export class OpenAICodexProvider extends BaseAgentProvider {
         ? await OpenAICodexProvider.additionalDirectoriesLoader(workspacePath)
         : [];
 
-      const permissionKey = codexSessionConfigurationKey(permissionDecision.permissionMode, permissionDecision.agentVerified === true, workspacePath, additionalDirectories);
+      const workspaceAuth = this.config?.apiKey ? undefined : OpenAICodexProvider.workspaceAuthResolver?.();
+      workspaceAuth?.assertCurrent();
+      if (workspaceAuth?.getTokens && this.transport !== 'app-server') {
+        throw new Error('The selected Codex workspace requires the Codex app-server transport.');
+      }
+      const permissionKey = JSON.stringify([
+        codexSessionConfigurationKey(permissionDecision.permissionMode, permissionDecision.agentVerified === true, workspacePath, additionalDirectories),
+        workspaceAuth?.revision,
+      ]);
       let cachedLiveSession = sessionId ? this.liveProtocolSessions.get(sessionId) : undefined;
       if (
         sessionId &&
@@ -1177,7 +1215,8 @@ export class OpenAICodexProvider extends BaseAgentProvider {
         // console.log('[CODEX] Pre-edit hook env configured:', { sessionId, sidecarDir });
       }
 
-      const resolvedModel = await this.getConfiguredModel();
+      const independentWorkspace = Boolean(workspaceAuth?.getTokens);
+      const resolvedModel = await this.getConfiguredModel(independentWorkspace);
 
       const sessionOptions = {
         workspacePath,
@@ -1194,6 +1233,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
           abortSignal: abortController.signal,
           agentVerified: permissionDecision.agentVerified === true,
           codexConfigOverrides: this.buildCodexConfigOverrides(mcpServers),
+          ...(workspaceAuth ? { codexWorkspaceAuth: workspaceAuth } : {}),
           ...(codexEnv ? { codexEnv } : {}),
           ...(this.config?.effortLevel ? { effortLevel: this.config.effortLevel } : {}),
           ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
@@ -1210,6 +1250,8 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       if (
         this.transport === 'app-server' &&
         !cachedLiveSession &&
+        !this.config?.apiKey &&
+        !workspaceAuth?.getTokens &&
         OpenAICodexProvider.codexAuthGate
       ) {
         try {
@@ -1297,7 +1339,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
       );
 
       // Send message using protocol -- adapter parses all events
-      for await (const event of this.protocol.sendMessage(session, {
+      const userTurn: CodexAppServerMessage = {
         content: prompt,
         attachments,
         sessionId,
@@ -1305,7 +1347,13 @@ export class OpenAICodexProvider extends BaseAgentProvider {
         // Per-turn signal: the session-level raw.abortSignal is stale on
         // cached/resumed protocol sessions (NIM-1607).
         abortSignal: abortController.signal,
-      })) {
+        allowSteering: true,
+        ...(smartCommitTurn ? {
+          modelOverride: independentWorkspace ? smartCommitTurn.model : OpenAICodexProvider.toBedrockModelId(smartCommitTurn.model),
+          effortOverride: clampEffortLevel(smartCommitTurn.effort, smartCommitTurn.model),
+        } : {}),
+      };
+      for await (const event of this.protocol.sendMessage(session, userTurn)) {
         if (abortController.signal.aborted) {
           throw new Error('Operation cancelled');
         }
@@ -1478,13 +1526,17 @@ export class OpenAICodexProvider extends BaseAgentProvider {
         this.evictLiveProtocolSession(sessionId);
       }
     } finally {
-      if (this.abortController === abortController) {
+      const ownsTurn = this.abortController === abortController;
+      if (ownsTurn) {
         this.abortController = null;
       }
       if (sessionId && this.codexApprovalTurns.get(sessionId)?.signal === abortController.signal) {
         this.codexApprovalTurns.delete(sessionId);
       }
       if (sessionId) {
+        // Codex applies a turn/start model and effort override to later turns as
+        // well. Re-open the saved thread with the session settings next time.
+        if (smartCommitTurn && ownsTurn) this.evictLiveProtocolSession(sessionId);
         const remainingTurns = Math.max(
           0,
           (this.activeProtocolSessionCounts.get(sessionId) ?? 1) - 1,
@@ -1932,13 +1984,13 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     super.destroy();
   }
 
-  private async getConfiguredModel(): Promise<string> {
+  private async getConfiguredModel(independentWorkspace = false): Promise<string> {
     const configured = this.config?.model || OpenAICodexProvider.DEFAULT_MODEL;
     const parsed = ModelIdentifier.tryParse(configured);
     const resolved = parsed ? parsed.model : configured.replace(/^openai-codex:/, '');
     const normalized = resolved.toLowerCase();
     if (normalized === 'openai-codex-cli' || normalized === 'default' || normalized === 'cli') {
-      return OpenAICodexProvider.toBedrockModelId('gpt-6.1-sol');
+      return independentWorkspace ? 'gpt-6.1-sol' : OpenAICodexProvider.toBedrockModelId('gpt-6.1-sol');
     }
 
     // Pass the model directly to the Codex SDK without pre-validation.
@@ -1946,7 +1998,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     // (e.g., gpt-5.4 works via the SDK but isn't listed in the API).
     // The SDK itself will fail with a proper error if the model doesn't exist.
     const finalModel = OpenAICodexProvider.MODEL_REPLACEMENTS.get(normalized) || resolved;
-    return OpenAICodexProvider.toBedrockModelId(finalModel);
+    return independentWorkspace ? finalModel : OpenAICodexProvider.toBedrockModelId(finalModel);
   }
 
   /**
@@ -2918,6 +2970,77 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   /** Whether this provider's active transport can compact in-place. */
   supportsCompaction(): boolean {
     return typeof this.protocol.compactSession === 'function';
+  }
+
+  getSteerTarget(sessionId: string): CodexSteerTarget {
+    const supported = this.transport === 'app-server' && typeof this.protocol.steerTurn === 'function';
+    const session = supported ? this.liveProtocolSessions.get(sessionId) : undefined;
+    return { supported, turnId: session ? this.protocol.getSteerableTurnId?.(session) ?? null : null };
+  }
+
+  static supportsConfiguredSteering(): boolean {
+    return (OpenAICodexProvider.codexTransportResolver?.() ?? 'app-server') === 'app-server';
+  }
+
+  async steerCurrentTurn(request: CodexSteerRequest): Promise<CodexSteerResult> {
+    const { sessionId, expectedTurnId } = request;
+    const target = this.getSteerTarget(sessionId);
+    if (!target.supported || !this.protocol.steerTurn) {
+      return { success: false, code: 'unsupported', error: 'This Codex transport does not support steering.' };
+    }
+    const session = this.liveProtocolSessions.get(sessionId);
+    if (!session || !target.turnId || target.turnId !== expectedTurnId) {
+      return { success: false, code: 'no-active-turn', error: 'The selected Codex turn is no longer active.' };
+    }
+
+    const result = await this.protocol.steerTurn(session, expectedTurnId, request.prompt ?? request.message);
+    if (result.success) {
+      await this.logAgentMessageBestEffort(sessionId, 'input', JSON.stringify({ prompt: request.message }), {
+        metadata: { annotations: request.annotations, codexSteerTurnId: result.turnId },
+      });
+    }
+    return result;
+  }
+
+  async generateTemporaryCommitMessage(workspacePath: string, prompt: string, effort: EffortLevel): Promise<string> {
+    if (this.transport !== 'app-server') {
+      throw new Error('Temporary Smart Commit requires the Codex app-server transport.');
+    }
+    const workspaceAuth = this.config?.apiKey ? undefined : OpenAICodexProvider.workspaceAuthResolver?.();
+    workspaceAuth?.assertCurrent();
+    const model = await this.getConfiguredModel(true);
+    const session = await this.protocol.createSession({
+      workspacePath,
+      model,
+      mcpServers: {},
+      raw: {
+        readOnlyTemporary: true,
+        effortLevel: effort,
+        codexConfigOverrides: {
+          'features.apps': false,
+          'features.hooks': false,
+          'features.plugins': false,
+          'features.shell_tool': false,
+          web_search: 'disabled',
+        },
+        ...(workspaceAuth ? { codexWorkspaceAuth: workspaceAuth } : {}),
+      },
+    });
+    try {
+      workspaceAuth?.assertCurrent();
+      let message = '';
+      for await (const event of this.protocol.sendMessage(session, { content: prompt })) {
+        if (event.type === 'text') message += event.content ?? '';
+        if (event.type === 'error') throw new Error(event.error || 'Codex could not propose a commit message.');
+        if (event.type === 'complete') {
+          const result = (event.content || message).trim();
+          if (result) return result;
+        }
+      }
+      throw new Error('Codex did not return a commit message.');
+    } finally {
+      this.protocol.cleanupSession(session);
+    }
   }
 
   /**

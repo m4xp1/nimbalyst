@@ -4,7 +4,12 @@ import { resolveCodexPermissionProfile } from '../codexPermissionProfile';
 import { clampEffortLevel, parseEffortLevel } from '../../effortLevels';
 
 export function buildCodexThreadStartParams(options: SessionOptions): ThreadStartParams {
-  const permissionProfile = resolveCodexPermissionProfile(
+  const readOnlyTemporary = options.raw?.readOnlyTemporary === true;
+  const permissionProfile = readOnlyTemporary ? {
+    sandboxMode: 'read-only',
+    approvalPolicy: 'never',
+    approvalsReviewer: undefined,
+  } as const : resolveCodexPermissionProfile(
     options.permissionMode,
     options.raw?.agentVerified === true,
     // Approval requests reach the user through the host bindings (#1884).
@@ -39,13 +44,14 @@ export function buildCodexThreadStartParams(options: SessionOptions): ThreadStar
 
   return {
     model: options.model ?? null,
+    ...(readOnlyTemporary ? { modelProvider: 'openai' } : {}),
     sandbox: permissionProfile.sandboxMode,
     cwd: options.workspacePath,
     approvalPolicy: permissionProfile.approvalPolicy,
     ...(permissionProfile.approvalsReviewer
       ? { approvalsReviewer: permissionProfile.approvalsReviewer }
       : {}),
-    ephemeral: false,
+    ephemeral: readOnlyTemporary,
     developerInstructions: systemPrompt,
     config,
     ...(additionalDirectories.length > 0

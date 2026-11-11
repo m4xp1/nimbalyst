@@ -2480,6 +2480,7 @@ app.whenReady().then(async () => {
     // as the only valid "not signed in" signal -- `requiresOpenaiAuth` can be
     // true on signed-in-but-no-codex-access plans, which is a different state
     // and should surface as a 401 mid-turn, not as a sign-in prompt.
+    OpenAICodexProvider.setWorkspaceAuthResolver(() => codexAuthService.workspaceAuth());
     OpenAICodexProvider.setCodexAuthGate(async () => {
       try {
         const status = await codexAuthService.getStatus(true);

@@ -1,3 +1,4 @@
+import { appendChatAnnotations, readChatAnnotations } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { claimExternalSessionForLocalExecution } from '../externalSessions/ExternalSessionService';
 import { warnIfUnpublished } from '@nimbalyst/runtime/sync/pushOutcome';
 import type { SessionChange } from '@nimbalyst/runtime/sync/types';
@@ -45,7 +46,8 @@ import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStat
 import { startTurnLivenessTicker } from './turnLivenessTicker';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { isBedrockToolSearchError } from '@nimbalyst/runtime/ai/server/utils/errorDetection';
-import { resolveEffortLevel, resolveThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
+import { clampEffortLevel, parseEffortLevel, resolveEffortLevel, resolveThinkingMode } from '@nimbalyst/runtime/ai/server/effortLevels';
+import { ModelIdentifier } from '@nimbalyst/runtime/ai/server/ModelIdentifier';
 import type { RawDocumentContext } from '@nimbalyst/runtime/ai/services/types';
 import type { DocumentContextService } from '@nimbalyst/runtime/ai/services/DocumentContextService';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
@@ -445,6 +447,19 @@ export class MessageStreamingHandler {
       console.error(`[AIService] CRITICAL ERROR: Requested session ${sessionId} but got session ${session.id}!`);
       trackSendBlocked('session_mismatch', session.provider);
       throw new Error(`Session mismatch: requested ${sessionId} but got ${session.id}`);
+    }
+
+    let smartCommitTurn: DocumentContext['smartCommitTurn'];
+    if (documentContext?.smartCommitTurn) {
+      const model = ModelIdentifier.tryParse(documentContext.smartCommitTurn.model);
+      if (!model || model.provider !== session.provider ||
+          (model.provider !== 'openai-codex' && model.provider !== 'claude-code')) {
+        throw new Error('Choose a model from the current session provider, or use a temporary Smart Commit.');
+      }
+      smartCommitTurn = {
+        model: model.model,
+        effort: clampEffortLevel(parseEffortLevel(documentContext.smartCommitTurn.effort), model.combined),
+      };
     }
 
     if (session.providerConfig && 'imported' in session.providerConfig && session.providerConfig.imported === true) {
@@ -1314,7 +1329,11 @@ export class MessageStreamingHandler {
       if (isClaudeCode) {
         // Refresh provider config every turn so auth/key changes in settings apply immediately.
         const refreshedConfig = await setup.stage('runtime-config', () => this.svc.buildClaudeCodeRuntimeConfig(session, effectiveWorkspacePath));
-        await setup.stage('initialize', () => provider.initialize(refreshedConfig));
+        await setup.stage('initialize', () => provider.initialize(smartCommitTurn ? {
+          ...refreshedConfig,
+          model: smartCommitTurn.model,
+          effortLevel: smartCommitTurn.effort,
+        } : refreshedConfig));
 
         //   messageLength: message.length,
         //   hasContext: !!documentContext,
@@ -1355,7 +1374,8 @@ export class MessageStreamingHandler {
 
       // Attach @ mentioned files for non-agent providers
       const { enhancedMessage, attachedFiles } = await setup.stage('mentions', () => attachMentionedFiles(message, workspacePath, provider));
-      const messageToSend = enhancedMessage;
+      const chatAnnotations = readChatAnnotations(documentContext?.chatAnnotations);
+      const messageToSend = appendChatAnnotations(enhancedMessage, chatAnnotations);
 
       if (attachedFiles.length > 0) {
         logger.main.info(`[AIService] Attached ${attachedFiles.length} files via @ mentions`, {
@@ -1389,6 +1409,7 @@ export class MessageStreamingHandler {
       const effectiveMode = documentContext?.mode ?? session.mode;
 
       const contextWithSession: DocumentContext = {
+        ...(chatAnnotations.length ? { chatAnnotations, annotationDisplayPrompt: message } : {}),
         // Document fields from prepared context
         filePath: preparedContext.filePath,
         fileType: preparedContext.fileType,
@@ -1432,6 +1453,7 @@ export class MessageStreamingHandler {
         // Pre-built prompts from DocumentContextService (for user message additions)
         documentContextPrompt: userMessageAdditions.documentContextPrompt,
         editingInstructions: userMessageAdditions.editingInstructions,
+        ...(smartCommitTurn && session.provider === 'openai-codex' ? { smartCommitTurn } : {}),
 
         // Origin of this message (e.g. 'wakeup_resume' for ScheduleWakeup-triggered prompts).
         // The transcript parser uses this to render wakeup resumes as a system marker

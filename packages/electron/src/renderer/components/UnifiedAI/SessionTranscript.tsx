@@ -16,6 +16,11 @@ import { RemoteSessionTranscript } from './RemoteSessionTranscript';
  */
 
 import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect, useState, useMemo } from 'react';
+import { appendChatAnnotations, type ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
+import type { CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
+import { chatAnnotationDraftAtom, updateChatAnnotationDraft } from './chatAnnotationDraft';
+import { DraftAnnotationList, TranscriptAnnotationControls } from './ChatAnnotationControls';
+import { selectionPathsMatch } from './TextSelectionIndicator';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { store, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost } from '@nimbalyst/runtime/store';
 import type { SessionData, ChatAttachment, TranscriptViewMessage } from '@nimbalyst/runtime/ai/server/types';
@@ -143,6 +148,7 @@ import { registerSessionWorkspace, loadInitialSessionFileState } from '../../sto
 import { sessionFileEditsAtom } from '../../store/atoms/sessionFiles';
 import { SESSION_PHASE_COLUMNS, setSessionPhaseAtom, type SessionPhase } from '../../store/atoms/sessionKanban';
 import { mergeRestoredPromptIntoDraft } from '../../../shared/restoredDraft';
+import { isClaudeCliTuiTrigger } from '../../../shared/claudeCliPromptMode';
 
 /**
  * Detect a metadata value that's the artifact of `{...stringValue, ...}` -
@@ -202,6 +208,7 @@ function makeOptimisticUserMessage(
   text: string,
   mode?: 'agent' | 'planning',
   attachments?: ChatAttachment[],
+  annotations?: ChatAnnotation[],
 ): TranscriptViewMessage {
   return {
     id: nextOptimisticId(),
@@ -213,6 +220,7 @@ function makeOptimisticUserMessage(
     mode,
     attachments,
     optimistic: true,
+    annotations,
   };
 }
 
@@ -379,6 +387,10 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   const inputRef = useRef<AIInputRef>(null);
   // Guards the await between Enter and the composer clearing against a second send.
   const submittingRef = useRef(false);
+  const steerFlight = useRef(false);
+  const [isSteering, setIsSteering] = useState(false);
+  const [steeringSupported, setSteeringSupported] = useState(false);
+  const [annotationTranscriptRoot, setAnnotationTranscriptRoot] = useState<HTMLDivElement | null>(null);
   const transcriptPanelRef = useRef<{ scrollToMessage: (index: number) => void; scrollToTop: () => void }>(null);
   const loadToolCallDiffs = useCallback(
     (toolCallItemId: string, toolCallTimestamp?: number): Promise<ToolCallDiffLoadResult> =>
@@ -1045,18 +1057,65 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     setDraftAttachments(prev => prev.filter(a => a.id !== attachmentId));
   }, [setDraftAttachments]);
 
+  const consumeAnnotations = useCallback((sent: readonly ChatAnnotation[]) => {
+    if (sent.length) updateChatAnnotationDraft(sessionId, draft => draft.filter(annotation => !sent.includes(annotation)));
+  }, [sessionId]);
+
+  useEffect(() => {
+    let active = true;
+    setSteeringSupported(false);
+    if (provider === 'openai-codex' && isLoading) {
+      void window.electronAPI.invoke('ai:getSteerTarget', sessionId).then((target: CodexSteerTarget) => {
+        if (active) setSteeringSupported(target.supported);
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [provider, isLoading, sessionId]);
+
+  const handleSteer = useCallback(async () => {
+    const message = (store.get(sessionDraftInputAtom(sessionId)) ?? '').trim();
+    if (!message || steerFlight.current) return;
+    if (store.get(sessionDraftAttachmentsAtom(sessionId))?.length) {
+      updateSessionStore({ sessionId, updates: { messages: [
+        ...store.get(sessionMessagesAtom(sessionId)),
+        makeOptimisticError('Use Queue to send a message with file attachments.'),
+      ] } });
+      return;
+    }
+    const annotations = store.get(chatAnnotationDraftAtom(sessionId));
+    steerFlight.current = true;
+    setIsSteering(true);
+    try {
+      const target: CodexSteerTarget = await window.electronAPI.invoke('ai:getSteerTarget', sessionId);
+      if (!target.turnId) throw new Error('There is no active Codex turn. Your message is still in the composer.');
+      const result: CodexSteerResult = await window.electronAPI.invoke('ai:steerCurrentTurn', {
+        sessionId, workspacePath, expectedTurnId: target.turnId,
+        message, prompt: appendChatAnnotations(message, annotations), annotations,
+      });
+      if (!result.success) throw new Error(result.error);
+      setDraftInput(previous => previous.trim() === message ? '' : previous);
+      consumeAnnotations(annotations);
+    } catch (error) {
+      updateSessionStore({ sessionId, updates: { messages: [
+        ...store.get(sessionMessagesAtom(sessionId)), makeOptimisticError(String(error)),
+      ] } });
+    } finally {
+      steerFlight.current = false;
+      setIsSteering(false);
+    }
+  }, [sessionId, workspacePath, setDraftInput, consumeAnnotations, updateSessionStore]);
+
   const handleQueue = useCallback(async (message: string) => {
-    if (!message.trim() || isQueueing) return;
+    if (!message.trim() || isQueueing || steerFlight.current) return;
     setIsQueueing(true);
 
     try {
+      const currentAttachments = store.get(sessionDraftAttachmentsAtom(sessionId)) ?? [];
+      const annotations = isClaudeCliTerminalSession(provider) && isClaudeCliTuiTrigger(message, currentAttachments.length)
+        ? [] : store.get(chatAnnotationDraftAtom(sessionId));
       // Get fresh document context at queue time (reads from disk)
       const effectiveContext = await getEffectiveDocumentContext();
-      const serializableContext = serializeDocumentContext(effectiveContext);
-
-      // Read attachments imperatively — we don't subscribe to keep typing
-      // from re-rendering the entire transcript.
-      const currentAttachments = store.get(sessionDraftAttachmentsAtom(sessionId)) ?? [];
+      const serializableContext = { ...serializeDocumentContext(effectiveContext), chatAnnotations: annotations };
 
       // Keep each submission's authorship/context and stable queue position.
       // Delete-and-recreate merging can race a claim or absorb an agent report.
@@ -1077,13 +1136,14 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       setLastSubmitAt(Date.now());
       setDraftInput('');
       setDraftAttachments([]);
+      consumeAnnotations(annotations);
       clearAIInputHistory(sessionId);
     } catch (error) {
       console.error('[SessionTranscript] Failed to queue prompt:', error);
     } finally {
       setIsQueueing(false);
     }
-  }, [sessionId, getEffectiveDocumentContext, setDraftInput, setDraftAttachments, setLastSubmitAt, isQueueing, clearAIInputHistory]);
+  }, [sessionId, provider, getEffectiveDocumentContext, setDraftInput, setDraftAttachments, setLastSubmitAt, isQueueing, clearAIInputHistory, consumeAnnotations]);
 
   // What the composer looked like when this session opened. Once per session,
   // not per render: we are trying to explain why people do not act on a screen,
@@ -1110,6 +1170,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   }, [sessionId, provider, currentModel]);
 
   const handleSend = useCallback(async () => {
+    const annotations = store.get(chatAnnotationDraftAtom(sessionId));
     // Read draft state imperatively — we deliberately don't subscribe to
     // these atoms in SessionTranscript (see SessionAIInput).
     const currentDraftInput = store.get(sessionDraftInputAtom(sessionId)) ?? '';
@@ -1142,6 +1203,10 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       blocked('no_session_data');
       return;
     }
+    if (steerFlight.current) {
+      blocked('duplicate_prompt');
+      return;
+    }
 
     // claude-code-cli (subscription, NIM-806): the genuine `claude` CLI runs in
     // the terminal strip and is driven by its PTY, not the Agent SDK loop. The
@@ -1170,34 +1235,48 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
         return;
       }
       const attachments = store.get(sessionDraftAttachmentsAtom(sessionId)) ?? [];
-      setDraftInput('');
-      setDraftAttachments([]);
-      clearAIInputHistory(sessionId);
-      resetHistory(sessionId);
+      if (submittingRef.current) {
+        blocked('duplicate_prompt');
+        return;
+      }
+      submittingRef.current = true;
       try {
         if (workspacePath) {
           // NIM-818: capture the active-doc/selection context at send time —
           // the composer appends a compact context block to the PTY line so
           // the CLI knows what "this doc" / "this selection" refers to.
           // (The queued path already carries it via ai:createQueuedPrompt.)
-          let documentContext: unknown;
+          const cliAnnotations = isClaudeCliTuiTrigger(cliMessage, attachments.length) ? [] : annotations;
+          let documentContext = { chatAnnotations: cliAnnotations };
           try {
-            documentContext = serializeDocumentContext(await getEffectiveDocumentContext());
+            documentContext = { ...serializeDocumentContext(await getEffectiveDocumentContext()), chatAnnotations: cliAnnotations };
           } catch (contextError) {
             console.warn('[SessionTranscript] Failed to capture document context for CLI submit:', contextError);
           }
-          await window.electronAPI.terminal.submitClaudeCliPrompt({
+          const result = await window.electronAPI.terminal.submitClaudeCliPrompt({
             sessionId,
             workspacePath,
             prompt: cliMessage,
             attachments,
             documentContext,
           });
+          if (!result.success) throw new Error('The Claude terminal did not accept the message.');
+          setDraftInput(previous => previous === currentDraftInput ? '' : previous);
+          setDraftAttachments(previous => previous.filter(attachment => !attachments.includes(attachment)));
+          clearAIInputHistory(sessionId);
+          resetHistory(sessionId);
+          consumeAnnotations(cliAnnotations);
         }
         recordClaudeActivity();
       } catch (error) {
         console.error('[SessionTranscript] Failed to submit claude-cli prompt:', error);
+        updateSessionStore({
+          sessionId,
+          updates: { messages: [...store.get(sessionMessagesAtom(sessionId)), makeOptimisticError(String(error))] },
+        });
         blocked('cli_submit_failed');
+      } finally {
+        submittingRef.current = false;
       }
       return;
     }
@@ -1327,6 +1406,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       message,
       overrideMode as 'agent' | 'planning' | undefined,
       attachments.length > 0 ? attachments : undefined,
+      annotations,
     );
     updateSessionStore({
       sessionId,
@@ -1346,9 +1426,11 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
         mode: overrideMode,
         inputType: 'user' as const,
         submissionId,
+        chatAnnotations: annotations,
       };
 
       await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
+      consumeAnnotations(annotations);
 
       // Record activity for usage tracking (wake up polling if sleeping)
       if (provider?.startsWith('claude')) {
@@ -1376,7 +1458,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       }
       setIsProcessing(false);
     }
-  }, [sessionId, sessionData, isLoading, getEffectiveDocumentContext, aiMode, workspacePath, setDraftInput, setDraftAttachments, setLastSubmitAt, resetHistory, updateSessionStore, handleQueue, setIsProcessing, messages, sessionHasMessages, startedCliSessionId, mode, onClearSession, onClearAgentSession, clearAIInputHistory, provider, recordClaudeActivity]);
+  }, [sessionId, sessionData, isLoading, getEffectiveDocumentContext, aiMode, workspacePath, setDraftInput, setDraftAttachments, setLastSubmitAt, resetHistory, updateSessionStore, handleQueue, setIsProcessing, messages, sessionHasMessages, startedCliSessionId, mode, onClearSession, onClearAgentSession, clearAIInputHistory, provider, recordClaudeActivity, consumeAnnotations]);
 
   // Launch a sibling session from a `launch: new-session` action prompt.
   // Builds the originating-session mention prefix here (in the renderer) so the
@@ -2569,6 +2651,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
           below. */}
       {!collapseTranscript && (
         <div
+          ref={setAnnotationTranscriptRoot}
           style={{
             flex: 1,
             overflow: 'hidden',
@@ -2581,6 +2664,9 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
                 : 0,
           }}
         >
+          {annotationTranscriptRoot && (
+            <TranscriptAnnotationControls sessionId={sessionId} root={annotationTranscriptRoot} />
+          )}
           <AgentTranscriptPanel
             ref={transcriptPanelRef}
             sessionId={sessionId}
@@ -2772,18 +2858,31 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
         queue={queuedPrompts}
         onCancel={handleCancelQueuedPrompt}
         onEdit={handleEditQueuedPrompt}
-        onSendNow={isLoading && !isClaudeCliTerminalSession(provider) ? handleSendNowQueuedPrompt : undefined}
+        onSendNow={isLoading && provider !== 'openai-codex' && !isClaudeCliTerminalSession(provider) ? handleSendNowQueuedPrompt : undefined}
       />
 
       {/* Note: All interactive prompts (ToolPermission, ExitPlanMode, AskUserQuestion) use inline widgets in transcript */}
 
       {/* Input area — wrapped so the draftInput subscription doesn't
           re-render the entire SessionTranscript on every keystroke. */}
+      <DraftAnnotationList sessionId={sessionId} navigate={annotation => {
+        if (annotation.source.type === 'file') {
+          if (!currentFilePath || !selectionPathsMatch(currentFilePath, annotation.source.filePath)) {
+            handleFileClick(annotation.source.filePath);
+          }
+        } else {
+          const messageId = annotation.source.messageId;
+          const index = messages.findIndex(message => String(message.id) === messageId);
+          if (index >= 0) transcriptPanelRef.current?.scrollToMessage(index);
+        }
+      }} />
       <SessionAIInput
         ref={inputRef}
         testId={mode === 'chat' ? 'files-mode-chat-input' : 'agent-mode-chat-input'}
         onSend={handleSend}
         onCancel={handleCancel}
+        onSteer={steeringSupported ? handleSteer : undefined}
+        isSteering={isSteering}
         isLoading={isLoading}
         workspacePath={workspacePath}
         sessionId={sessionId}

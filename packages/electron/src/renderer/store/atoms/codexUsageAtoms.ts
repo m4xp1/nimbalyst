@@ -67,6 +67,7 @@ export interface CodexUsageWindowEntry {
 }
 
 export const codexUsageAtom = atom<CodexUsageData | null>(null);
+export const codexWorkspaceRevisionAtom = atom(0);
 
 // Rail visibility of the usage indicator is governed by the NavigationGutter
 // customization set (the single source of truth). Read it with
