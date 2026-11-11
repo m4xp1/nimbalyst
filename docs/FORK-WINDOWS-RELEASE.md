@@ -24,22 +24,27 @@ GitHub не умеет одновременно ограничивать tag pus
 скачивания/установки оригинального билда остаются. Для сохранения дополнений новую версию
 форка нужно собрать и установить вручную. `latest.yml` форка не публикуется.
 
-Перед тегом:
+Перед тегом выбрать и зафиксировать upstream SHA; не подменять его новым main во время проверки выпуска. Сначала объединить этот снимок в features и проверить дополнения, затем слить features в существующую release без squash, сохранив Windows-only workflow и её уведомления updater. Main хранит согласованный исходный upstream без собственных test-fix commits.
+
+Пример после завершения проверок и отправки release:
 
 ```powershell
-git switch main
-git merge --ff-only <upstream-release-commit>
-git switch release
-git merge main
-git merge features
-git push origin main release
-# Проверить ручную сборку release, затем:
-git tag -a v0.79.1+m4xp1.1 -m "Nimbalyst 0.79.1+m4xp1.1 fork: Windows x64"
-git push origin refs/tags/v0.79.1+m4xp1.1
+$version = (Get-Content packages/electron/package.json -Raw | ConvertFrom-Json).version
+# Проверить отсутствие тега и принадлежность HEAD ветке release.
+git tag -a "v$version" -m "Nimbalyst $version fork: Windows x64"
+git push origin "refs/tags/v$version"
 ```
 
 При ошибке workflow сохранить лог, исправить причину и повторить проверку.
 Уже опубликованный тег не перемещать без отдельного решения владельца.
+
+## Форк 0.83.0+m4xp1.1
+
+Согласованный upstream main — `28492d00f7d00378fa93dd7c3c9846934c286646`, исходный тег v0.83.0 — `980bb9d1c7641bfab5e9b1d44bab9c76da9b1a20`. Владелец решил выпустить этот проверенный снимок; десять более новых коммитов до e3f7fa81d отложены на следующий выпуск. About: 0.83.0+m4xp1.1, FileVersion: 0.83.0.1, buildNumber: 1. Сохранены все прежние релизы, включая .12.
+
+Обязательный поисковый CI предшествует упаковке и публикации. Built и packaged проверки включают десять отдельных последовательных спецификаций, в том числе миграцию PGLite/SQLite и multi-project rail. Тесты используют искусственные профили и fake providers; доступ к сохранённым OpenAI/Codex credentials запрещён флагами запуска. Запрет действует на процесс тестов, а не встраивается в выпускаемый бинарный файл.
+
+Локальные built53PASS и packaged53PASS, typecheck39workspace и целевые gates не означают зелёного полного Windows-набора: его сохранённый результат — 18939PASS/337FAIL/34SKIP, ограничения описаны в [WINDOWS_PREPUSH_GATE.md](WINDOWS_PREPUSH_GATE.md). Для этого выпуска владелец отменил ручную приёмку; публикация выполняется после успешных обязательных автоматических проверок. Платные API-тесты не запускались. Изменения БД и истории описаны в [WINDOWS_FORK_UPGRADE.md](WINDOWS_FORK_UPGRADE.md).
 
 ## Форк 0.79.1+m4xp1.1
 
