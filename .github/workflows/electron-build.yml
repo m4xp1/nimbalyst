@@ -147,7 +147,7 @@ jobs:
           }
           $env:NIMBALYST_E2E_APP_PATH = Join-Path $target 'Nimbalyst.exe'
           $env:NIMBALYST_E2E_MAIN_PATH = Join-Path $target 'resources/app.asar/out/main/index.js'
-          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts')
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Packaged application regression failed: $spec" }
