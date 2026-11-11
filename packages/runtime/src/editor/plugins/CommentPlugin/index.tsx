@@ -25,7 +25,7 @@
  */
 
 import type { JSX } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
@@ -86,11 +86,8 @@ import type {
   CommentsConfig,
   CommentMentionPayload,
 } from '../../commenting/types';
-import {
-  CollaborativeCommentsPanel,
-  CommentCountBadge,
-  type CommentThreadView,
-} from '../../commenting/ui';
+import { CommentCountBadge } from '../../commenting/ui/CommentCountBadge';
+import type { CommentThreadView } from '../../commenting/ui/types';
 import { INSERT_INLINE_COMMENT_COMMAND } from '../../extensions/builtin/CommentsExtension';
 import { OPEN_COMMENT_COMPOSER_COMMAND } from './commands';
 import {
@@ -104,7 +101,14 @@ import {
 } from './quoteHighlightPainter';
 import { scrollToCommentAnchor } from './scrollToCommentAnchor';
 
+import '../../commenting/ui/comments.css';
 import './CommentPlugin.css';
+
+const CollaborativeCommentsPanel = lazy(() =>
+  import('../../commenting/ui/CollaborativeCommentsPanel').then((module) => ({
+    default: module.CollaborativeCommentsPanel,
+  })),
+);
 
 type MarkNodeMap = Map<string, Set<NodeKey>>;
 
@@ -896,22 +900,24 @@ export default function CommentsPlugin({
 
       {panelOpen &&
         createPortal(
-          <CollaborativeCommentsPanel
-            className="nim-comments-panel--docked"
-            threads={threadViews}
-            activeThreadId={activeThreadId}
-            autoFocusThreadId={activeThreadId}
-            capabilities={capabilities}
-            currentUserId={config.currentUser.id}
-            getMembers={getMembers}
-            onSelectThread={handleSelectThread}
-            onSetThreadResolved={handleSetThreadResolved}
-            onDeleteThread={handleDeleteThread}
-            onDeleteComment={handleDeleteComment}
-            onReply={handleReply}
-            onOpenAgentSession={openAgentSession}
-            onClose={() => setPanelOpen(false)}
-          />,
+          <Suspense fallback={null}>
+            <CollaborativeCommentsPanel
+              className="nim-comments-panel--docked"
+              threads={threadViews}
+              activeThreadId={activeThreadId}
+              autoFocusThreadId={activeThreadId}
+              capabilities={capabilities}
+              currentUserId={config.currentUser.id}
+              getMembers={getMembers}
+              onSelectThread={handleSelectThread}
+              onSetThreadResolved={handleSetThreadResolved}
+              onDeleteThread={handleDeleteThread}
+              onDeleteComment={handleDeleteComment}
+              onReply={handleReply}
+              onOpenAgentSession={openAgentSession}
+              onClose={() => setPanelOpen(false)}
+            />
+          </Suspense>,
           paneElem,
         )}
     </>

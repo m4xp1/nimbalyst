@@ -54,8 +54,8 @@ import CommentsPlugin, { ORPHAN_MARK_GRACE_MS } from '../index';
 const lastPanelProps = vi.hoisted(() => ({
   current: null as CollaborativeCommentsPanelProps | null,
 }));
-vi.mock('../../../commenting/ui', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../commenting/ui')>();
+vi.mock('../../../commenting/ui/CollaborativeCommentsPanel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../commenting/ui/CollaborativeCommentsPanel')>();
   return {
     ...actual,
     CollaborativeCommentsPanel: (props: CollaborativeCommentsPanelProps) => {
@@ -313,11 +313,12 @@ function selectText(editor: LexicalEditor, quote: string, occurrence = 0): void 
 }
 
 /** Type into the open composer and submit it, as the reviewer would. */
-function submitComposer(pane: HTMLElement, text: string): void {
-  const input = pane.querySelector<HTMLTextAreaElement>(
-    '[data-testid="comment-composer-input"]',
-  );
-  if (!input) throw new Error('No comment composer is open.');
+async function submitComposer(pane: HTMLElement, text: string): Promise<void> {
+  const input = await waitFor(() => {
+    const element = pane.querySelector<HTMLTextAreaElement>('[data-testid="comment-composer-input"]');
+    if (!element) throw new Error('No comment composer is open.');
+    return element;
+  });
   fireEvent.change(input, { target: { value: text } });
   const submit = pane.querySelector<HTMLButtonElement>('.nim-comment-btn-submit');
   if (!submit) throw new Error('The composer has no submit button.');
@@ -359,7 +360,7 @@ describe('commenter mode', () => {
     expect(client.editor.isEditable()).toBe(false);
   });
 
-  it('anchors an overlapping quote to the occurrence the reviewer selected', () => {
+  it('anchors an overlapping quote to the occurrence the reviewer selected', async () => {
     const server = serverDocWith(['banana']);
     const client = mountClient(server, { read: true, comment: true, editBody: false });
     panes.push(client.pane);
@@ -368,7 +369,7 @@ describe('commenter mode', () => {
       selectText(client.editor, 'ana', 1);
       client.editor.dispatchCommand(OPEN_COMMENT_COMPOSER_COMMAND, undefined);
     });
-    act(() => submitComposer(client.pane, 'The last three letters.'));
+    await submitComposer(client.pane, 'The last three letters.');
     client.editor.read(() => {});
     const { changed, threads } = changedTypes(server, client.outgoing);
     expect(changed.root).toBe(false);
@@ -379,7 +380,7 @@ describe('commenter mode', () => {
 
   // The server owns a commenter's thread by its first comment, so a thread
   // written empty (or deleted while empty) is refused, terminally.
-  it('writes the thread and its first comment in one update, touching only the comments array', () => {
+  it('writes the thread and its first comment in one update, touching only the comments array', async () => {
     const server = serverDocWith(['Alpha beta gamma.', 'Delta epsilon.']);
     const client = mountClient(server, {
       read: true,
@@ -399,7 +400,7 @@ describe('commenter mode', () => {
     client.editor.read(() => {});
     expect(outgoing).toHaveLength(0);
 
-    act(() => submitComposer(client.pane, 'Is this right?'));
+    await submitComposer(client.pane, 'Is this right?');
     client.editor.read(() => {});
 
     expect(outgoing).toHaveLength(1);
@@ -424,7 +425,7 @@ describe('commenter mode', () => {
     expect(collectMarkIds(client.editor).size).toBe(0);
   });
 
-  it('cancelling a new thread writes nothing and drops it from the panel', () => {
+  it('cancelling a new thread writes nothing and drops it from the panel', async () => {
     const server = serverDocWith(['Alpha beta gamma.']);
     const client = mountClient(server, {
       read: true,
@@ -438,7 +439,7 @@ describe('commenter mode', () => {
       selectText(client.editor, 'beta');
       client.editor.dispatchCommand(OPEN_COMMENT_COMPOSER_COMMAND, undefined);
     });
-    expect(client.pane.querySelectorAll('[data-anchor-state]')).toHaveLength(1);
+    await waitFor(() => expect(client.pane.querySelectorAll('[data-anchor-state]')).toHaveLength(1));
     act(() => cancelComposer(client.pane));
     client.editor.read(() => {});
 
@@ -466,7 +467,7 @@ describe('commenter mode', () => {
     expect(collectMarkIds(client.editor).has(threads[0].id)).toBe(true);
   });
 
-  it('adds context when the selected text repeats, so the quote resolves to the selected occurrence', () => {
+  it('adds context when the selected text repeats, so the quote resolves to the selected occurrence', async () => {
     const server = serverDocWith(['Alpha beta gamma.', 'Delta beta epsilon.']);
     const client = mountClient(server, {
       read: true,
@@ -481,7 +482,7 @@ describe('commenter mode', () => {
       selectText(client.editor, 'beta', 1);
       client.editor.dispatchCommand(OPEN_COMMENT_COMPOSER_COMMAND, undefined);
     });
-    act(() => submitComposer(client.pane, 'This one.'));
+    await submitComposer(client.pane, 'This one.');
     client.editor.read(() => {});
 
     const { changed, threads } = changedTypes(server, outgoing);
@@ -626,10 +627,11 @@ function seedThread(server: Y.Doc, id: string, exact: string, authors: string[])
   repository.destroy();
 }
 
-function openPanel(pane: HTMLElement): void {
+async function openPanel(pane: HTMLElement): Promise<void> {
   const toggle = pane.querySelector<HTMLButtonElement>('.nim-comments-toggle');
   if (!toggle) throw new Error('Comments toggle has not mounted.');
   fireEvent.click(toggle);
+  await waitFor(() => expect(pane.querySelector('[data-testid="comments-panel"]')).not.toBeNull());
 }
 
 function card(pane: HTMLElement, threadId: string): HTMLElement {
@@ -662,7 +664,7 @@ describe('commenter ownership', () => {
     for (const pane of panes.splice(0)) pane.remove();
   });
 
-  function mountWithThreads(capabilities: CommentCapabilities) {
+  async function mountWithThreads(capabilities: CommentCapabilities) {
     const server = serverDocWith(['Alpha beta gamma.', 'Delta epsilon zeta.']);
     seedThread(server, 'mine', 'beta', ['reviewer-1', 'other-user']);
     seedThread(server, 'theirs', 'epsilon', ['other-user', 'reviewer-1']);
@@ -670,12 +672,12 @@ describe('commenter ownership', () => {
     const client = mountClient(server, capabilities);
     panes.push(client.pane);
     unmounts.push(client.unmount);
-    act(() => openPanel(client.pane));
+    await openPanel(client.pane);
     return { server, client };
   }
 
-  it('offers thread actions only on threads the commenter started, and delete only on their own comments', () => {
-    const { client } = mountWithThreads({ read: true, comment: true, editBody: false });
+  it('offers thread actions only on threads the commenter started, and delete only on their own comments', async () => {
+    const { client } = await mountWithThreads({ read: true, comment: true, editBody: false });
     expect(affordances(client.pane, 'mine')).toEqual({
       resolve: true,
       deleteThread: false,
@@ -695,8 +697,8 @@ describe('commenter ownership', () => {
     expect(card(client.pane, 'theirs').querySelector('[data-testid="comment-composer-input"]')).not.toBeNull();
   });
 
-  it('offers resolve but not delete on an own thread someone else replied to', () => {
-    const { server, client } = mountWithThreads({ read: true, comment: true, editBody: false });
+  it('offers resolve but not delete on an own thread someone else replied to', async () => {
+    const { server, client } = await mountWithThreads({ read: true, comment: true, editBody: false });
     expect(affordances(client.pane, 'mine')).toMatchObject({ resolve: true, deleteThread: false });
 
     // Removing the thread would remove the other person's reply, which the
@@ -710,8 +712,8 @@ describe('commenter ownership', () => {
     expect(changedTypes(server, client.outgoing).threads.map((t) => t.id)).toEqual(['mine', 'theirs', 'solo']);
   });
 
-  it('leaves an editor every action on every thread', () => {
-    const { client } = mountWithThreads({ read: true, comment: true });
+  it('leaves an editor every action on every thread', async () => {
+    const { client } = await mountWithThreads({ read: true, comment: true });
     for (const id of ['mine', 'theirs', 'solo']) {
       expect(affordances(client.pane, id)).toEqual({
         resolve: true,
@@ -721,13 +723,13 @@ describe('commenter ownership', () => {
     }
   });
 
-  it('deletes a thread whose last comment goes in one update', () => {
+  it('deletes a thread whose last comment goes in one update', async () => {
     const server = serverDocWith(['Alpha beta gamma.']);
     seedThread(server, 'solo', 'beta', ['reviewer-1']);
     const client = mountClient(server, { read: true, comment: true, editBody: false });
     panes.push(client.pane);
     unmounts.push(client.unmount);
-    act(() => openPanel(client.pane));
+    await openPanel(client.pane);
 
     const remove = card(client.pane, 'solo').querySelector<HTMLButtonElement>('.nim-comment-delete');
     if (!remove) throw new Error('Own comment has no delete button.');
