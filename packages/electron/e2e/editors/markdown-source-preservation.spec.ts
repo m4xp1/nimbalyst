@@ -77,6 +77,6 @@ test('moves a Markdown edit that exceeds the formatting budget to an unsaved sou
   await page.waitForTimeout(2500);
   expect(await fs.readFile(filePath, 'utf8')).toBe(sourceRecoveryFixture);
   await tab.getByRole('button', { name: 'Save recovered text' }).click();
-  await expect.poll(async () => (await fs.readFile(filePath, 'utf8')).startsWith('Recovered unsaved text.')).toBe(true);
+  await expect.poll(async () => (await fs.readFile(filePath, 'utf8')).trimEnd()).toBe(`# ${newText}`);
   await closeTabByFileName(page, 'formatting-recovery.md');
 });

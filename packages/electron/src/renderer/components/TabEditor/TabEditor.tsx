@@ -1924,29 +1924,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               await new Promise((resolve) => setTimeout(resolve, 100));
               diffTrace('TabEditor.applyDiffState post-dispatch settle done', { filePath, t: performance.now() });
 
-              // #3684 (hole 2): we have just reset the buffer to `oldContent`
-              // while disk holds `newContent`. That is only safe if the diff
-              // actually rendered -- the autosave guard skips saving while diff
-              // nodes exist. If the replace command produced none, nothing is
-              // holding autosave back and it would write `oldContent` over the
-              // agent's write, byte-identically. Block instead; self-heal will
-              // re-read disk and put the tab back on real content.
+              // Table cells and source-only edits can differ on disk without
+              // producing inline Lexical diff nodes. Reload the agent's bytes
+              // and keep the review controls, just as for a large document.
               const diffRendered = editorRef.current.getEditorState().read(() =>
                 $hasDiffNodes(editorRef.current!),
               );
               if (!diffRendered && newContent !== oldContent) {
-                logger.ui.error(
-                  `[TabEditor] Diff produced no nodes for ${fileName}; buffer holds pre-edit content ` +
-                    `while disk holds the new content. Blocking writes and self-healing.`,
-                );
-                unverifiedReloadRef.current = {
-                  incoming: newContent,
-                  attempts: (unverifiedReloadRef.current?.attempts ?? 0) + 1,
-                };
-                scheduleSelfHealRef.current?.(unverifiedReloadRef.current.attempts);
-                // The readback is the proof. Without it the target is not on
-                // screen, so the model must recover it rather than move on.
-                report('failed');
+                presentWithoutInline('changed source produced no inline diff nodes');
               } else {
                 report('applied');
               }
