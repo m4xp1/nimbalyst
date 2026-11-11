@@ -65,6 +65,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Claude Code CLI (off by default; the genuine CLI driven in a terminal, with a raw-terminal drawer for its native pickers and mid-session `/model` switching)
 - Custom Claude models: models listed under `modelPicker` in Claude's user, project, or local settings appear in the Claude Code and Claude Code CLI pickers and are sent to the user's gateway by name (`behavesAs` sets context window and effort/thinking support; `replaceBuiltInOptions` hides the built-in models). CLI sessions follow a loopback `ANTHROPIC_BASE_URL` from Claude settings; non-loopback URLs are not followed
 - OpenAI Codex (SDK / app-server transport with MCP support)
+- Windows fork: weekly Codex usage history is bound to the native account/workspace identity. Account changes and stale quota replies cannot populate another account's current limits or saved history.
 - OpenAI Codex over ACP
 - GitHub Copilot CLI (ACP)
 - Grok Build (ACP)
@@ -387,7 +388,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 
 ## Tracker System
 
-- Windows fork: project **Card storage** selects Application database or Markdown files for new cards. Files mode supports all ten built-in types with per-type relative folders in compact `.nimbalyst/tracker-storage.yaml`; builtin schemas are not duplicated. Existing database and legacy Markdown cards keep their storage. New portable cards keep identity, schema fields, timestamps, type tags, relationships and body in Markdown, comments in per-card JSONL, and only application-local history/session links and rebuildable projections in the database. Stable creation IDs make retries idempotent; duplicate IDs and concurrent file changes fail explicitly. A fresh local database restores project state from repository files, with workspace-scoped internal IDs for separate worktrees. These cards are shared through Git and cannot be published into a team room. See [Files tracker mode](../support/file-tracker-mode.md) for formats and limits.
+- Windows fork: project **Card storage** selects Application database or Markdown files for new cards. Files mode supports all twelve built-in types with per-type relative folders in compact `.nimbalyst/tracker-storage.yaml`; builtin schemas are not duplicated. Existing database and legacy Markdown cards keep their storage. New portable cards keep identity, schema fields, timestamps, type tags, relationships and body in Markdown, comments in per-card JSONL, and only application-local history/session links and rebuildable projections in the database. Stable creation IDs make retries idempotent; duplicate IDs and concurrent file changes fail explicitly. A fresh local database restores project state from repository files, with workspace-scoped internal IDs for separate worktrees. These cards are shared through Git and cannot be published into a team room. See [Files tracker mode](../support/file-tracker-mode.md) for formats and limits.
 - Tracker mode (Cmd+T) with list, table, grid, kanban, tag-board, timeline, and inbox views
 - Board lanes and timeline grouping by milestone, goal, or another field, with drag-and-drop and bulk assignment
 - Full-document tracker view with collaborative body editing, inline comments, editable field chips, AI chat, and shareable reopen links

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.83.0+m4xp1.1] - 2026-11-11
+
+### Changed
+- Updated the Windows fork to upstream 0.83.0 and stable Codex 0.167.0, preserving Files tracker mode, source-scoped Russian search, retained Memory embeddings and isolated test credentials.
+- Codex weekly usage history follows the current account and workspace without displaying another account's saved history.
+
+### Fixed
+- Preserve untouched YAML and tables when typing during agent review; stream large multi-root file searches without repeated filesystem lookups per match.
+- Converge SQLite migrations from both the previous fork and upstream, and keep upstream update notifications with automatic downloads and installation disabled.
+
 ## [Unreleased]
 
 ### Added
