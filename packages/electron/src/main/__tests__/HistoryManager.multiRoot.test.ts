@@ -117,19 +117,29 @@ describe('HistoryManager across multiple workspace roots', () => {
   });
 
   it('matches Windows path aliases and treats wildcard characters as literal folder names', async () => {
-    const workspace = 'C:\\Workspace\\primary';
+    const workspace = 'C:\\Сохранить\\primary';
     const attached = 'D:\\External\\work_%';
     roots.mockImplementation((root) => root === workspace ? [workspace, attached] : [root]);
-    await seedPending('c:/workspace/PRIMARY/src/keep.md');
+    await seedPending('c:/Сохранить/PRIMARY/src/keep.md');
     await seedPending('d:\\external\\WORK_%\\src\\attached.md');
     await seedPending('d:/external/work-other/src/outside.md');
 
     const files = await history.getPendingFilesForSession(workspace, SESSION);
-    expect(files.sort()).toEqual(['c:/workspace/PRIMARY/src/keep.md', 'd:\\external\\WORK_%\\src\\attached.md']);
+    expect(files.sort()).toEqual(['c:/Сохранить/PRIMARY/src/keep.md', 'd:\\external\\WORK_%\\src\\attached.md']);
     const { count } = await history.clearAllPending(workspace);
     expect(count).toBe(2);
     expect(await history.getPendingFilesForSession('D:/external/work-other', SESSION))
       .toEqual(['d:/external/work-other/src/outside.md']);
+  });
+
+  it('reads and accepts one pending tag through different Windows path spellings', async () => {
+    const stored = 'C:\\Сохранить\\primary\\Docs\\CHECKPOINT.md';
+    const alias = 'c:/Сохранить/PRIMARY/docs/checkpoint.md';
+    await history.createTag('C:/Сохранить/primary', stored, 'checkpoint', 'baseline', SESSION, 'tool');
+    expect(await history.getPendingTags(alias)).toEqual([expect.objectContaining({ id: 'checkpoint', filePath: stored })]);
+    await history.updateTagStatus(alias, 'checkpoint', 'reviewed');
+    expect(await history.getPendingTags(stored)).toEqual([]);
+    expect(await history.getTag(alias, 'checkpoint')).toMatchObject({ status: 'reviewed' });
   });
 
   it('invalidates the actual workspace after accepting a nested file tag', async () => {

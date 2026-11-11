@@ -122,6 +122,20 @@ export class HistoryManager {
     return jsonKeyExpr(database.getEngine(), 'metadata', key);
   }
 
+  private historyFileMatch(filePath: string, parameter: number, prefix = false) {
+    const normalized = filePath.replace(/\\/g, '/');
+    const windows = /^[a-z]:\//i.test(normalized) || normalized.startsWith('//');
+    const field = windows ? "lower(replace(file_path, '\\', '/'))" : 'file_path';
+    const placeholder = windows ? `lower($${parameter})` : `$${parameter}`;
+    const param = windows ? normalized : filePath;
+    return prefix
+      ? {
+          sql: `${field} LIKE ${placeholder} ESCAPE '!'`,
+          param: `${param.replace(/\/+$/, '').replace(/[!%_]/g, '!$&')}/%`,
+        }
+      : { sql: `${field} = ${placeholder}`, param };
+  }
+
   /**
    * Predicate matching every file under a workspace, across all of its roots.
    *
@@ -150,14 +164,7 @@ export class HistoryManager {
     // An unknown key (a worktree root, say) yields just itself, so callers
     // outside the workspace-settings world keep their plain prefix behavior.
     const roots = getWorkspaceRoots(workspacePath);
-    const normalizedFile = "replace(file_path, '\\', '/')";
-    const clauses = roots.map((root, index) => {
-      const normalized = root.replace(/\\/g, '/').replace(/\/+$/, '');
-      const windows = /^[a-z]:(?:\/|$)/i.test(normalized) || normalized.startsWith('//');
-      const field = windows ? `lower(${normalizedFile})` : 'file_path';
-      const pattern = (windows ? normalized.toLowerCase() : normalized).replace(/[!%_]/g, '!$&');
-      return { sql: `${field} LIKE $${firstParam + index} ESCAPE '!'`, param: `${pattern}/%` };
-    });
+    const clauses = roots.map((root, index) => this.historyFileMatch(root, firstParam + index, true));
     return {
       sql: `(${clauses.map(clause => clause.sql).join(' OR ')})`,
       params: clauses.map(clause => clause.param),
@@ -852,18 +859,20 @@ export class HistoryManager {
         await database.initialize();
       }
 
+      const match = this.historyFileMatch(filePath, 1);
       const result = await database.query<{
+        file_path: string;
         content: Buffer;
         metadata: any;
       }>(`
-        SELECT content, metadata
+        SELECT file_path, content, metadata
         FROM document_history
-        WHERE file_path = $1
+        WHERE ${match.sql}
           AND metadata->>'tagId' = $2
           AND ${this.md('type')} = 'pre-edit'
         ORDER BY timestamp DESC
         LIMIT 1
-      `, [filePath, tagId]);
+      `, [match.param, tagId]);
 
       if (result.rows.length === 0) {
         return null;
@@ -877,7 +886,7 @@ export class HistoryManager {
       const metadata = parseJsonObjectColumn(row.metadata);
       return {
         id: tagId,
-        filePath,
+        filePath: row.file_path,
         content,
         type: metadata.type || 'pre-edit',
         status: metadata.status,
@@ -904,16 +913,17 @@ export class HistoryManager {
 
       const compressed = await gzip(Buffer.from(newContent, 'utf-8'));
       const now = Date.now();
+      const match = this.historyFileMatch(filePath, 4);
 
       await database.query(`
         UPDATE document_history
         SET content = $1,
             size_bytes = $2,
             metadata = jsonb_set(metadata, '{updatedAt}', to_jsonb($3::bigint))
-        WHERE file_path = $4
+        WHERE ${match.sql}
           AND metadata->>'tagId' = $5
           AND ${this.md('type')} = 'pre-edit'
-      `, [compressed, compressed.length, now, filePath, tagId]);
+      `, [compressed, compressed.length, now, match.param, tagId]);
 
       logger.main.debug('[HistoryManager] Updated tag content:', { filePath, tagId });
     } catch (error) {
@@ -938,6 +948,7 @@ export class HistoryManager {
       }
 
       const now = Date.now();
+      const match = this.historyFileMatch(filePath, 3);
 
       const result = await database.query<{ workspace_id: string | null }>(`
         UPDATE document_history
@@ -945,10 +956,10 @@ export class HistoryManager {
               jsonb_set(metadata, '{status}', to_jsonb($1::text)),
               '{updatedAt}', to_jsonb($2::bigint)
             )
-        WHERE file_path = $3
+        WHERE ${match.sql}
           AND ${this.md('tagId')} = $4
         RETURNING workspace_id
-      `, [status, now, filePath, tagId]);
+      `, [status, now, match.param, tagId]);
 
       if (status === 'reviewed' || status === 'archived') {
         const scopes = new Set(result.rows.map(row => row.workspace_id));
@@ -973,11 +984,12 @@ export class HistoryManager {
         await database.initialize();
       }
 
-      const query = filePath
+      const match = filePath ? this.historyFileMatch(filePath, 1) : undefined;
+      const query = match
         ? `
           SELECT file_path, content, metadata
           FROM document_history
-          WHERE file_path = $1
+          WHERE ${match.sql}
             AND ${this.md('status')} = 'pending-review'
           ORDER BY timestamp DESC
         `
@@ -988,7 +1000,7 @@ export class HistoryManager {
           ORDER BY timestamp DESC
         `;
 
-      const params = filePath ? [filePath] : [];
+      const params = match ? [match.param] : [];
       const result = await database.query<{
         file_path: string;
         content: Buffer;
