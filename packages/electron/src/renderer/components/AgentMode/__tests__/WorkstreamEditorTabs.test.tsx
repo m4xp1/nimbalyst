@@ -149,4 +149,7 @@ it("reveals the original file tab for a relative Windows path in the worktree", 
   expect(actions.addTab).not.toHaveBeenCalled();
   expect(actions.switchTab).toHaveBeenCalledWith('plan');
   expect(revealEditorPosition).toHaveBeenCalledWith(filePath, { line: 3 });
+  act(() => ref.current?.openFile('docs/new.md', { line: 1 }));
+  expect(actions.addTab).toHaveBeenCalledWith('D:/worktree/docs/new.md');
+  expect(revealEditorPosition).toHaveBeenCalledWith('D:/worktree/docs/new.md', { line: 1 });
 });

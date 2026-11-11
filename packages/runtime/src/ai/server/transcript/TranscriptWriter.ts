@@ -54,6 +54,7 @@ export class TranscriptWriter {
       mode?: 'agent' | 'planning' | 'auto';
       inputType?: 'user' | 'system_message';
       attachments?: UserMessagePayload['attachments'];
+      annotations?: UserMessagePayload['annotations'];
       createdAt?: Date;
       promptActor?: UserMessagePayload['promptActor'];
       promptOrigin?: string;
@@ -63,6 +64,7 @@ export class TranscriptWriter {
       mode: options?.mode ?? 'agent',
       inputType: options?.inputType ?? 'user',
       ...(options?.attachments ? { attachments: options.attachments } : {}),
+      ...(options?.annotations?.length ? { annotations: options.annotations } : {}),
       ...(options?.promptActor ? { promptActor: options.promptActor } : {}),
       ...(options?.promptOrigin ? { promptOrigin: options.promptOrigin } : {}),
     };

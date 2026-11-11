@@ -36,6 +36,7 @@ import { DocumentHeaderContainer } from '@nimbalyst/runtime/plugins/TrackerPlugi
 import '../PageInfo/PageStatusChip';
 import { PageInfoPanel } from '../PageInfo/PageInfoPanel';
 import { setTextSelection, clearTextSelection } from '../UnifiedAI/TextSelectionIndicator';
+import { FileAnnotationMarkers, useFileAnnotationAction } from '../UnifiedAI/ChatAnnotationControls';
 import { FixedTabHeaderContainer, FixedTabHeaderRegistry } from '@nimbalyst/runtime/plugins/shared/fixedTabHeader';
 import { UnifiedDiffHeader, LexicalDiffHeaderAdapter } from '../UnifiedDiffHeader';
 import { ImageViewer } from '../ImageViewer';
@@ -60,7 +61,8 @@ import { SearchReplaceStateManager, isLexicalSearchEditor } from '@nimbalyst/run
 import { hasEditorFind, registerEditorFindHandler } from './editorFindCommand';
 import { hasEditorReveal, registerEditorRevealHandler } from './editorRevealCommand';
 import { revealMarkdownLine } from '@nimbalyst/runtime/editor/markdown/revealMarkdownLine';
-import { preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
+import { MarkdownSourceBudgetError, preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
+import { $readMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSourceSnapshot';
 import { useSuppressedDocumentHeaderProviderIds } from './DocumentHeaderSuppressionContext';
 import { createCollectionItem } from '../TrackerMode/createCollectionItem';
 import { loadTrackerTeamMembers } from '../TrackerMode/useTrackerTeamMembers';
@@ -287,6 +289,28 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     errorType: string;
     source: 'auto' | 'manual';
   } | null>(null);
+  const [markdownSourceFailed, setMarkdownSourceFailed] = useState(false);
+  const markdownSourceFailedRef = useRef(false);
+  const sourceRecoveryRef = useRef<{ initialContent?: string } | null>(null);
+  const reportMarkdownSourceFailure = useCallback((error: unknown): boolean => {
+    if (!(error instanceof MarkdownSourceBudgetError)) return false;
+    markdownSourceFailedRef.current = true;
+    setMarkdownSourceFailed(true);
+    return true;
+  }, []);
+  const clearMarkdownSourceFailure = useCallback(() => {
+    markdownSourceFailedRef.current = false;
+    sourceRecoveryRef.current = null;
+    setMarkdownSourceFailed(false);
+  }, []);
+  const preserveMarkdownForWrite = useCallback((source: string, baseline: string, current: string) => {
+    try {
+      return preserveMarkdownSource(source, baseline, current);
+    } catch (error) {
+      reportMarkdownSourceFailure(error);
+      throw error;
+    }
+  }, [reportMarkdownSourceFailure]);
   const assertManualSaveSucceeded = useCallback((result: FileSaveResult | null) => {
     if (!result?.success) {
       setSaveFailure({ errorType: resolveSaveFailureType(result), source: 'manual' });
@@ -379,7 +403,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   useEffect(() => {
     currentFilePathRef.current = filePath;
     setSourceMode(false); // Reset source mode when switching files
-  }, [filePath]);
+    clearMarkdownSourceFailure();
+  }, [filePath, clearMarkdownSourceFailure]);
 
 
   // Refs for stable access in timers/callbacks
@@ -387,10 +412,20 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   const isDirtyRef = useRef(false);
   const getContentFnRef = useRef<(() => string) | null>(null);
   const editorRef = useRef<any>(null);
+  const selectionOwner = useRef(Symbol('tab-editor-selection')).current;
+  const getContentForWrite = useCallback((): string | undefined => {
+    try {
+      return getContentFnRef.current?.();
+    } catch (error) {
+      if (!reportMarkdownSourceFailure(error)) throw error;
+      return undefined;
+    }
+  }, [reportMarkdownSourceFailure]);
   // The live editor instance as STATE (mirrors editorRef.current). Selection
   // tracking depends on this so it re-registers when the editor remounts; a ref
   // alone doesn't trigger the effect and left the listener on a dead instance.
   const [editorInstance, setEditorInstance] = useState<any>(null);
+  const fileAnnotations = useFileAnnotationAction(filePath, editorInstance, isActive && isMarkdown && !sourceMode);
   const initialContentRef = useRef(initialContent);
   const lastSaveTimeRef = useRef<number | null>(null);
   const lastSavedContentRef = useRef<string>(initialContent);
@@ -605,7 +640,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   useEffect(() => {
     // Clear selection when tab becomes inactive (switching to different file)
     if (!isActive) {
-      clearTextSelection(filePath);
+      clearTextSelection(filePath, selectionOwner);
       return undefined;
     }
 
@@ -631,7 +666,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         // When tab becomes active, clear any stale selection state
         // The Lexical SelectionAlwaysOnDisplay plugin may show a visual selection,
         // but we want a clean slate - user must re-select to use "+ selection" feature
-        clearTextSelection(filePath);
+        clearTextSelection(filePath, selectionOwner);
 
         const unregister = editor.registerUpdateListener(() => {
           // Only update selection if the editor has focus
@@ -657,13 +692,13 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               if ($isRangeSelection(selection) && !selection.isCollapsed()) {
                 const selectedText = selection.getTextContent();
                 if (selectedText && selectedText.trim().length > 0) {
-                  setTextSelection(selectedText, filePath);
+                  setTextSelection(selectedText, filePath, selectionOwner);
                 } else {
-                  clearTextSelection(filePath);
+                  clearTextSelection(filePath, selectionOwner);
                 }
               } else {
                 // User clicked in editor without selection - clear it
-                clearTextSelection(filePath);
+                clearTextSelection(filePath, selectionOwner);
               }
             });
           }, 150); // 150ms debounce
@@ -673,7 +708,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             clearTimeout(debounceTimer);
           }
           unregister();
-          clearTextSelection(filePath);
+          clearTextSelection(filePath, selectionOwner);
         };
       }
       return undefined;
@@ -684,7 +719,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       const monacoEditor = editorInstance?.editor;
       if (monacoEditor?.onDidChangeCursorSelection) {
         // When tab becomes active, clear any stale selection state
-        clearTextSelection(filePath);
+        clearTextSelection(filePath, selectionOwner);
 
         const disposable = monacoEditor.onDidChangeCursorSelection(() => {
           // Only update selection if the editor has focus
@@ -708,14 +743,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               if (model) {
                 const selectedText = model.getValueInRange(selection);
                 if (selectedText && selectedText.trim().length > 0) {
-                  setTextSelection(selectedText, filePath);
+                  setTextSelection(selectedText, filePath, selectionOwner);
                 } else {
-                  clearTextSelection(filePath);
+                  clearTextSelection(filePath, selectionOwner);
                 }
               }
             } else {
               // User clicked in editor without selection - clear it
-              clearTextSelection(filePath);
+              clearTextSelection(filePath, selectionOwner);
             }
           }, 150); // 150ms debounce
         });
@@ -724,12 +759,12 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             clearTimeout(debounceTimer);
           }
           disposable.dispose();
-          clearTextSelection(filePath);
+          clearTextSelection(filePath, selectionOwner);
         };
       }
     }
     return undefined;
-  }, [isActive, isEditorReady, isMarkdown, sourceMode, filePath, editorInstance]);
+  }, [isActive, isEditorReady, isMarkdown, sourceMode, filePath, editorInstance, selectionOwner]);
 
   // NIM-5359 defect H: the production hydration seam.
   //
@@ -759,6 +794,9 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       skipDiffCheck: boolean = false
   ) => {
     if (!window.electronAPI) return;
+    // The recovery buffer can contain normalized Markdown. Only a deliberate
+    // save from Source Mode may write it back.
+    if (snapshotType === 'auto' && sourceRecoveryRef.current) return;
     // Source mode is not a diff presenter, so this buffer has never been shown
     // the agent's write -- writing it back is the revert the whole plan is
     // about. Blocked at the entry rather than in the autosave gate because
@@ -904,12 +942,11 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       // Notify clean sibling editors (e.g. same file open in AgentMode)
       documentModelHandleRef.current?.notifySiblingsSaved(contentToSave);
       // Update initialContentRef with current editor content to prevent false dirty flags
-      if (getContentFnRef.current) {
-        initialContentRef.current = getContentFnRef.current();
-      }
+      initialContentRef.current = contentToSave;
       // Notify parent immediately
       onDirtyChange?.(false);
       setSaveFailure(null);
+      clearMarkdownSourceFailure();
       setAutosaveConflictDiskContent(null);
 
         // Create history snapshot
@@ -941,7 +978,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             if (pendingAIEditTagRef.current?.tagId) {
               logger.ui.info('[TabEditor] No diffs remaining after user save, clearing pending tag');
               const { tagId, filePath: tagFilePath } = pendingAIEditTagRef.current;
-              await window.electronAPI.invoke('history:update-tag-status', tagFilePath, tagId, 'reviewed');
+              await window.electronAPI.invoke('history:update-tag-status', tagFilePath, tagId, 'reviewed', workspaceId);
               setPendingAIEditTag(null);
               // Exclude self: clearDiffState fans out to siblings via
               // onDiffResolved; recursing back into our own subscription
@@ -954,7 +991,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 const dbTags = await window.electronAPI.history.getPendingTags(filePath);
                 const unreviewedTags = (dbTags || []).filter((t: any) => t.status !== 'reviewed' && t.status !== 'rejected');
                 for (const tag of unreviewedTags) {
-                  await window.electronAPI.invoke('history:update-tag-status', filePath, tag.id, 'reviewed');
+                  await window.electronAPI.invoke('history:update-tag-status', filePath, tag.id, 'reviewed', workspaceId);
                 }
               } catch {
                 // Ignore -- best effort cleanup
@@ -984,7 +1021,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       isSavingRef.current = false;
       throw error;
     }
-  }, [filePath, fileName, onSaveComplete, hasUnresolvedReview, isCustom, sourceMode, documentModel]);
+  }, [filePath, fileName, onSaveComplete, hasUnresolvedReview, isCustom, sourceMode, documentModel, workspaceId, clearMarkdownSourceFailure]);
 
   /**
    * Push external content into the editor and verify it landed (#3684).
@@ -1073,6 +1110,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       lastSavedContentRef.current = outcome.next.baseline;
       isDirtyRef.current = outcome.next.dirty;
       onDirtyChange?.(outcome.next.dirty);
+      if (!outcome.next.dirty) clearMarkdownSourceFailure();
       unverifiedReloadRef.current = null;
       setAutosaveConflictDiskContent(null);
       if (outcome.normalized) {
@@ -1092,7 +1130,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         `writes blocked for ${fileName} until it heals`,
     );
     scheduleSelfHealRef.current?.(attempts);
-  }, [fileName, onDirtyChange]);
+  }, [fileName, onDirtyChange, clearMarkdownSourceFailure]);
 
   // Self-heal is defined below (it re-reads disk and calls back into the two
   // functions above); this ref breaks the cycle without a dynamic import.
@@ -1363,7 +1401,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     // this can no longer be the mount path's "diff mode without a model".)
     if (!pending) return 'proceed';
     try {
-      await window.electronAPI.invoke('history:update-tag-status', pending.filePath, pending.tagId, 'reviewed');
+      await window.electronAPI.invoke('history:update-tag-status', pending.filePath, pending.tagId, 'reviewed', workspaceId);
     } catch (err) {
       logger.ui.warn(`[TabEditor] Clearing pending tag failed for ${fileName}; holding the write:`, err);
       return 'skip';
@@ -1373,7 +1411,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     // exit diff mode, but we already did our local cleanup.
     documentModel?.clearDiffState(documentModelHandleRef.current?.id, true);
     return 'proceed';
-  }, [documentModel, fileName, currentPresentationMode, setPendingAIEditTag]);
+  }, [documentModel, fileName, currentPresentationMode, setPendingAIEditTag, workspaceId]);
 
   const settleDiffBeforeAutosaveRef = useRef(settleDiffBeforeAutosave);
   useEffect(() => {
@@ -1390,7 +1428,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   }, [saveWithHistory]);
 
   // Manual save function
-  const handleManualSave = useCallback(async () => {
+  const handleManualSave = useCallback(async (allowRecoverySave = false) => {
+    if (sourceRecoveryRef.current && !allowRecoverySave) return;
     if (!getContentFnRef.current) {
       logger.ui.warn('[TabEditor] No getContent function available for manual save');
       return;
@@ -1454,7 +1493,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         editor.update(() => {
           $approveDiffs();
         });
-        const approvedContent = getContentFnRef.current();
+        const approvedContent = getContentForWrite();
+        if (approvedContent === undefined) return;
         if (!(await resolveReviewThroughModel(true, {
           finalContent: approvedContent,
           generation: decidedGeneration,
@@ -1469,10 +1509,11 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     }
 
     if (!getContentFnRef.current) return;
-    const currentContent = getContentFnRef.current();
     // Use skipDiffCheck=false so saveWithHistory checks for leftover diff nodes
     // and clears pending tags if all diffs have been resolved
     try {
+      const currentContent = getContentForWrite();
+      if (currentContent === undefined) return;
       await saveWithHistory(currentContent, 'manual', false);
     } catch (error) {
       logger.ui.error(`[TabEditor] Manual save failed for ${filePath}:`, error);
@@ -1486,6 +1527,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     currentPresentationMode,
     resolveReviewThroughModel,
     setPendingAIEditTag,
+    getContentForWrite,
   ]);
 
   // Periodic snapshots
@@ -1585,7 +1627,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         // The gate above awaits a resolution; re-check the editor is still here.
         if (!getContentFnRef.current) return;
 
-        const currentContent = getContentFnRef.current();
+        const currentContent = getContentForWrite();
+        if (currentContent === undefined) return;
         logger.ui.info(`[TabEditor] DocumentModel autosave: ${fileName}`);
         return saveWithHistory(currentContent, 'auto').catch((err) => {
           logger.ui.error(`[TabEditor] DocumentModel autosave failed for ${filePath}:`, err);
@@ -1656,6 +1699,10 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         // This prevents unnecessary Lexical reloads that destroy cursor position
         // (e.g. when a sibling saves content we already have).
         if (content === lastSavedContentRef.current) return;
+        if (sourceRecoveryRef.current) {
+          setAutosaveConflictDiskContent(content);
+          return false;
+        }
 
         diffTrace('TabEditor.onFileChanged WILL REPLACE editor content', {
           filePath,
@@ -2059,6 +2106,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     customDiffPresenterReady,
     clearCustomEditorDiff,
     acceptAgentEdits,
+    getContentForWrite,
   ]);
 
 
@@ -2092,6 +2140,10 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         window.electronAPI.readFileContent(filePath).then((result) => {
           if (result?.success && result.content !== undefined) {
             const newContent = result.content;
+            if (sourceRecoveryRef.current) {
+              if (newContent !== lastSavedContentRef.current) setAutosaveConflictDiskContent(newContent);
+              return;
+            }
             contentRef.current = newContent;
             initialContentRef.current = newContent;
             lastSavedContentRef.current = newContent;
@@ -2175,11 +2227,17 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     setConflictDialogContent('');
   }, []);
 
-  // Stable callback to get content for DocumentHeaderContainer
-  // Uses refs to avoid recreating the callback and causing unnecessary re-renders
+  // Headers and Page info may read during render. They must never run the
+  // formatting-preserving edit map used to save Markdown.
   const getDocumentHeaderContent = useCallback((): string => {
+    if (isMarkdown && !sourceModeRef.current) {
+      const editor = editorRef.current;
+      if (!editor?.getEditorState) return contentRef.current;
+      return editor.getEditorState().read(() =>
+        $readMarkdownSource($convertToEnhancedMarkdownString(getEditorTransformers())), { editor });
+    }
     return getContentFnRef.current?.() ?? '';
-  }, []);
+  }, [isMarkdown]);
 
   // Handle content change from document header
   const handleDocumentHeaderContentChange = useCallback((newContent: string) => {
@@ -2192,6 +2250,10 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         try {
           if (isMarkdown) {
             const transformers = getEditorTransformers();
+            const preview = getDocumentHeaderContent();
+            const source = getContentForWrite();
+            if (source === undefined) return;
+            newContent = preserveMarkdownForWrite(source, preview, newContent);
 
             editorRef.current.update(() => {
               // Clearing a selected node without moving selection first makes
@@ -2217,11 +2279,12 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           // Notify parent that content changed and is dirty
           onDirtyChange?.(true);
         } catch (error) {
+          if (reportMarkdownSourceFailure(error)) return;
           logger.ui.error(`[TabEditor] Failed to update content from document header:`, error);
         }
       })();
     }
-  }, [isMarkdown]);
+  }, [isMarkdown, getDocumentHeaderContent, getContentForWrite, preserveMarkdownForWrite, reportMarkdownSourceFailure]);
 
   // PHASE 5: Listen for diff approve/reject commands to update tag status
   useEffect(() => {
@@ -2290,7 +2353,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             filePath,
             rejectedContent,
             sessionId,
-            {}  // Can optionally track which groups were accepted/rejected
+            {}, // Can optionally track which groups were accepted/rejected
+            workspaceId,
           );
 
           logger.ui.info(`[TabEditor] Created incremental-approval tag for session: ${sessionId}, tagId: ${newTagId}`);
@@ -2321,6 +2385,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           documentModel?.setLastPersistedContent(approvedContent);
         }
       } catch (error) {
+        if (reportMarkdownSourceFailure(error)) return;
         logger.ui.error('[TabEditor] Failed to create incremental-approval tag:', error);
       }
     };
@@ -2421,6 +2486,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             }
           }
       } catch (error) {
+        if (reportMarkdownSourceFailure(error)) return;
         logger.ui.error(`[TabEditor] Failed to clear diff tag:`, error);
       } finally {
         isClearingDiffTagRef.current = false;
@@ -2487,7 +2553,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       unregisterIncremental();
       unregisterClear();
     };
-  }, [filePath, isEditorReady]);
+  }, [filePath, isEditorReady, workspaceId, reportMarkdownSourceFailure]);
 
   const uploadLocalWikiAsset = useMemo(() => localWikiUploadAssetFor(workspaceId, filePath), [workspaceId, filePath]);
 
@@ -2786,6 +2852,10 @@ export const TabEditor: React.FC<TabEditorProps> = ({
 
       // Read file content from disk (text)
       readFile: async (path: string): Promise<string> => {
+        const recovery = sourceRecoveryRef.current;
+        if (path === filePath && sourceModeRef.current && recovery?.initialContent !== undefined) {
+          return recovery.initialContent;
+        }
         // console.log('[TabEditor] readFile called for:', path);
         const result = await window.electronAPI.readFileContent(path);
         // console.log('[TabEditor] readFile result:', { success: result?.success, contentLength: result?.content?.length, first100: result?.content?.substring(0, 100) });
@@ -2827,6 +2897,10 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             // content already reaches the editor through the diff request path,
             // and the final content arrives via diff resolution.
             if (isApplyingDiffRef.current || pendingAIEditTagRef.current) return;
+            if (sourceRecoveryRef.current) {
+              if (content !== lastSavedContentRef.current) setAutosaveConflictDiskContent(content);
+              return;
+            }
             callback(content);
           });
         }
@@ -3002,6 +3076,35 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       // Toggle source mode - works for both markdown and custom editors
       toggleSourceMode: async () => {
         const currentlyInSourceMode = sourceModeRef.current;
+        const switchEditor = (nextSourceMode: boolean) => {
+          // Don't let an in-flight save read from the editor being unmounted.
+          getContentFnRef.current = null;
+          sourceModeRef.current = nextSourceMode;
+          setIsEditorReady(false);
+          setEditorInstance(null);
+          setSourceMode(nextSourceMode);
+          sourceModeChangedCallbackRef.current?.(nextSourceMode);
+        };
+
+        const openRecoveredSource = (initialContent: string) => {
+          sourceRecoveryRef.current = { initialContent };
+          contentRef.current = initialContent;
+          isDirtyRef.current = true;
+          documentModelHandleRef.current?.setDirty(true);
+          onDirtyChange?.(true);
+          switchEditor(true);
+        };
+
+        if (!currentlyInSourceMode && markdownSourceFailedRef.current) {
+          try {
+            const text = getContentFnRef.current?.();
+            if (text !== undefined) openRecoveredSource(text);
+          } catch (error) {
+            if (!(error instanceof MarkdownSourceBudgetError) || error.sourceDraft === undefined) throw error;
+            openRecoveredSource(error.sourceDraft);
+          }
+          return;
+        }
 
         // Pre-toggle save with Layer D conflict detection. If the file changed
         // on disk since we loaded/saved it, the dirty buffer about to be flushed
@@ -3061,6 +3164,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         };
 
         if (currentlyInSourceMode) {
+          // Review the recovered text before any normalized bytes are written.
+          if (sourceRecoveryRef.current && !hasUnresolvedReview()) return;
           // Switching FROM source mode (Monaco) TO rich editor (Lexical or custom)
           // Save Monaco's content to disk first so rich editor loads fresh data
           if (getContentFnRef.current && isDirtyRef.current) {
@@ -3068,6 +3173,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             logger.ui.info(`[TabEditor] Saving source mode content before switching to rich editor: ${fileName}`);
             const saved = await flushDirtyBuffer(monacoContent);
             if (!saved) return;
+            if (sourceRecoveryRef.current) clearMarkdownSourceFailure();
           }
           // Reload content from disk so rich editor has fresh data
           try {
@@ -3091,7 +3197,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               // to discriminate "custom" from "lexical" -- and firing the host
               // callback fire-and-forget would lose conflict signal anyway.
               logger.ui.info(`[TabEditor] Saving rich editor content before switching to source mode: ${fileName}`);
-              const richContent = getContentFnRef.current();
+              let richContent: string;
+              try {
+                richContent = getContentFnRef.current();
+              } catch (error) {
+                if (!(error instanceof MarkdownSourceBudgetError) || error.sourceDraft === undefined) throw error;
+                openRecoveredSource(error.sourceDraft);
+                return;
+              }
               const saved = await flushDirtyBuffer(richContent);
               if (!saved) return;
             } else if (editorHostSaveRequestCallbackRef.current) {
@@ -3116,12 +3229,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
           }
         }
 
-        // Reset editor ready state for the newly mounted editor.
-        setIsEditorReady(false);
-        setEditorInstance(null);
-        setSourceMode(!currentlyInSourceMode);
-        // Notify subscribers
-        sourceModeChangedCallbackRef.current?.(!currentlyInSourceMode);
+        switchEditor(!currentlyInSourceMode);
       },
 
       // Subscribe to source mode changes
@@ -3208,7 +3316,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   useEffect(() => {
     const el = editorContainerRef.current;
     if (!el) return;
-    const handler = () => { handleManualSaveRef.current(); };
+    const handler = () => { handleManualSaveRef.current(true); };
     el.addEventListener('nimbalyst-save', handler);
     return () => { el.removeEventListener('nimbalyst-save', handler); };
   }, []);
@@ -3217,7 +3325,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
       e.stopPropagation();
-      handleManualSaveRef.current();
+      handleManualSaveRef.current(true);
     }
   }, []);
 
@@ -3277,6 +3385,38 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             >
               Retry
             </button>
+          </div>
+        )}
+        {markdownSourceFailed && (
+          <div
+            className="markdown-source-recovery flex items-center gap-2 px-3 py-2 text-[13px] bg-nim-warning-subtle border-b border-nim-warning text-nim"
+            role="alert"
+          >
+            <span className="flex-1">
+              {sourceMode
+                ? hasUnresolvedReview()
+                  ? 'Your recovered text is available here. The AI edit is still pending review.'
+                  : 'Review the recovered text before saving. Markdown formatting may differ.'
+                : 'Markdown formatting could not be preserved. Your edits are still in the editor.'}
+            </span>
+            {sourceMode ? (
+              <button
+                type="button"
+                disabled={!isEditorReady || hasUnresolvedReview()}
+                onClick={() => { void handleManualSave(true); }}
+                className="px-2 py-1 rounded border border-nim text-nim hover:bg-nim-active"
+              >
+                Save recovered text
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { void editorHost.toggleSourceMode?.(); }}
+                className="px-2 py-1 rounded border border-nim text-nim hover:bg-nim-active"
+              >
+                Open Source Mode
+              </button>
+            )}
           </div>
         )}
         {autosaveConflictDiskContent !== null && (
@@ -3497,6 +3637,9 @@ export const TabEditor: React.FC<TabEditorProps> = ({
               )}
               <div className="tab-editor-body flex flex-1 min-h-0">
               <div className="tab-editor-wrapper flex-1 min-w-0 overflow-hidden relative">
+              {fileAnnotations.sessionId && fileAnnotations.root && (
+                <FileAnnotationMarkers sessionId={fileAnnotations.sessionId} root={fileAnnotations.root} filePath={filePath} />
+              )}
               <DocumentPathProvider documentPath={filePath}>
                 <MarkdownEditor
                   key={`${filePath}-lexical`}
@@ -3511,7 +3654,8 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                   config={{
                     theme,
                     onRenameDocument,
-                    preserveMarkdownSource,
+                    preserveMarkdownSource: preserveMarkdownForWrite,
+                    floatingTextToolbarActions: fileAnnotations.actions,
                     onSwitchToAgentMode,
                     onOpenSessionInChat,
                     onToggleMarkdownMode: () => editorHost.toggleSourceMode?.(),
@@ -3570,6 +3714,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 </span>
                 <button
                   onClick={() => editorHost.toggleSourceMode?.()}
+                  disabled={!!sourceRecoveryRef.current && !hasUnresolvedReview()}
                   className="py-1 px-3 text-[13px] cursor-pointer bg-nim border border-nim rounded text-nim"
                 >
                   Rich Text
@@ -3596,6 +3741,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 }}
                 onEditorReady={(editorWrapper) => {
                   // For Monaco, we get a wrapper with editor, setContent, getContent
+                  if (sourceRecoveryRef.current) delete sourceRecoveryRef.current.initialContent;
                   editorRef.current = editorWrapper;
                   setEditorInstance(editorWrapper);
                   setIsEditorReady(true);

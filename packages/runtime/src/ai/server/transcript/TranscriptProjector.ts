@@ -65,6 +65,7 @@ export interface TranscriptViewMessage {
   text?: string;
   mode?: 'agent' | 'planning' | 'auto';
   attachments?: UserMessagePayload['attachments'];
+  annotations?: UserMessagePayload['annotations'];
   /** user_message only: who sent the prompt, when the raw row recorded it. */
   promptActor?: UserMessagePayload['promptActor'];
   /** user_message only: automated origin such as `interactive-question`. */
@@ -255,6 +256,7 @@ function projectEvent(
       if (p.attachments) {
         base.attachments = p.attachments;
       }
+      if (p.annotations) base.annotations = p.annotations;
       if (p.promptActor) base.promptActor = p.promptActor;
       if (p.promptOrigin) base.promptOrigin = p.promptOrigin;
       break;

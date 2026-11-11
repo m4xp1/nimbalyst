@@ -171,18 +171,28 @@ describe('submitClaudeCliPrompt', () => {
       ]);
     });
 
-    it('does NOT append the document-context block to a slash command', async () => {
+    it.each(['/compact', '#remember'])('keeps context and annotations out of native TUI input %s', async (prompt) => {
       const h = harness();
       await submitClaudeCliPrompt(
         {
           sessionId: 's1',
           workspacePath: '/w',
-          prompt: '/compact',
-          documentContext: { filePath: '/ws/notes.md' },
+          prompt,
+          documentContext: {
+            filePath: '/ws/notes.md',
+            chatAnnotations: [{
+              id: 'a1', source: { type: 'file', filePath: '/ws/notes.md' },
+              quote: 'Selected excerpt', before: '', after: '', comment: 'Use the excerpt',
+            }],
+          },
         },
         h.deps,
       );
       expect(h.writes.map(([, d]) => d).join('')).not.toContain('ACTIVE_DOCUMENT');
+      expect(h.writes.map(([, d]) => d).join('')).not.toContain('Selected excerpt');
+      expect(h.logUserPrompt).toHaveBeenCalledExactlyOnceWith({
+        sessionId: 's1', workspacePath: '/w', prompt, attachments: [],
+      });
     });
 
     it('a prompt WITH attachments goes through the normal composed path even if slash-prefixed', async () => {

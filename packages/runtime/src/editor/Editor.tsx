@@ -216,8 +216,8 @@ export default function Editor({ config = DEFAULT_EDITOR_CONFIG }: EditorProps):
   const extensionEditorComponents = useExtensionEditorComponents();
   const commentToolbarActions = useCommentToolbarActions(config.comments, editor);
   const floatingTextToolbarActions = useMemo(
-    () => [...commentToolbarActions, ...getPageMarkToolbarActions(editor)],
-    [commentToolbarActions, editor],
+    () => [...commentToolbarActions, ...(config.floatingTextToolbarActions ?? []), ...getPageMarkToolbarActions(editor)],
+    [commentToolbarActions, config.floatingTextToolbarActions, editor],
   );
 
   return (

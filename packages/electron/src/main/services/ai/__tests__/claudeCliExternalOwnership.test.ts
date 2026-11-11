@@ -164,7 +164,7 @@ describe("CLI production external ownership", () => {
     expect(await h.ensureClaudeCliSession(input)).toEqual({ success: true });
     expect(h.launch).toHaveBeenCalledOnce();
   });
-  it("rejects submit before terminal/raw side effects on claim failure and succeeds on retry", async () => {
+  it("keeps claim and terminal failures out of the transcript and succeeds on retry", async () => {
     const h = await loadHarness();
     const { submitClaudeCliPromptProduction } = await import(
       "../claudeCliSubmitSingleton"
@@ -187,6 +187,12 @@ describe("CLI production external ownership", () => {
     );
     expect(h.manager.writeToTerminal).not.toHaveBeenCalled();
     expect(ownership.raw).not.toHaveBeenCalled();
+    await expect(submitClaudeCliPromptProduction(input)).rejects.toThrow(
+      "The Claude CLI terminal closed before the prompt was sent."
+    );
+    expect(h.manager.writeToTerminal).not.toHaveBeenCalled();
+    expect(ownership.raw).not.toHaveBeenCalled();
+    h.manager.isTerminalActive.mockReturnValue(true);
     expect(await submitClaudeCliPromptProduction(input)).toEqual({
       submitted: true,
     });

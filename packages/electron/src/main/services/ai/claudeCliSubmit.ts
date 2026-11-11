@@ -16,11 +16,14 @@
  * the real terminal manager, prompt-log, and analytics.
  */
 
-import type { ChatAttachment, PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
+import { appendChatAnnotations, readChatAnnotations } from '@nimbalyst/runtime/ai/chatAnnotations';
+import type { ChatAttachment } from '@nimbalyst/runtime/ai/server/types';
+import { isClaudeCliTuiTrigger } from '../../../shared/claudeCliPromptMode';
 import {
   composeClaudeCliPtySubmission,
   type ClaudeCliDocumentContext,
 } from './claudeCliPromptComposer';
+import type { LogClaudeCliUserPromptInput } from './claudeCliUserPromptLog';
 
 /** Carriage return = Enter for the CLI's readline (PTYs expect `\r`, not `\n`). */
 const SUBMIT_TERMINATOR = '\r';
@@ -73,13 +76,7 @@ export interface SubmitClaudeCliPromptInput {
 
 export interface SubmitClaudeCliPromptDeps {
   writeToTerminal: (sessionId: string, data: string) => void;
-  logUserPrompt: (input: {
-    sessionId: string;
-    workspacePath: string;
-    prompt: string;
-    attachments?: ChatAttachment[];
-    promptProvenance?: PromptProvenance;
-  }) => Promise<void>;
+  logUserPrompt: (input: LogClaudeCliUserPromptInput) => Promise<void>;
   sendAnalytics: (payload: {
     messageLength: number;
     hasAttachments: boolean;
@@ -106,8 +103,8 @@ export async function submitClaudeCliPrompt(
   // its own keystroke, then the remainder, then Enter. Skips the document
   // context block (it would corrupt the command line) and only applies to
   // attachment-free prompts (paths after a command make no sense).
-  const isTuiTrigger =
-    (prompt.startsWith('/') || prompt.startsWith('#')) && attachments.length === 0;
+  const isTuiTrigger = isClaudeCliTuiTrigger(prompt, attachments.length);
+  const annotations = isTuiTrigger ? [] : readChatAnnotations(input.documentContext?.chatAnnotations);
 
   if (isTuiTrigger) {
     deps.writeToTerminal(input.sessionId, prompt[0]);
@@ -136,8 +133,14 @@ export async function submitClaudeCliPrompt(
     }
     deps.writeToTerminal(input.sessionId, SUBMIT_TERMINATOR);
   } else {
+    // Selected source text can contain terminal control bytes. Keep it literal
+    // so it cannot close the bracketed paste or generate a keystroke.
+    const annotationText = appendChatAnnotations('', annotations).replace(
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g,
+      char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'),
+    );
     const ptyText = composeClaudeCliPtySubmission({
-      prompt,
+      prompt: prompt + annotationText,
       attachments,
       documentContext: input.documentContext,
     });
@@ -163,6 +166,7 @@ export async function submitClaudeCliPrompt(
     workspacePath: input.workspacePath,
     prompt,
     attachments,
+    ...(annotations.length ? { annotations } : {}),
     promptProvenance: input.documentContext?.promptProvenance,
   });
 

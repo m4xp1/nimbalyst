@@ -24,6 +24,9 @@ export type { ToolResult } from './protocols/ProtocolInterface';
 export type { TranscriptViewMessage } from './transcript/TranscriptProjector';
 
 export interface DocumentContext {
+  chatAnnotations?: import('../chatAnnotations').ChatAnnotation[];
+  /** Display text before annotated quotes are appended to the provider prompt. */
+  annotationDisplayPrompt?: string;
   filePath?: string;
   fileType?: string;
   content?: string;  // Optional: omitted when documentTransition is 'none' (content unchanged)
@@ -71,6 +74,8 @@ export interface DocumentContext {
   // Pre-built prompts from DocumentContextService (for user message additions)
   documentContextPrompt?: string;  // File path, cursor, selection, content/diff, transitions
   editingInstructions?: string;    // One-time editing instructions (only first message with doc)
+  /** Validated host-side settings for one in-session Smart Commit turn. */
+  smartCommitTurn?: { model: string; effort: EffortLevel };
 
   /** Identifies the origin of this message when it comes from an automated source (e.g. 'wakeup_resume'). */
   promptOrigin?: string;

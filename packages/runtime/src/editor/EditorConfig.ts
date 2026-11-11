@@ -88,6 +88,7 @@ export interface EditorConfig {
 
   /** Show the floating text format toolbar even on small viewports (e.g. mobile) */
   forceFloatingToolbar?: boolean;
+  floatingTextToolbarActions?: ReadonlyArray<import('./plugins/FloatingTextFormatToolbarPlugin/types').FloatingTextToolbarAction>;
 
   // Is this only for testing?
   disableBeforeInput?: boolean;

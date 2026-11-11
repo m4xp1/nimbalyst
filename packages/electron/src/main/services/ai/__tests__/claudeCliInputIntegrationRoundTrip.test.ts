@@ -29,10 +29,11 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { projectRawMessagesToViewMessages } from '@nimbalyst/runtime/ai/server/transcript';
 import type { RawMessage } from '@nimbalyst/runtime/ai/server/transcript';
 import type { ChatAttachment } from '@nimbalyst/runtime/ai/server/types';
-import { submitClaudeCliPrompt } from '../claudeCliSubmit';
+import { submitClaudeCliPrompt, type SubmitClaudeCliPromptInput } from '../claudeCliSubmit';
 import { logClaudeCliUserPrompt } from '../claudeCliUserPromptLog';
 import { flushNextClaudeCliQueuedPrompt } from '../claudeCliQueueFlush';
 import type { FlushQueuedPrompt } from '../claudeCliQueueFlush';
@@ -75,12 +76,7 @@ function makePipeline() {
   const rows: CapturedRow[] = [];
   const analytics: AnalyticsPayload[] = [];
 
-  const submit = (input: {
-    sessionId: string;
-    workspacePath: string;
-    prompt: string;
-    attachments?: ChatAttachment[];
-  }) =>
+  const submit = (input: SubmitClaudeCliPromptInput) =>
     submitClaudeCliPrompt(input, {
       writeToTerminal: (sid, data) => ptyWrites.push([sid, data]),
       logUserPrompt: (p) =>
@@ -104,13 +100,12 @@ function makePipeline() {
  * relevant subset (listPending / claim / complete / fail). `claim` is atomic:
  * it only returns + marks a prompt if it is still `pending`.
  */
-function makeQueueStore(
-  seed: Array<{ id: string; prompt?: string | null; attachments?: unknown[] | null }>,
-) {
+function makeQueueStore(seed: FlushQueuedPrompt[]) {
   const items = seed.map((s) => ({
     id: s.id,
     prompt: s.prompt ?? '',
     attachments: s.attachments ?? null,
+    documentContext: s.documentContext,
     status: 'pending' as 'pending' | 'executing' | 'completed' | 'failed',
     errorMessage: undefined as string | undefined,
   }));
@@ -120,12 +115,14 @@ function makeQueueStore(
   return {
     items,
     listPending: async (_sessionId: string): Promise<FlushQueuedPrompt[]> =>
-      items.filter((i) => i.status === 'pending').map((i) => ({ id: i.id, prompt: i.prompt, attachments: i.attachments })),
+      items.filter((i) => i.status === 'pending').map((i) => ({
+        id: i.id, prompt: i.prompt, attachments: i.attachments, documentContext: i.documentContext,
+      })),
     claim: async (promptId: string): Promise<FlushQueuedPrompt | null> => {
       const item = find(promptId);
       if (!item || item.status !== 'pending') return null;
       item.status = 'executing';
-      return { id: item.id, prompt: item.prompt, attachments: item.attachments };
+      return { id: item.id, prompt: item.prompt, attachments: item.attachments, documentContext: item.documentContext };
     },
     complete: async (promptId: string): Promise<void> => {
       const item = find(promptId);
@@ -155,6 +152,46 @@ describe('claude-code-cli input integration round-trip (attachments + queued pro
 
   beforeEach(() => {
     pipe = makePipeline();
+  });
+
+  it.each(['immediate', 'queued'] as const)('%s send forwards annotations and projects the clean user message', async (route) => {
+    const annotations: ChatAnnotation[] = [{
+      id: 'a1', source: { type: 'file', filePath: '/w/notes.md' },
+      quote: 'Line one\n\x1b[201~Line two', before: '', after: '', comment: 'Use this example',
+    }, {
+      id: 'a2', source: { type: 'message', sessionId: SESSION_ID, messageId: 'm1' },
+      quote: 'Earlier response', before: '', after: '', comment: 'Compare this answer',
+    }];
+    const prompt = 'Compare the examples';
+    const documentContext = { chatAnnotations: annotations };
+    if (route === 'immediate') {
+      const result = await pipe.submit({ sessionId: SESSION_ID, workspacePath: WORKSPACE, prompt, documentContext });
+      expect(result.submitted).toBe(true);
+    } else {
+      const queue = makeQueueStore([{ id: 'q1', prompt, documentContext }]);
+      const result = await flushNextClaudeCliQueuedPrompt(
+        { sessionId: SESSION_ID, workspacePath: WORKSPACE },
+        { ...queue, submit: pipe.submit },
+      );
+      expect(result).toBe(true);
+      expect(queue.items[0].status).toBe('completed');
+    }
+
+    expect(pipe.ptyWrites).toEqual([
+      [SESSION_ID, pasted(
+        'Compare the examples\\n\\nAnnotations attached by the user\\n\\n' +
+        '1. /w/notes.md\\n> Line one\\n> \\u001b[201~Line two\\n\\nComment: Use this example\\n\\n' +
+        '2. Chat message m1\\n> Earlier response\\n\\nComment: Compare this answer',
+      )],
+      [SESSION_ID, '\r'],
+    ]);
+    expect(pipe.rows).toEqual([{ content: JSON.stringify({ prompt }), metadata: { annotations } }]);
+    const raw: RawMessage = {
+      id: 1, sessionId: SESSION_ID, source: 'claude-code', direction: 'input',
+      ...pipe.rows[0], createdAt: new Date('2026-06-08T00:00:00.000Z'),
+    };
+    const messages = await projectRawMessagesToViewMessages([raw], 'claude-code-cli');
+    expect(messages.find(message => message.type === 'user_message')).toMatchObject({ text: prompt, annotations });
   });
 
   // -------------------------------------------------------------------------

@@ -51,6 +51,7 @@ export interface UserMessageDescriptor {
   mode?: 'agent' | 'planning' | 'auto';
   inputType?: 'user' | 'system_message';
   attachments?: UserMessagePayload['attachments'];
+  annotations?: UserMessagePayload['annotations'];
   createdAt?: Date;
   /** Stamped from the raw row's metadata by `stampPromptSource`, not by parsers. */
   promptActor?: UserMessagePayload['promptActor'];

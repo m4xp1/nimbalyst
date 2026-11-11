@@ -1,4 +1,5 @@
 import React, { useSyncExternalStore, useCallback } from 'react';
+import { commitPathKey } from '@nimbalyst/runtime/ui/git/commitSelection';
 
 /**
  * Represents a text selection from the editor
@@ -20,6 +21,7 @@ interface TextSelectionIndicatorProps {
 // This allows React to properly subscribe to changes
 let listeners: Set<() => void> = new Set();
 let snapshotVersion = 0;
+let selectionOwner: symbol | undefined;
 
 function subscribe(callback: () => void): () => void {
   listeners.add(callback);
@@ -68,7 +70,20 @@ export function getTextSelection(): TextSelection | null {
 /**
  * Set text selection in window globals
  */
-export function setTextSelection(text: string, filePath: string): void {
+export function selectionPathsMatch(first: string, second: string): boolean {
+  if (first === second) return true;
+  if (first.includes('://') || second.includes('://')) return false;
+  const key = commitPathKey(first, '');
+  return Boolean(key) && key === commitPathKey(second, '');
+}
+
+export function getTextSelectionForFile(filePath: string | undefined): TextSelection | undefined {
+  const selection = getTextSelection();
+  return filePath && selection && selectionPathsMatch(selection.filePath, filePath) ? selection : undefined;
+}
+
+export function setTextSelection(text: string, filePath: string, owner?: symbol): void {
+  selectionOwner = owner;
   (window as any).__textSelectionText = text;
   (window as any).__textSelectionFilePath = filePath;
   (window as any).__textSelectionTimestamp = Date.now();
@@ -87,13 +102,15 @@ export function setTextSelection(text: string, filePath: string): void {
  * file, we leave it alone. Omit `ownerFilePath` (e.g. the user removing the
  * chip, or a prompt send) to force an unconditional clear.
  */
-export function clearTextSelection(ownerFilePath?: string): void {
+export function clearTextSelection(ownerFilePath?: string, owner?: symbol): void {
+  if (owner && selectionOwner !== owner) return;
   if (ownerFilePath) {
     const currentFilePath = (window as any).__textSelectionFilePath as string | undefined;
-    if (currentFilePath && currentFilePath !== ownerFilePath) {
+    if (currentFilePath && !selectionPathsMatch(currentFilePath, ownerFilePath)) {
       return;
     }
   }
+  selectionOwner = undefined;
   (window as any).__textSelectionText = undefined;
   (window as any).__textSelectionFilePath = undefined;
   (window as any).__textSelectionTimestamp = undefined;
@@ -133,7 +150,7 @@ export const TextSelectionIndicator: React.FC<TextSelectionIndicatorProps> = ({
     }
 
     // Selection must be from the current file
-    if (currentFilePath && selectionFilePath !== currentFilePath) {
+    if (currentFilePath && !selectionPathsMatch(selectionFilePath, currentFilePath)) {
       return false;
     }
 

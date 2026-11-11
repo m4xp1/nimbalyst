@@ -10,6 +10,12 @@ export function $rememberMarkdownSource(source: string, rendered: string): void 
   sources.set($getEditor(), { source, rendered });
 }
 
+/** Read current text without running the diff needed to write it to disk. */
+export function $readMarkdownSource(rendered: string): string {
+  const snapshot = sources.get($getEditor());
+  return snapshot?.rendered === rendered ? snapshot.source : rendered;
+}
+
 /** A disk-backed host supplies its source writer. Collaborative editors keep
  * their canonical export without loading the file writer and YAML CST parser. */
 export function $preserveMarkdownSource(rendered: string, preserve: MarkdownSourcePreserver): string {

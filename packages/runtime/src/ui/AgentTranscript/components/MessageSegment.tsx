@@ -1,3 +1,4 @@
+import { chatAnnotationSourceLabel } from '../../../ai/chatAnnotations';
 import React, { useState, useEffect, useCallback } from 'react';
 import type { TranscriptViewMessage, ChatAttachment } from '../../../ai/server/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -621,6 +622,22 @@ export const MessageSegment = React.memo(function MessageSegment({
       {renderAttachments()}
       {renderThinking()}
       {renderTextContent()}
+      {isUser && message.annotations?.length ? (
+        <details className="sent-chat-annotations mt-2 text-xs">
+          <summary className="w-fit cursor-pointer rounded border border-nim px-2 py-1">
+            {message.annotations.length} {message.annotations.length === 1 ? 'annotation' : 'annotations'}
+          </summary>
+          <ol className="space-y-2 py-2">
+            {message.annotations.map(annotation => (
+              <li key={annotation.id} className="border-l border-nim pl-2">
+                <div className="text-nim-muted">{chatAnnotationSourceLabel(annotation.source)}</div>
+                <blockquote className="whitespace-pre-wrap">{annotation.quote}</blockquote>
+                {annotation.comment && <p className="whitespace-pre-wrap">{annotation.comment}</p>}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
       {renderToolCall()}
       {renderEdits()}
       {renderError()}

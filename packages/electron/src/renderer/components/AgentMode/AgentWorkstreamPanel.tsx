@@ -109,7 +109,8 @@ import { useResizeDragShield } from '../../hooks/useResizeDragShield';
 import { ArchiveWorktreeDialog } from './ArchiveWorktreeDialog';
 import { useArchiveWorktreeDialog } from '../../hooks/useArchiveWorktreeDialog';
 import { detectFileType, type SerializableDocumentContext } from '../../hooks/useDocumentContext';
-import { getTextSelection } from '../UnifiedAI/TextSelectionIndicator';
+import { getTextSelectionForFile } from '../UnifiedAI/TextSelectionIndicator';
+import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
 import { terminalListAtom, terminalListWorkspaceAtom, terminalsForWorkspace, setActiveTerminal, loadTerminals } from '../../store/atoms/terminals';
 import {
   sessionKanbanTagsAtom,
@@ -1218,10 +1219,7 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
     const fileType = detectFileType(activeTab.filePath);
 
     // Get text selection if it matches the current file
-    const textSelectionData = getTextSelection();
-    const textSelection = textSelectionData && textSelectionData.filePath === activeTab.filePath
-      ? textSelectionData
-      : undefined;
+    const textSelection = getTextSelectionForFile(activeTab.filePath);
 
     // Get mockup fields if viewing a mockup
     const mockupSelection = fileType === 'mockup' ? (window as any).__mockupSelectedElement : undefined;
@@ -1594,6 +1592,9 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
           />
         }
         editor={worktreePathReady ? (
+          <AnnotationSessionContext.Provider value={isActive && showEditorTabs
+            ? (sidebarVisible && rightPanelMode === 'session-chat' ? chatSessionId : activeSessionId)
+            : null}>
           <WorkstreamEditorTabs
             key={workstreamId}
             ref={editorTabsRef}
@@ -1606,6 +1607,7 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
             onTabDoubleClick={toggleEditorMaximized}
             onBeforeMove={isEditorMaximized ? toggleEditorMaximized : undefined}
           />
+          </AnnotationSessionContext.Provider>
         ) : null}
         transcript={
           <WorkstreamSessionTabs
@@ -1662,6 +1664,8 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
                 newSessionTitle={`Chat with ${chatTargetTitle}`.slice(0, 120)}
                 newSessionDraft={sessionMentionDraft(chatTargetId, chatTargetTitle)}
                 linkedSession={{ id: chatTargetId, title: chatTargetTitle }}
+                documentContext={sessionDocumentContext}
+                getDocumentContext={getDocumentContext}
                 onFileOpen={handleFileClick}
               />
             ) : (

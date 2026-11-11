@@ -25,6 +25,7 @@ export type TranscriptEventType =
 // ---------------------------------------------------------------------------
 
 export interface UserMessagePayload {
+  annotations?: import('../../chatAnnotations').ChatAnnotation[];
   mode: 'agent' | 'planning' | 'auto';
   inputType: 'user' | 'system_message';
   /**

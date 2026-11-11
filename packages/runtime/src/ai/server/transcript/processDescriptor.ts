@@ -7,6 +7,7 @@
  * identical canonical events.
  */
 
+import { readChatAnnotations } from '../../chatAnnotations';
 import type { TranscriptWriter } from './TranscriptWriter';
 import type { ITranscriptEventStore, TranscriptEvent } from './types';
 import type { CanonicalEventDescriptor } from './parsers/IRawMessageParser';
@@ -23,6 +24,11 @@ const PROMPT_ACTORS = new Set(['human', 'agent', 'system']);
  */
 export function stampPromptSource(desc: CanonicalEventDescriptor, msg: Pick<RawMessage, 'metadata'>): CanonicalEventDescriptor {
   if (desc.type !== 'user_message' || !msg.metadata) return desc;
+  const annotations = readChatAnnotations(msg.metadata.annotations);
+  if (annotations.length) {
+    desc.annotations = annotations;
+    if (typeof msg.metadata.annotationDisplayPrompt === 'string') desc.text = msg.metadata.annotationDisplayPrompt;
+  }
   const actor = (msg.metadata.promptProvenance as { actor?: unknown } | undefined)?.actor;
   if (typeof actor === 'string' && PROMPT_ACTORS.has(actor)) {
     desc.promptActor = actor as 'human' | 'agent' | 'system';
@@ -74,6 +80,7 @@ export async function processDescriptor(
       return writer.appendUserMessage(sessionId, desc.text, {
         mode: desc.mode,
         attachments: desc.attachments,
+        annotations: desc.annotations,
         createdAt: desc.createdAt,
         promptActor: desc.promptActor,
         promptOrigin: desc.promptOrigin,
