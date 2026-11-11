@@ -1539,7 +1539,7 @@ export class TrayManager {
     // macOS automatically tints template images white on dark menu bars and
     // dark on light menu bars. This tinting is handled by the OS at the
     // NSStatusBar level and is NOT affected by nativeTheme.themeSource.
-    if (!needsColorDot) {
+    if (!needsColorDot && process.platform !== 'win32') {
       // Ensure the template flag is set (Electron auto-detects from filename
       // "trayTemplate.png" but be explicit)
       baseIcon.setTemplateImage(true);
@@ -1557,6 +1557,26 @@ export class TrayManager {
     const baseBitmap = baseIcon.toBitmap({ scaleFactor });
     const canvas = Buffer.from(baseBitmap);
 
+    if (process.platform === 'win32') {
+      // Windows renders the image as supplied, including in the light overflow flyout.
+      // A dark outline keeps the white glyph visible on both light and dark backgrounds.
+      for (let y = 1; y < physicalSize - 1; y++) {
+        for (let x = 1; x < physicalSize - 1; x++) {
+          const offset = (y * physicalSize + x) * 4;
+          if (baseBitmap[offset + 3]) continue;
+          const hasGlyphNeighbor = [-1, 0, 1].some(dy => [-1, 0, 1].some(dx =>
+            baseBitmap[((y + dy) * physicalSize + x + dx) * 4 + 3] >= 128,
+          ));
+          if (hasGlyphNeighbor) {
+            canvas[offset] = 55;
+            canvas[offset + 1] = 40;
+            canvas[offset + 2] = 28;
+            canvas[offset + 3] = 255;
+          }
+        }
+      }
+    }
+
     // Always use white (255) foreground for the attention/error icon.
     //
     // Why not detect dark vs light menu bar?
@@ -1572,7 +1592,7 @@ export class TrayManager {
     const fg = 255;
 
     for (let i = 0; i < canvas.length; i += 4) {
-      if (canvas[i + 3] > 0) {
+      if (baseBitmap[i + 3] > 0) {
         canvas[i] = fg;
         canvas[i + 1] = fg;
         canvas[i + 2] = fg;
@@ -1583,7 +1603,7 @@ export class TrayManager {
     const dotCx = Math.floor(physicalSize * 0.78);
     const dotCy = Math.floor(physicalSize * 0.78);
     const dotR = Math.floor(physicalSize * 0.14);
-    for (let y = dotCy - dotR; y <= dotCy + dotR; y++) {
+    for (let y = dotCy - dotR; needsColorDot && y <= dotCy + dotR; y++) {
       for (let x = dotCx - dotR; x <= dotCx + dotR; x++) {
         if (x < 0 || x >= physicalSize || y < 0 || y >= physicalSize) continue;
         const dx = x - dotCx, dy = y - dotCy;
