@@ -42,6 +42,9 @@ import { TrackerDocumentHeaderMeta } from './TrackerDocumentHeaderMeta';
 import type { TrackerContentMode } from './TrackerItemDetail';
 import { shouldExitDocumentViewOnEscape } from './trackerDocumentEscape';
 import { TrackerDocumentPanel } from './TrackerDocumentPanel';
+import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
+import { sessionRegistryAtom } from '../../store/atoms/sessions';
+import { resolveTrackerChatSessionId } from './trackerDocumentChat';
 import {
   TrackerDocumentListPaneHeader,
   TrackerDocumentViewHeader,
@@ -120,6 +123,13 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
   const rightPanelVisible = modeLayout.documentRightPanelVisible;
   const rightPanelWidth = modeLayout.documentRightPanelWidth;
   const rightPanelMode = modeLayout.documentRightPanelMode;
+  const sessionRegistry = useAtomValue(sessionRegistryAtom);
+  const annotationSessionId = documentMode && rightPanelVisible && rightPanelMode === 'chat'
+    ? resolveTrackerChatSessionId({
+        pairedSessionId: modeLayout.documentChatSessions[documentItemId ?? ''],
+        sessionRegistry,
+      })
+    : null;
 
   const model = useMemo(
     () => globalRegistry.get(item?.primaryType ?? ''),
@@ -349,7 +359,7 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
               providerIds={documentMode ? ['tracker-document-header'] : []}
             >
               <div className="min-h-0 flex-1 overflow-hidden">
-                {detail}
+                <AnnotationSessionContext.Provider value={annotationSessionId}>{detail}</AnnotationSessionContext.Provider>
               </div>
             </DocumentHeaderSuppressionProvider>
           </TrackerDetailPanelResizable>

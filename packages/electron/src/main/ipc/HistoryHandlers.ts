@@ -139,9 +139,10 @@ export async function registerHistoryHandlers() {
         filePath: string,
         content: string,
         sessionId: string,
-        metadata?: { acceptedGroups?: string[], rejectedGroups?: string[], remainingGroups?: string[] }
+        metadata?: { acceptedGroups?: string[], rejectedGroups?: string[], remainingGroups?: string[] },
+        workspacePath?: string
     ) => {
-        return await historyManager.createIncrementalApprovalTag(filePath, content, sessionId, metadata);
+        return await historyManager.createIncrementalApprovalTag(filePath, content, sessionId, metadata, workspacePath);
     });
 
     safeHandle('history:get-diff-baseline', async (event, filePath: string) => {

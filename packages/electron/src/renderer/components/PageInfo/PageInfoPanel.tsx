@@ -47,9 +47,9 @@ export function PageInfoPanel({ editor, properties }: PageInfoPanelProps) {
   const getContent = properties?.getContent;
   // A tracker document's frontmatter is edited in its header.
   const showProperties = useMemo(
-    () => Boolean(getContent) && detectTrackerFromFrontmatter(getContent!()) === null,
+    () => open && getContent !== undefined && detectTrackerFromFrontmatter(getContent()) === null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [getContent, contentVersion],
+    [open, getContent, contentVersion],
   );
 
   const savedWidth = useAtomValue(pageInfoPanelWidthAtom);

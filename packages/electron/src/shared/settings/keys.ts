@@ -190,6 +190,11 @@ export const SETTINGS_REGISTRY = {
     { store: 'ai-settings', path: 'defaultProvider' },
     'claude-code',
   ),
+  'ai.turnActivityOverrides': setting(
+    z.record(z.string(), z.record(z.string(), z.object({ expanded: z.boolean(), completed: z.boolean() }))),
+    { store: 'app-settings', path: 'turnActivityOverrides' },
+    {},
+  ),
   'ai.showToolCalls': setting(
     z.boolean(),
     { store: 'ai-settings', path: 'showToolCalls' },

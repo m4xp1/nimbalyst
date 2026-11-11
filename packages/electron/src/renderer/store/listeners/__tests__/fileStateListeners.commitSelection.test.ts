@@ -11,7 +11,7 @@ it('publishes fresh session dirty paths before an older initial workspace snapsh
  vi.stubGlobal('window',{electronAPI:{on:()=>()=>{},invoke:vi.fn(async(channel:string)=>{
   if(channel==='git:get-uncommitted-files')return initial;
   if(channel==='session-files:get-tool-call-matches')return{success:true,matches:[]};
-  if(channel==='git:get-file-status')return{success:true,status:{'selected.md':{status:'modified'},'old.md':{status:'unchanged'}}};
+  if(channel==='git:get-file-status')return{success:true,status:{'selected.md':{status:'modified',gitStatusCode:' M'},'old.md':{status:'unchanged'}}};
   if(channel==='history:get-pending-files-for-session')return[];
   throw Error('Unexpected '+channel);
  })}});
@@ -30,7 +30,7 @@ it('coalesces external writes into one fresh scoped status read without waiting 
  const invoke=vi.fn(async(channel:string,_workspace?:string,paths?:string[])=>{
   if(channel==='git:get-uncommitted-files')return{success:true,files:[]};
   if(channel==='git:clear-status-cache')return{success:true};
-  if(channel==='git:get-file-status')return{success:true,status:Object.fromEntries(paths!.map(file=>[file,{status:'modified'}]))};
+  if(channel==='git:get-file-status')return{success:true,status:Object.fromEntries(paths!.map(file=>[file,{status:'modified',gitStatusCode:' M'}]))};
   throw Error('Unexpected '+channel);
  });
  vi.stubGlobal('window',{electronAPI:{invoke,on:(name:string,handler:(payload:any)=>void)=>{events.set(name,handler);return()=>events.delete(name);}}});

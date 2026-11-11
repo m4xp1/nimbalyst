@@ -23,6 +23,7 @@
  * paths, the readCollabDoc MCP tool for collab:// URIs).
  */
 import type { PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
+import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { isCollabDocumentFileType, isCollabUri } from '@nimbalyst/collab-protocol';
 
 export interface ClaudeCliDocumentContext {
@@ -34,6 +35,7 @@ export interface ClaudeCliDocumentContext {
    * tolerate both (mirrors DocumentContextService.normalizeTextSelection).
    */
   textSelection?: { text?: string | null } | string | null;
+  chatAnnotations?: ChatAnnotation[];
   promptProvenance?: PromptProvenance;
 }
 

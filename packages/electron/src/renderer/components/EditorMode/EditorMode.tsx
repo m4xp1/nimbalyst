@@ -26,11 +26,12 @@ import { WorkspaceWelcome, type WelcomeFileQuickPick } from '../WorkspaceWelcome
 import { TabManager } from '../TabManager/TabManager';
 import { TabContent } from '../TabContent/TabContent';
 import { ChatSidebar, type ChatSidebarRef } from '../ChatSidebar';
+import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
 import { NewFileDialog } from '../NewFileDialog';
 import type { NewFileType, ExtensionFileType } from '../NewFileMenu';
 import { contributionToExtensionFileType } from '../NewFileMenu';
 import { WorkspaceHistoryDialog } from '../WorkspaceHistoryDialog';
-import { getTextSelection } from '../UnifiedAI/TextSelectionIndicator';
+import { getTextSelectionForFile } from '../UnifiedAI/TextSelectionIndicator';
 import { getActiveEditorContextItems } from '../../stores/editorContextStore';
 import {
   collabConnectionStatusAtom,
@@ -189,6 +190,7 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
   const sidebarWidthRef = useRef(sidebarWidth);
   sidebarWidthRef.current = sidebarWidth;
   const chatSidebarRef = useRef<ChatSidebarRef>(null);
+  const [annotationSessionId, setAnnotationSessionId] = useState<string | null>(null);
   const saveTabByIdRef = useRef<((tabId: string) => Promise<void>) | null>(null);
 
   // Get tab actions from context (doesn't subscribe to state - no re-renders)
@@ -784,11 +786,7 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
       }
     }
 
-    const textSelectionData = getTextSelection();
-    // Only include text selection if it belongs to the current file
-    const textSelection = textSelectionData && textSelectionData.filePath === filePath
-      ? textSelectionData
-      : undefined;
+    const textSelection = getTextSelectionForFile(filePath);
     return {
       filePath,
       fileType,
@@ -1406,6 +1404,7 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
               isAIChatCollapsed={isAIChatCollapsed}
               onTabDoubleClick={toggleEditorMaximized}
             >
+              <AnnotationSessionContext.Provider value={isActive && !isAIChatCollapsed ? annotationSessionId : null}>
               <TabContent
                 onManualSaveReady={(saveFn) => {
                   handleSaveRef.current = saveFn;
@@ -1443,6 +1442,7 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
                 onTabClose={handleTabClose}
                 workspaceId={workspacePath}
               />
+              </AnnotationSessionContext.Provider>
             </TabManager>
           </div>
           <div
@@ -1464,6 +1464,7 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
         {workspacePath && (
           <ChatSidebar
             ref={chatSidebarRef}
+            onSessionIdChange={setAnnotationSessionId}
             workspacePath={workspacePath}
             isActive={isActive}
             isCollapsed={isAIChatCollapsed}

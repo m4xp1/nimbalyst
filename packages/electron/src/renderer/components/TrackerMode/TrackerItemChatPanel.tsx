@@ -12,6 +12,8 @@ import React, { useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { trackerItemByIdAtom } from '@nimbalyst/runtime/plugins/TrackerPlugin/trackerDataAtoms';
 import { ChatSidebar } from '../ChatSidebar/ChatSidebar';
+import { getTextSelectionForFile } from '../UnifiedAI/TextSelectionIndicator';
+import { trackerFilePath } from '../../services/trackerFileEditor';
 import { sessionRegistryAtom } from '../../store/atoms/sessions';
 import {
   setTrackerDocumentChatSessionAtom,
@@ -41,9 +43,16 @@ export const TrackerItemChatPanel: React.FC<TrackerItemChatPanelProps> = ({
   const setChatSession = useSetAtom(setTrackerDocumentChatSessionAtom);
 
   const documentContext = useMemo(
-    () => buildTrackerDocumentContext(itemId, item),
-    [itemId, item],
+    () => {
+      const context = buildTrackerDocumentContext(itemId, item);
+      return { ...context, filePath: trackerFilePath(context.filePath, workspacePath) ?? context.filePath };
+    },
+    [itemId, item, workspacePath],
   );
+  const getDocumentContext = useCallback(async () => {
+    const textSelection = getTextSelectionForFile(documentContext.filePath);
+    return { ...documentContext, textSelection, textSelectionTimestamp: textSelection?.timestamp };
+  }, [documentContext]);
 
   const sessionId = useMemo(() => resolveTrackerChatSessionId({
     pairedSessionId: modeLayout.documentChatSessions[itemId],
@@ -62,6 +71,7 @@ export const TrackerItemChatPanel: React.FC<TrackerItemChatPanelProps> = ({
         sessionId={sessionId}
         onSessionIdChange={handleSessionIdChange}
         documentContext={documentContext}
+        getDocumentContext={getDocumentContext}
         onFileOpen={onFileOpen}
         onSwitchToAgentMode={onSwitchToAgentMode}
       />

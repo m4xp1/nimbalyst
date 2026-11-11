@@ -57,6 +57,35 @@ const STORE_FALLBACK = path.join(
 );
 
 describe('SettingsService', () => {
+  it('persists sparse turn activity choices through restart and patches independent sessions/turns', async () => {
+    const { getSettingsService } = await import('../SettingsService');
+    const { setTranscriptActivityOverride } = await import('../transcriptActivityPreferences');
+    const service = getSettingsService();
+    expect(service.get('ai.turnActivityOverrides')).toEqual({});
+    setTranscriptActivityOverride(service, { sessionId: 'session-a', turnKey: 'message:user-a', expanded: false, completed: false });
+    setTranscriptActivityOverride(service, { sessionId: 'session-a', turnKey: 'message:user-b', expanded: true, completed: true });
+    setTranscriptActivityOverride(service, { sessionId: 'session-b', turnKey: 'turn:native', expanded: true, completed: true });
+    const saved = service.get('ai.turnActivityOverrides');
+    expect(saved).toEqual({
+      'session-a': { 'message:user-a': { expanded: false, completed: false }, 'message:user-b': { expanded: true, completed: true } },
+      'session-b': { 'turn:native': { expanded: true, completed: true } },
+    });
+    vi.resetModules();
+    const restarted = (await import('../SettingsService')).getSettingsService();
+    expect(restarted.get('ai.turnActivityOverrides')).toEqual(saved);
+    expect(restarted.getAll()['ai.turnActivityOverrides']).toEqual(saved);
+  });
+
+  it('rejects malformed turn choices without modifying persisted preferences', async () => {
+    const { getSettingsService } = await import('../SettingsService');
+    const { setTranscriptActivityOverride } = await import('../transcriptActivityPreferences');
+    const service = getSettingsService();
+    const before = service.get('ai.turnActivityOverrides');
+    expect(() => setTranscriptActivityOverride(service, { sessionId: 's', turnKey: 'row:2', expanded: true, completed: true })).toThrow();
+    expect(() => setTranscriptActivityOverride(service, { sessionId: 's', turnKey: 'message:user', expanded: 'yes', completed: true })).toThrow();
+    expect(service.get('ai.turnActivityOverrides')).toEqual(before);
+  });
+
   it('keeps provider credentials out of JSON and generic snapshots', async () => {
     const { getSettingsService } = await import('../SettingsService');
     const svc = getSettingsService();

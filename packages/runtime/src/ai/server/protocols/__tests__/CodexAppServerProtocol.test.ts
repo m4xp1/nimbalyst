@@ -159,6 +159,102 @@ describe('CodexAppServerProtocol', () => {
     if (!child.killed) child.kill();
   });
 
+  it('steers only the expected active user turn and waits for Codex acknowledgement', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const assertCurrent = vi.fn();
+    const sessionPromise = protocol.createSession({
+      workspacePath: '/tmp/ws',
+      raw: { codexWorkspaceAuth: { revision: 1, assertCurrent } },
+    });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const skills = await nextWrittenMatching(child, 'skills/extraRoots/set');
+    child.emitLine({ id: skills.id, result: {} });
+    const threadStart = await nextWrittenMatching(child, 'thread/start');
+    child.emitLine({ id: threadStart.id, result: { thread: { id: 'steer-thread' } } });
+    const session = await sessionPromise;
+    expect(protocol.getSteerableTurnId(session)).toBeNull();
+
+    const seen: ProtocolEvent[] = [];
+    const drain = (async () => {
+      for await (const event of protocol.sendMessage(session, { content: 'Begin', allowSteering: true })) {
+        seen.push(event);
+      }
+    })();
+    const turnStart = await nextWrittenMatching(child, 'turn/start');
+    child.emitLine({ id: turnStart.id, result: { turn: { id: 'turn-live' } } });
+    await vi.waitFor(() => expect(protocol.getSteerableTurnId(session)).toBe('turn-live'));
+
+    await expect(protocol.steerTurn(session, 'stale-turn', 'Wrong target')).resolves.toMatchObject({
+      success: false,
+      code: 'no-active-turn',
+    });
+    expect(child.writtenLines.some((line: any) => line.method === 'turn/steer')).toBe(false);
+
+    let settled = false;
+    const sent = protocol.steerTurn(session, 'turn-live', 'Focus on tests').then(result => {
+      settled = true;
+      return result;
+    });
+    const steer = await nextWrittenMatching(child, 'turn/steer');
+    expect(steer.params).toEqual({
+      threadId: 'steer-thread',
+      expectedTurnId: 'turn-live',
+      input: [{ type: 'text', text: 'Focus on tests' }],
+    });
+    expect(settled).toBe(false);
+    await expect(protocol.steerTurn(session, 'turn-live', 'Second concurrent update')).resolves.toMatchObject({
+      success: false,
+      code: 'rejected',
+    });
+    assertCurrent.mockImplementation(() => { throw new Error('workspace changed'); });
+    await expect(protocol.steerTurn(session, 'turn-live', 'Update after switching')).resolves.toMatchObject({
+      success: false,
+      code: 'rejected',
+      error: expect.stringContaining('workspace changed'),
+    });
+
+    child.emitLine({ method: 'turn/completed', params: { threadId: 'steer-thread', turn: { id: 'turn-live', status: 'completed' } } });
+    await drain;
+    expect(seen.at(-1)).toMatchObject({ type: 'complete' });
+    expect(protocol.getSteerableTurnId(session)).toBeNull();
+    child.emitLine({ id: steer.id, result: { turnId: 'turn-live' } });
+    await expect(sent).resolves.toEqual({ success: true, turnId: 'turn-live' });
+    expect(child.writtenLines.filter((line: any) => line.method === 'turn/start')).toHaveLength(1);
+    expect(child.writtenLines.filter((line: any) => line.method === 'turn/steer')).toHaveLength(1);
+    expect(child.writtenLines.some((line: any) => line.method === 'turn/interrupt')).toBe(false);
+  });
+
+  it('leaves steer delivery uncertain when the connection closes before acknowledgement', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const sessionPromise = protocol.createSession({ workspacePath: '/tmp/ws' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const skills = await nextWrittenMatching(child, 'skills/extraRoots/set');
+    child.emitLine({ id: skills.id, result: {} });
+    const threadStart = await nextWrittenMatching(child, 'thread/start');
+    child.emitLine({ id: threadStart.id, result: { thread: { id: 'steer-thread' } } });
+    const session = await sessionPromise;
+
+    const abort = new AbortController();
+    const drain = (async () => {
+      for await (const _ of protocol.sendMessage(session, {
+        content: 'Begin', allowSteering: true, abortSignal: abort.signal,
+      })) { /* consume the stream */ }
+    })();
+    const turnStart = await nextWrittenMatching(child, 'turn/start');
+    child.emitLine({ id: turnStart.id, result: { turn: { id: 'turn-live' } } });
+    await vi.waitFor(() => expect(protocol.getSteerableTurnId(session)).toBe('turn-live'));
+
+    const sent = protocol.steerTurn(session, 'turn-live', 'Focus on tests');
+    await nextWrittenMatching(child, 'turn/steer');
+    child.kill();
+    await expect(sent).resolves.toMatchObject({ success: false, code: 'delivery-unknown' });
+    abort.abort();
+    await drain;
+    expect(protocol.getSteerableTurnId(session)).toBeNull();
+  });
+
   it('discovers all model pages without creating a thread or a turn', async () => {
     const protocol = new CodexAppServerProtocol();
     const pending = protocol.discoverModels({ workspacePath: '/worktree' });
@@ -174,6 +270,35 @@ describe('CodexAppServerProtocol', () => {
     expect(spawnMock.mock.calls[0][2]).toMatchObject({ cwd: '/worktree', windowsHide: true });
     expect(child.writtenLines.some((line: any) => /^(thread|turn)\//.test(line.method))).toBe(false);
     expect(child.killed).toBe(true);
+  });
+
+  it('uses only the selected workspace credentials for a catalog lookup and its refresh', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'ambient-fixture-key');
+    vi.stubEnv('CODEX_ACCESS_TOKEN', 'ambient-fixture-token');
+    const protocol = new CodexAppServerProtocol();
+    const tokens = { accessToken: 'synthetic-work-token', chatgptAccountId: 'synthetic-workspace' };
+    const getTokens = vi.fn(async () => tokens);
+    const pending = protocol.discoverModels({
+      workspacePath: '/worktree',
+      raw: { codexWorkspaceAuth: { revision: 1, assertCurrent: () => {}, getTokens } },
+    });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const login = await nextWrittenMatching(child, 'account/login/start');
+    expect(login.params).toEqual({ type: 'chatgptAuthTokens', ...tokens });
+    expect(spawnMock.mock.calls[0][1]).toContain('cli_auth_credentials_store="ephemeral"');
+    expect(spawnMock.mock.calls[0][2].env.OPENAI_API_KEY).toBeUndefined();
+    expect(spawnMock.mock.calls[0][2].env.CODEX_ACCESS_TOKEN).toBeUndefined();
+    expect(JSON.stringify(spawnMock.mock.calls[0])).not.toContain(tokens.accessToken);
+    child.emitLine({ id: login.id, result: { type: 'chatgptAuthTokens' } });
+    expect(child.writtenLines.some((line: any) => line.method === 'model/list')).toBe(false);
+    child.emitLine({ method: 'account/login/completed', params: { loginId: null, success: true } });
+    const models = await nextWrittenMatching(child, 'model/list');
+    child.emitLine({ id: 'refresh', method: 'account/chatgptAuthTokens/refresh', params: { reason: 'unauthorized' } });
+    expect(await nextResponseFor(child, 'refresh')).toMatchObject({ result: tokens });
+    expect(getTokens.mock.calls).toEqual([[false], [true]]);
+    child.emitLine({ id: models.id, result: { data: [], nextCursor: null } });
+    await expect(pending).resolves.toEqual([]);
   });
 
   it('discovers enabled plugin skills before the first turn in the requested workspace', async () => {
@@ -289,6 +414,47 @@ describe('CodexAppServerProtocol', () => {
     await rejected;
     expect(child.killed).toBe(true);
     expect(child.writtenLines.some((line: any) => line.method === 'turn/start')).toBe(false);
+  });
+
+  it('starts a temporary Smart Commit thread in read-only mode and without approvals', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.createSession({
+      workspacePath: '/workspace',
+      model: 'gpt-6-luna',
+      raw: { readOnlyTemporary: true, effortLevel: 'low' },
+    });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const account = await nextWrittenMatching(child, 'account/read');
+    expect(account.params).toEqual({ refreshToken: false });
+    child.emitLine({ id: account.id, result: { account: { type: 'chatgpt' } } });
+    const read = await nextWrittenMatching(child, 'config/read');
+    expect(read.params).toEqual({ cwd: '/workspace', includeLayers: false });
+    child.emitLine({ id: read.id, result: { config: { mcp_servers: { external: { url: 'https://test.invalid' } } } } });
+    const start = await nextWrittenMatching(child, 'thread/start');
+    expect(start.params).toMatchObject({
+      ephemeral: true, sandbox: 'read-only', approvalPolicy: 'never',
+      model: 'gpt-6-luna', modelProvider: 'openai',
+      config: { model_reasoning_effort: 'low', mcp_servers: { external: { enabled: false } } },
+    });
+    child.emitLine({ id: start.id, result: { thread: { id: 'temporary' }, sandbox: { type: 'readOnly' } } });
+    const session = await pending;
+    protocol.cleanupSession(session);
+    expect(child.killed).toBe(true);
+    expect(child.writtenLines.some((line: any) => line.method === 'skills/extraRoots/set')).toBe(false);
+  });
+
+  it('refuses a temporary Smart Commit when Codex is signed in with an API key', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.createSession({ workspacePath: '/workspace', raw: { readOnlyTemporary: true } });
+    const rejected = expect(pending).rejects.toThrow('ChatGPT subscription workspace');
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const account = await nextWrittenMatching(child, 'account/read');
+    child.emitLine({ id: account.id, result: { account: { type: 'apiKey' } } });
+    await rejected;
+    expect(child.killed).toBe(true);
+    expect(child.writtenLines.some((line: any) => line.method === 'thread/start')).toBe(false);
   });
 
   it('spawns the codex binary, completes the initialize handshake, and starts a thread', async () => {
@@ -427,6 +593,30 @@ describe('CodexAppServerProtocol', () => {
     // The tree terminator owns shutdown now. Closing stdin here would race the
     // detached taskkill process and could erase its root before traversal.
     expect(child.stdin.writableEnded).toBe(false);
+  });
+
+  it('sends the Smart Commit model and effort as per-turn fields', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.createSession({ workspacePath: '/workspace', model: 'gpt-6-luna' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const start = await nextWrittenMatching(child, 'thread/start');
+    child.emitLine({ id: start.id, result: { thread: { id: 'commit-thread' } } });
+    const session = await pending;
+    const collector = (async () => {
+      for await (const event of protocol.sendMessage(session, {
+        content: 'Review commit', modelOverride: 'gpt-6-astra', effortOverride: 'low',
+      })) {
+        if (event.type === 'complete') return;
+      }
+    })();
+    const turn = await nextWrittenMatching(child, 'turn/start');
+    expect(start.params).toMatchObject({ model: 'gpt-6-luna' });
+    expect(turn.params).toMatchObject({ threadId: 'commit-thread', model: 'gpt-6-astra', effort: 'low' });
+    child.emitLine({ id: turn.id, result: { turn: { id: 'commit-turn' } } });
+    child.emitLine({ method: 'turn/completed', params: { threadId: 'commit-thread', turn: { id: 'commit-turn', status: 'completed' } } });
+    await collector;
+    protocol.cleanupSession(session);
   });
 
   it('streams agentMessage deltas as text events and emits complete on turn/completed', async () => {

@@ -1,6 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
-import { preserveMarkdownBody, preserveMarkdownSource } from '../MarkdownSource';
+import { describe, expect, it, vi } from 'vitest';
+import { diffChars } from 'diff';
+import { MarkdownSourceBudgetError, preserveMarkdownBody, preserveMarkdownSource } from '../MarkdownSource';
+
+vi.mock('diff', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('diff')>();
+  return { ...actual, diffChars: vi.fn(actual.diffChars) };
+});
 
 describe('Markdown source edit mapping', () => {
   it.each([
@@ -29,5 +35,22 @@ describe('Markdown source edit mapping', () => {
     const raw = '---\nkey: bad: yaml\n---\nBody';
     const baseline = '---\nkey: "bad: yaml"\n---\nBody';
     expect(preserveMarkdownSource(raw, baseline, baseline.replace('Body', 'Changed'))).toBe(raw.replace('Body', 'Changed'));
+  });
+
+  it('offers a recoverable source draft without normalizing unchanged frontmatter', () => {
+    const header = '---\n# keep this comment\nupdated: 2026-11-07\n---\n';
+    const raw = header + '\n| A | B |\n|---|---|\n| Old | _value_ |\n';
+    const baseline = '---\nupdated: 2026-11-07T00:00:00.000Z\n---\n| A | B |\n| --- | --- |\n| Old | *value* |';
+    const current = baseline.replace('Old', 'Unsaved');
+    const diffWithBudget: (before: string, after: string, options: { timeout: number }) =>
+      ReturnType<typeof diffChars> | undefined = diffChars;
+    vi.mocked(diffWithBudget).mockReturnValueOnce(undefined);
+
+    expect(() => preserveMarkdownSource(raw, baseline, current)).toThrow(
+      expect.objectContaining({
+        name: MarkdownSourceBudgetError.name,
+        sourceDraft: header + '| A | B |\n| --- | --- |\n| Unsaved | *value* |',
+      }),
+    );
   });
 });

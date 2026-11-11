@@ -8,7 +8,8 @@ import React, {
 import { useAtomValue } from "jotai";
 import { MaterialSymbol } from "@nimbalyst/runtime";
 import { VList } from "virtua";
-import { isPathInWorkspace } from "../../../shared/pathUtils";
+import { commitPathKey, filesWithinCommitRoots, relativeCommitPath } from "@nimbalyst/runtime/ui/git/commitSelection";
+import { workspaceRootPathsAtom } from "../../store/atoms/fileTree";
 import {
   sessionFileEditsAtom,
   workstreamFileEditsAtom,
@@ -111,6 +112,12 @@ export function AgentReviewPanel({
   width,
 }: AgentReviewPanelProps) {
   const effectiveWorkspacePath = worktreePath || workspacePath;
+  const workspaceRoots = useAtomValue(workspaceRootPathsAtom);
+  const reviewRoots = useMemo(() => {
+    if (worktreePath) return [worktreePath];
+    return workspaceRoots[0] && commitPathKey(workspaceRoots[0], workspacePath) === commitPathKey(workspacePath, workspacePath)
+      ? workspaceRoots : [workspacePath];
+  }, [worktreePath, workspacePath, workspaceRoots]);
   const reviewSessionId = activeSessionId || workstreamId;
   const workstreamSessions = useAtomValue(workstreamSessionsAtom(workstreamId));
   const allFileEdits = useAtomValue(workstreamFileEditsAtom(workstreamId));
@@ -158,17 +165,22 @@ export function AgentReviewPanel({
     const byPath = new Map<
       string,
       {
+        filePath: string;
         operation?: string;
         worktreeStatus?: string;
         editRevisions?: string[];
       }
     >();
 
+    const eligiblePaths = filesWithinCommitRoots(fileEdits.map(edit => edit.filePath), reviewRoots, effectiveWorkspacePath);
+    const eligibleKeys = new Set(eligiblePaths.map(filePath => commitPathKey(filePath, effectiveWorkspacePath)));
     for (const edit of fileEdits) {
-      if (!isPathInWorkspace(edit.filePath, effectiveWorkspacePath)) continue;
-      const current = byPath.get(edit.filePath);
-      byPath.set(edit.filePath, {
+      const key = commitPathKey(edit.filePath, effectiveWorkspacePath);
+      if (!eligibleKeys.has(key)) continue;
+      const current = byPath.get(key);
+      byPath.set(key, {
         ...current,
+        filePath: edit.filePath,
         operation: edit.operation,
         editRevisions: [
           ...(current?.editRevisions ?? []),
@@ -180,9 +192,11 @@ export function AgentReviewPanel({
     if (worktreeId && worktreePath) {
       for (const file of changedWorktreeFiles) {
         const absolutePath = `${worktreePath}/${file.path}`;
-        if (!byPath.has(absolutePath)) continue;
-        byPath.set(absolutePath, {
-          ...byPath.get(absolutePath),
+        const key = commitPathKey(absolutePath, effectiveWorkspacePath);
+        const edit = byPath.get(key);
+        if (!edit) continue;
+        byPath.set(key, {
+          ...edit,
           worktreeStatus: file.status,
         });
       }
@@ -191,8 +205,8 @@ export function AgentReviewPanel({
     const fileStateSnapshot =
       worktreeId && worktreePath ? changedWorktreeFiles : uncommittedFiles;
 
-    return [...byPath.entries()]
-      .map(([filePath, metadata]) => {
+    return [...byPath.values()]
+      .map(({ filePath, ...metadata }) => {
         const status = inferStatus(
           metadata.operation,
           metadata.worktreeStatus
@@ -211,6 +225,7 @@ export function AgentReviewPanel({
   }, [
     changedWorktreeFiles,
     effectiveWorkspacePath,
+    reviewRoots,
     fileEdits,
     uncommittedFiles,
     worktreeId,
@@ -417,8 +432,8 @@ export function AgentReviewPanel({
                   key={filePath}
                   filePath={filePath}
                   relativePath={
-                    filePath.startsWith(`${effectiveWorkspacePath}/`)
-                      ? filePath.slice(effectiveWorkspacePath.length + 1)
+                    filesWithinCommitRoots([filePath], [effectiveWorkspacePath], effectiveWorkspacePath).length
+                      ? relativeCommitPath(filePath, effectiveWorkspacePath)
                       : filePath
                   }
                   status={status}

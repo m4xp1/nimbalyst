@@ -33,6 +33,7 @@ import { createLexicalDictationTarget } from './lexicalDictationTarget';
 export interface MarkdownEditorConfig {
   /** File-backed hosts may retain source formatting when exporting edits. */
   preserveMarkdownSource?: EditorConfig['preserveMarkdownSource'];
+  floatingTextToolbarActions?: EditorConfig['floatingTextToolbarActions'];
   /**
    * @deprecated Theme is now controlled at app level via CSS variables.
    * This prop is ignored. Theme is read from document root's data-theme attribute.
@@ -390,6 +391,7 @@ export function MarkdownEditor({
       onDirtyChange: handleDirtyChange,
       onGetContent: handleGetContent,
       preserveMarkdownSource: config.preserveMarkdownSource,
+      floatingTextToolbarActions: config.floatingTextToolbarActions,
       onEditorReady: handleEditorReady,
 
       // Collaboration mode -- passed through to Editor.tsx
@@ -429,6 +431,7 @@ export function MarkdownEditor({
     [
       config.theme,
       config.preserveMarkdownSource,
+      config.floatingTextToolbarActions,
       config.editable,
       config.showToolbar,
       config.showTreeView,

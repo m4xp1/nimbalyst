@@ -39,6 +39,12 @@ interface Pending {
   timer: NodeJS.Timeout | null;
 }
 
+export class JsonRpcRequestError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(`[CodexAppServer] RPC error ${code}: ${message}`);
+  }
+}
+
 export class JsonRpcClient {
   private nextId = 1;
   private readonly pending = new Map<RpcId, Pending>();
@@ -166,7 +172,7 @@ export class JsonRpcClient {
       if (pending.timer) clearTimeout(pending.timer);
       if (hasError) {
         const errObj = (obj as unknown as RpcResponseErr).error;
-        pending.reject(new Error(`[CodexAppServer] RPC error ${errObj.code}: ${errObj.message}`));
+        pending.reject(new JsonRpcRequestError(errObj.code, errObj.message));
       } else {
         pending.resolve((obj as unknown as RpcResponseOk).result);
       }

@@ -28,7 +28,7 @@ import {
   settleWorkstreamCommitAtom,
   workstreamStateAtom,
 } from '../../store/atoms/workstreamState';
-import {selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
+import {commitPathKey,selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
 import { workspaceUncommittedFilesAtom,worktreeChangedFilesAtom } from '../../store/atoms/sessionFiles';
 import { activeFileRepoPathAtom } from '../../store/atoms/workspaceRepos';
 import { workspaceRootPathsAtom } from '../../store/atoms/fileTree';
@@ -47,11 +47,14 @@ import { getWorktreeNameFromPath } from '../../utils/pathUtils';
 import { isPathInWorkspace } from '../../../shared/pathUtils';
 import { SuperFilesPanel } from './SuperFilesPanel';
 import { defaultAgentModelAtom } from '../../store/atoms/appSettings';
+import { sessionProcessingAtom, sessionStoreAtom } from '../../store/atoms/sessions';
 import { type AgentModelOption } from './AgentModelPicker';
 import { isClaudeCliTerminalSession } from '../UnifiedAI/claudeCliInputRouting';
 import { watchGitStatus } from '../../utils/gitStatus';
 import type {GitStatus} from '../../store/atoms/gitOperations';
-import { buildCommitPrompt } from '@nimbalyst/runtime/ui/AgentTranscript/utils/commitPromptBuilder';
+import { buildCommitPrompt, buildSelectedCommitPrompt, type CommitContext } from '@nimbalyst/runtime/ui/AgentTranscript/utils/commitPromptBuilder';
+import { buildTemporaryCommitPrompt } from './temporaryCommitPrompt';
+import { SmartCommitOptions, useSmartCommitOptions } from './SmartCommitOptions';
 
 // Types for worktree mode (copied from DiffModeView)
 interface WorktreeChangedFile {
@@ -234,6 +237,22 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     const [agentModels, setAgentModels] = useState<AgentModelOption[]>([]);
     const [isLoadingAgentModels, setIsLoadingAgentModels] = useState(false);
     const [selectedAgentModel, setSelectedAgentModel] = useState<string>(defaultModel);
+    const smartOptions = useSmartCommitOptions();
+    const activeSession = useAtomValue(sessionStoreAtom(sessionId));
+    const sessionIsProcessing = useAtomValue(sessionProcessingAtom(sessionId));
+    const smartContext = JSON.stringify([contextKey, sessionId, statusRepoPath]);
+    const currentSmartContext = useRef(smartContext);
+    currentSmartContext.current = smartContext;
+    const smartFlight = useRef(false);
+    const [smartBusy, setSmartBusy] = useState(false);
+    const [smartError, setSmartError] = useState<{ context: string; message: string } | null>(null);
+    const [temporaryProposal, setTemporaryProposal] = useState<{
+      context: string; message: string; paths: string[];
+    } | null>(null);
+    const smartModels = agentModels.filter(model => smartOptions.settings.temporary
+      ? model.provider === 'openai-codex'
+      : model.provider === activeSession?.provider);
+    const smartModel = smartModels.find(model => model.id === smartOptions.settings.model);
 
     // Track if worktree data has been loaded for the current worktreePath
     // This prevents redundant fetches when switching between manual/smart modes
@@ -383,8 +402,12 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
 
     // Handle smart commit (AI-assisted)
     const handleSmartCommit = useCallback(async () => {
-      if (!window.electronAPI || !sessionId || !workspacePath) return;
+      if (!window.electronAPI || !sessionId || !workspacePath || smartFlight.current) return;
 
+      smartFlight.current = true;
+      setSmartBusy(true);
+      setSmartError(null);
+      setTemporaryProposal(null);
       try {
         const isInWorkstream = childSessionIds && childSessionIds.length > 1;
         const isInWorktree = !!worktreeId;
@@ -401,14 +424,37 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
           sessionId,
           isInWorkstream ? childSessionIds : undefined,
           isInWorktree
-        ) as {
-          success: boolean;
-          files: Array<{ path: string; status: 'added' | 'modified' | 'deleted' }>;
-          scenario: 'single' | 'workstream' | 'worktree';
-          error?: string;
-        };
+        ) as CommitContext & { error?: string };
+        if (!commitContext.success) throw new Error(commitContext.error ?? 'Could not read commit context.');
+        const selected = worktreeId
+          ? selectedWorktreePaths
+          : [...stagedFiles];
+        if (selected.length) {
+          const allowed = new Set(selected.map(file => commitPathKey(file, commitContextPath)));
+          commitContext.files = commitContext.files.filter(file => allowed.has(commitPathKey(file.path, commitContextPath)));
+          if (commitContext.files.length !== allowed.size) {
+            throw new Error('Some selected files are outside the current commit scope. Review the selection and try again.');
+          }
+        }
 
-        const message = buildCommitPrompt({
+        if (smartOptions.settings.temporary) {
+          if (!smartModel) throw new Error('Select a Codex model for the temporary session.');
+          if (commitContext.files.some(file => !file.repo || !isWorkspaceCommittablePath(file.path))) {
+            throw new Error('Some files are outside the current commit repositories. Review the file selection.');
+          }
+          const prompt = await buildTemporaryCommitPrompt(commitContext.files, path =>
+            window.electronAPI.invoke('git:file-diff', commitContextPath, { path, group: 'working' }));
+          if (currentSmartContext.current !== smartContext) return;
+          const proposal = await window.electronAPI.invoke('ai:generateTemporaryCommitMessage', {
+            sessionId, workspacePath, model: smartModel.id, effort: smartOptions.settings.effort, prompt,
+          }) as string;
+          if (currentSmartContext.current === smartContext) {
+            setTemporaryProposal({ context: smartContext, message: proposal, paths: commitContext.files.map(file => file.path) });
+          }
+          return;
+        }
+
+        const message = selected.length ? buildSelectedCommitPrompt(commitContext.files) : buildCommitPrompt({
           commitContext,
           isInWorktree,
           workstreamSessionCount: isInWorkstream ? childSessionIds.length : undefined,
@@ -421,6 +467,7 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
           attachments: undefined,
           mode: 'agent',
           inputType: 'user' as const,
+          ...(smartModel ? { smartCommitTurn: { model: smartModel.id, effort: smartOptions.settings.effort } } : {}),
         };
 
         // claude-code-cli (subscription, NIM-806): the genuine `claude` CLI is
@@ -429,24 +476,66 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
         // smart-commit prompt through the Nimbalyst queue instead; the
         // main-process PID-idle flusher drains it to the terminal once the CLI is
         // idle, whether or not a turn is currently in flight.
-        let provider: string | null = null;
-        try {
-          const sessionResult = await window.electronAPI.invoke('sessions:get', sessionId) as
-            { session?: { provider?: string } } | null;
-          provider = sessionResult?.session?.provider ?? null;
-        } catch {
-          /* fall through to the SDK send path */
-        }
-
-        if (isClaudeCliTerminalSession(provider)) {
+        if (currentSmartContext.current !== smartContext) return;
+        if (isClaudeCliTerminalSession(activeSession?.provider)) {
           await window.electronAPI.invoke('ai:createQueuedPrompt', sessionId, message, [], docContext);
         } else {
           await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
         }
       } catch (error) {
-        console.error('[GitOperationsPanel] Failed to send smart commit message:', error);
+        if (currentSmartContext.current === smartContext) {
+          setSmartError({ context: smartContext, message: error instanceof Error ? error.message : String(error) });
+        }
+      } finally {
+        smartFlight.current = false;
+        setSmartBusy(false);
       }
-    }, [sessionId, workspacePath, worktreePath, childSessionIds, worktreeId]);
+    }, [sessionId, workspacePath, worktreePath, childSessionIds, worktreeId, selectedWorktreePaths, stagedFiles,
+      smartOptions.settings.temporary, smartOptions.settings.effort, smartModel, smartContext, activeSession?.provider,
+      isWorkspaceCommittablePath]);
+
+    const approveTemporaryCommit = useCallback(async () => {
+      if (!temporaryProposal || temporaryProposal.context !== smartContext || smartFlight.current ||
+          !temporaryProposal.message.trim() || worktreeCommitFlight.current || commitFlight.current ||
+          atomStore.get(committingAtom)) return;
+      smartFlight.current = true;
+      if (worktreePath) {
+        worktreeCommitFlight.current = true;
+        setWorktreeIsCommitting(true);
+      } else {
+        commitFlight.current = true;
+        setIsCommitting(true);
+      }
+      setSmartBusy(true);
+      setSmartError(null);
+      try {
+        const result = (worktreePath
+          ? await window.electronAPI.invoke('worktree:commit', worktreePath, temporaryProposal.message, temporaryProposal.paths)
+          : await window.electronAPI.invoke('git:commit', workspacePath, temporaryProposal.message, temporaryProposal.paths)
+        ) as { success: boolean; error?: string; committedFiles?: string[] };
+        if (currentSmartContext.current !== smartContext) return;
+        if (!result.success) throw new Error(result.error ?? 'Could not commit the approved files.');
+        setTemporaryProposal(null);
+        void fetchGitStatus();
+        void fetchCommits();
+        if (worktreeId && worktreePath) void refreshWorktreeChangedFiles(worktreeId, worktreePath);
+      } catch (error) {
+        if (currentSmartContext.current === smartContext) {
+          setSmartError({ context: smartContext, message: error instanceof Error ? error.message : String(error) });
+        }
+      } finally {
+        if (worktreePath) {
+          worktreeCommitFlight.current = false;
+          setWorktreeIsCommitting(false);
+        } else {
+          commitFlight.current = false;
+          setIsCommitting(false);
+        }
+        smartFlight.current = false;
+        setSmartBusy(false);
+      }
+    }, [temporaryProposal, smartContext, atomStore, committingAtom, worktreePath, workspacePath,
+      fetchGitStatus, fetchCommits, worktreeId, setIsCommitting]);
 
     // Toggle file staging
     const toggleFileStaging = useCallback(
@@ -502,9 +591,9 @@ export const GitOperationsPanel: React.FC<GitOperationsPanelProps> = React.memo(
     }, [defaultModel]);
 
     useEffect(() => {
-      if (!shouldShowAgentResolutionDialog) return;
+      if (!shouldShowAgentResolutionDialog && (worktreeId ? worktreeCommitMode !== 'smart' : commitMode !== 'smart')) return;
       loadAgentModels();
-    }, [shouldShowAgentResolutionDialog, loadAgentModels]);
+    }, [shouldShowAgentResolutionDialog, loadAgentModels, worktreeId, commitMode, worktreeCommitMode]);
 
     // Refresh worktree changed files via central listener (updates the atom)
     const loadWorktreeChangedFiles = useCallback(async () => {
@@ -1286,6 +1375,63 @@ Please proceed with this strategy.`;
     }
 
     const hasChanges = editedFiles.length > 0 || gitStatus.hasUncommitted;
+    const proposal = temporaryProposal?.context === smartContext ? temporaryProposal : null;
+    const renderSmartCommit = (canCommit: boolean) => (
+      <div className="flex flex-col gap-2" data-testid="git-operations-smart-mode">
+        <p className="text-xs text-[var(--nim-text-muted)] m-0 leading-normal">
+          Let AI analyze your changes and propose a commit message.
+        </p>
+        <SmartCommitOptions
+          value={smartOptions.settings}
+          models={smartModels}
+          onChange={smartOptions.update}
+          disabled={smartBusy || smartOptions.isLoading}
+          settingsError={smartOptions.settingsError}
+        />
+        <HelpTooltip testId="git-operations-commit-with-ai-button">
+          <button
+            type="button"
+            className="w-full p-2 border-none rounded text-white text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-br from-[var(--nim-primary)] to-[var(--nim-primary-hover)]"
+            onClick={handleSmartCommit}
+            disabled={!canCommit || smartBusy || smartOptions.isLoading || (smartOptions.settings.temporary ? !smartModel : sessionIsProcessing)}
+            data-testid="git-operations-commit-with-ai-button"
+          >
+            <MaterialSymbol icon="auto_awesome" size={16} />
+            {smartBusy ? 'Working…' : 'Commit with AI'}
+          </button>
+        </HelpTooltip>
+        {proposal && (
+          <div className="flex flex-col gap-2 text-xs" data-testid="git-operations-temporary-proposal">
+            <label className="flex flex-col gap-1">
+              Proposed commit message
+              <textarea
+                className="w-full p-2 border border-nim rounded bg-nim text-nim resize-y"
+                value={proposal.message}
+                onChange={event => setTemporaryProposal({ ...proposal, message: event.target.value })}
+                disabled={smartBusy}
+              />
+            </label>
+            <details>
+              <summary>Files to commit ({proposal.paths.length})</summary>
+              <ul className="break-all">{proposal.paths.map(path => <li key={path}>{path}</li>)}</ul>
+            </details>
+            <div className="flex gap-2">
+              <button type="button" className="rounded p-2 bg-[var(--nim-primary)] text-white disabled:opacity-50"
+                disabled={smartBusy || !proposal.message.trim() || isCommitting || worktreeIsCommitting}
+                onClick={approveTemporaryCommit}>
+                Approve commit
+              </button>
+              <button type="button" className="rounded p-2" disabled={smartBusy} onClick={() => setTemporaryProposal(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+        {smartError?.context === smartContext && (
+          <p role="alert" className="text-xs text-[var(--nim-error)] m-0">{smartError.message}</p>
+        )}
+      </div>
+    );
 
     return (
       <div ref={panelRef} className="git-operations-panel min-w-[200px] border-t border-[var(--nim-border)] bg-[var(--nim-bg-secondary)]">
@@ -1363,25 +1509,7 @@ Please proceed with this strategy.`;
                   </div>
                 )}
 
-                {/* Smart commit workflow - AI proposes commit in transcript */}
-                {commitMode === 'smart' && (
-                  <div className="flex flex-col gap-2" data-testid="git-operations-smart-mode">
-                    <p className="text-xs text-[var(--nim-text-muted)] m-0 leading-normal">
-                      Let AI analyze your changes and propose a commit message.
-                    </p>
-                    <HelpTooltip testId="git-operations-commit-with-ai-button">
-                      <button
-                        className="w-full p-2 border-none rounded text-white text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-br from-[var(--nim-primary)] to-[var(--nim-primary-hover)]"
-                        onClick={handleSmartCommit}
-                        disabled={!hasChanges}
-                        data-testid="git-operations-commit-with-ai-button"
-                      >
-                        <MaterialSymbol icon="auto_awesome" size={16} />
-                        Commit with AI
-                      </button>
-                    </HelpTooltip>
-                  </div>
-                )}
+                {commitMode === 'smart' && renderSmartCommit(hasChanges)}
               </div>
             )}
 
@@ -1504,20 +1632,7 @@ Please proceed with this strategy.`;
                         </>
                       )}
                     </button>
-                  ) : (
-                    <HelpTooltip testId="git-operations-commit-with-ai-button">
-                      <button
-                        type="button"
-                        className="w-full p-2 border-none rounded text-white text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-br from-[var(--nim-primary)] to-[var(--nim-primary-hover)]"
-                        onClick={handleSmartCommit}
-                        disabled={!worktreeHasUncommittedChanges}
-                        data-testid="git-operations-commit-with-ai-button"
-                      >
-                        <MaterialSymbol icon="auto_awesome" size={16} />
-                        Commit with AI
-                      </button>
-                    </HelpTooltip>
-                  )}
+                  ) : renderSmartCommit(worktreeHasUncommittedChanges)}
                   <button
                     type="button"
                     className={`w-full p-2 border-none rounded text-white text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ${

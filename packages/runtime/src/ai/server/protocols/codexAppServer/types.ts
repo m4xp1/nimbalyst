@@ -134,6 +134,8 @@ export type UserInputElement =
 export interface TurnStartParams {
   threadId: string;
   input: UserInputElement[];
+  model?: string;
+  effort?: string;
   /** JSON schema for structured output. Optional. */
   outputSchema?: unknown;
 }

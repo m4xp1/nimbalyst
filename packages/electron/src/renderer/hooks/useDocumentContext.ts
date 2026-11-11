@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { TabData } from '../contexts/TabsContext';
-import { getTextSelection } from '../components/UnifiedAI/TextSelectionIndicator';
+import { getTextSelectionForFile } from '../components/UnifiedAI/TextSelectionIndicator';
 import type { MockupSelection, EditorContextItem } from '@nimbalyst/runtime';
 import { getActiveEditorContextItems } from '../stores/editorContextStore';
 import {
@@ -172,10 +172,7 @@ export function useDocumentContext({ activeTab, getContentRef }: UseDocumentCont
       : undefined;
 
     // Get text selection for markdown/code files
-    const textSelectionData = getTextSelection();
-    const textSelection = textSelectionData && textSelectionData.filePath === (activeTab.filePath || '')
-      ? textSelectionData
-      : undefined;
+    const textSelection = getTextSelectionForFile((activeTab.filePath || ''));
 
     // Get extension-provided selected items (node-like editors), excluding any
     // the user has dismissed. Only for the currently active file.

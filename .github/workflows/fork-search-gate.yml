@@ -44,6 +44,31 @@ jobs:
         run: pnpm run test:fork-features
       - name: Mandatory upstream integration regressions
         run: pnpm run test:fork-upstream
+      - name: Mandatory chat, review and workspace routing regressions
+        run: >-
+          pnpm exec vitest run
+          packages/runtime/src/ai/__tests__/chatAnnotations.test.ts
+          packages/runtime/src/ai/server/protocols/__tests__/CodexAppServerProtocol.test.ts
+          packages/runtime/src/ai/server/transcript/__tests__/CodexAppServerRawParser.test.ts
+          packages/runtime/src/ai/server/transcript/__tests__/projectRawMessages.test.ts
+          packages/runtime/src/ai/server/transcript/__tests__/TranscriptWriter.test.ts
+          packages/runtime/src/ui/AgentTranscript/components/__tests__/RichTranscriptView.turnElapsed.test.tsx
+          packages/runtime/src/ui/AgentTranscript/components/__tests__/RichTranscriptView.permissionBanner.test.tsx
+          packages/electron/src/main/services/__tests__/SettingsService.test.ts
+          packages/runtime/src/ai/server/providers/__tests__/OpenAICodexProvider.test.ts
+          packages/runtime/src/editor/markdown/__tests__/MarkdownSource.test.ts
+          packages/runtime/src/editor/plugins/CommentPlugin/__tests__/commenterMode.test.tsx
+          packages/electron/src/main/__tests__/HistoryManager.multiRoot.test.ts
+          packages/electron/src/main/services/ai/__tests__/aiServiceIpcChannels.test.ts
+          packages/electron/src/main/services/ai/__tests__/claudeCliInputIntegrationRoundTrip.test.ts
+          packages/electron/src/main/tray/__tests__/TrayManager.platform.test.ts
+          packages/electron/src/renderer/components/AgentMode/__tests__/AgentReviewPanel.test.tsx
+          packages/electron/src/renderer/components/AgentMode/__tests__/SmartCommitOptions.test.tsx
+          packages/electron/src/renderer/components/AgentMode/__tests__/temporaryCommitPrompt.test.ts
+          packages/electron/src/renderer/components/AgentMode/__tests__/WorkstreamEditorTabs.test.tsx
+          packages/electron/src/renderer/components/NavigationGutter/__tests__/usageIndicatorGutterRestore.test.tsx
+          packages/electron/src/renderer/components/UnifiedAI/__tests__/AIInput.paste.test.tsx
+          packages/electron/src/renderer/components/UnifiedAI/__tests__/ChatAnnotationControls.test.tsx
       - name: Reject OpenAI transcription before opening a socket
         run: pnpm exec vitest run packages/electron/src/main/services/credentials/__tests__/ProviderCredentialVault.test.ts -t "transcription socket"
       - name: Mandatory schema and editor coordination regressions
@@ -87,7 +112,7 @@ jobs:
       - name: Mandatory built-app search, Git and file tracker
         run: |
           $env:NIMBALYST_E2E_MAIN_PATH = (Resolve-Path 'packages/electron/out/main/index.js').Path
-          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts')
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Built application regression failed: $spec" }

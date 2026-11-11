@@ -187,6 +187,7 @@ vi.mock('../TrayManager', async (importOriginal) => {
 });
 
 import { TrayManager, groupTraySessions } from '../TrayManager';
+import { nativeImage } from 'electron';
 import { STALL_AFTER_MS } from '../fleetSnapshot';
 import { windows } from '../../window/windowState';
 import { initializeApplicationWindowRecovery } from '../../window/ApplicationWindowRecovery';
@@ -328,6 +329,33 @@ describe('TrayManager - cross-platform initialisation (#39)', () => {
 
     expect(nativeThemeOn).toHaveBeenCalledWith('updated', expect.any(Function));
     expect(systemPrefsSubscribe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['running', [0, 0, 0, 0]],
+    ['attention', [246, 130, 59, 255]],
+    ['error', [246, 130, 59, 255]],
+  ] as const)('draws a contrasting Windows glyph and the expected %s badge', (state, badge) => {
+    restorePlatform = stubPlatform('win32');
+    const baseImage = createNativeImageMock();
+    const bitmap = Buffer.alloc(32 * 32 * 4);
+    const offset = (x: number, y: number) => (y * 32 + x) * 4;
+    bitmap[offset(8, 8) + 3] = 255;
+    baseImage.toBitmap.mockReturnValue(bitmap);
+    vi.mocked(nativeImage.createFromPath).mockReturnValueOnce(baseImage as unknown as Electron.NativeImage);
+
+    const tray = TrayManager.getInstance() as unknown as {
+      getIconForState: (state: string) => Electron.NativeImage;
+    };
+    const renderedImage = tray.getIconForState(state);
+    const rendered = vi.mocked(nativeImage.createFromBuffer).mock.calls.at(-1)![0];
+    const pixel = (x: number, y: number) => Array.from(rendered.subarray(offset(x, y), offset(x, y) + 4));
+
+    expect(pixel(8, 8)).toEqual([255, 255, 255, 255]);
+    expect(pixel(8, 9)).toEqual([55, 40, 28, 255]);
+    expect(pixel(8, 10)).toEqual([0, 0, 0, 0]);
+    expect(pixel(24, 24)).toEqual(badge);
+    expect(renderedImage.setTemplateImage).toHaveBeenCalledWith(false);
   });
 
   it('still subscribes the macOS appearance notification on darwin', async () => {

@@ -24,7 +24,16 @@ export type TranscriptEventType =
 // Per-event payload interfaces
 // ---------------------------------------------------------------------------
 
-export interface UserMessagePayload {
+export interface TranscriptTurnMetadata {
+  turnId?: string;
+}
+
+export interface TranscriptTurnEnd {
+  status: 'completed' | 'failed' | 'interrupted';
+}
+
+export interface UserMessagePayload extends TranscriptTurnMetadata {
+  annotations?: import('../../chatAnnotations').ChatAnnotation[];
   mode: 'agent' | 'planning' | 'auto';
   inputType: 'user' | 'system_message';
   /**
@@ -44,7 +53,8 @@ export interface UserMessagePayload {
   }>;
 }
 
-export interface AssistantMessagePayload {
+export interface AssistantMessagePayload extends TranscriptTurnMetadata {
+  assistantPhase?: 'commentary' | 'final';
   mode: 'agent' | 'planning' | 'auto';
   /**
    * Extended-thinking output. Stored on the assistant_message payload so we
@@ -77,7 +87,9 @@ export type PermissionDeniedReasonType =
   | 'rule'
   | 'asyncAgent';
 
-export interface SystemMessagePayload {
+export interface SystemMessagePayload extends TranscriptTurnMetadata {
+  /** A provider turn boundary that carries no token-usage measurement. */
+  turnBoundary?: TranscriptTurnEnd;
   systemType: 'status' | 'slash_command' | 'error' | 'init' | 'permission_denied';
   statusCode?: string;
   /** Marks an authentication failure so the UI can render the login widget. */
@@ -114,7 +126,7 @@ export interface SystemMessagePayload {
   attachmentDetection?: 'reactive' | 'preflight';
 }
 
-export interface ToolCallPayload {
+export interface ToolCallPayload extends TranscriptTurnMetadata {
   toolName: string;
   toolDisplayName: string;
   status: 'running' | 'completed' | 'error';
@@ -181,12 +193,12 @@ export interface GitCommitProposalPayload {
   respondedBy?: 'desktop' | 'mobile';
 }
 
-export type InteractivePromptPayload =
+export type InteractivePromptPayload = TranscriptTurnMetadata & (
   | PermissionRequestPayload
   | AskUserQuestionPayload
-  | GitCommitProposalPayload;
+  | GitCommitProposalPayload);
 
-export interface SubagentPayload {
+export interface SubagentPayload extends TranscriptTurnMetadata {
   agentType: string;
   status: 'running' | 'completed';
   teammateName: string | null;
@@ -202,7 +214,8 @@ export interface SubagentPayload {
   durationMs?: number;
 }
 
-export interface TurnEndedPayload {
+export interface TurnEndedPayload extends TranscriptTurnMetadata {
+  turnBoundary?: TranscriptTurnEnd;
   contextFill: {
     inputTokens: number;
     cacheReadInputTokens: number;

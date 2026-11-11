@@ -8,7 +8,7 @@
  */
 
 import { store } from '../index';
-import { codexUsageAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
+import { codexUsageAtom, codexWorkspaceRevisionAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
 
 let usageRevision = 0;
 function applyUsage(data: CodexUsageData): void {
@@ -27,7 +27,10 @@ export function initCodexUsageListeners(): () => void {
   };
 
   cleanups.push(
-    window.electronAPI.on('codex-usage:update', handleUsageUpdate)
+    window.electronAPI.on('codex-usage:update', handleUsageUpdate),
+    window.electronAPI.on('codex-workspace:changed', () => {
+      if (active) store.set(codexWorkspaceRevisionAtom, value => value + 1);
+    }),
   );
 
   // Fetch initial usage data on startup

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { $getRoot } from 'lexical';
 import { registerMarkdownDirtyListener } from '../registerMarkdownDirtyListener';
-import { preserveMarkdownSource } from '../markdown/MarkdownSource';
+import { MarkdownSourceBudgetError, preserveMarkdownSource } from '../markdown/MarkdownSource';
+import { $readMarkdownSource } from '../markdown/MarkdownSourceSnapshot';
 import { $convertFromEnhancedMarkdownString } from '../markdown/EnhancedMarkdownImport';
 import { $convertToEnhancedMarkdownString } from '../markdown/EnhancedMarkdownExport';
 import { EXTERNAL_CONTENT_UPDATE_TAG } from '../applyExternalMarkdown';
@@ -46,5 +47,22 @@ describe('file editor dirty notifications', () => {
     editor.update(() => $getRoot().getAllTextNodes()[0].setTextContent('Local.'), { discrete: true });
     expect(dirty).toHaveBeenCalledTimes(1);
     expect(editor.read(() => $convertToEnhancedMarkdownString(MARKDOWN_TEST_TRANSFORMERS, { preserveSource: preserveMarkdownSource }))).toBe(external.replace('External.', 'Local.'));
+  });
+
+  it('reads document metadata while the source-preserving writer is unavailable', () => {
+    const { editor, dirty } = create();
+    const preview = () => editor.read(() =>
+      $readMarkdownSource($convertToEnhancedMarkdownString(MARKDOWN_TEST_TRANSFORMERS)),
+    );
+    expect(preview()).toBe(source);
+    expect(dirty).not.toHaveBeenCalled();
+
+    const write = vi.fn(() => { throw new MarkdownSourceBudgetError(); });
+    editor.update(() => $getRoot().getAllTextNodes()[0].setTextContent('Unsaved text.'), { discrete: true });
+    expect(() => editor.read(() => $convertToEnhancedMarkdownString(
+      MARKDOWN_TEST_TRANSFORMERS, { preserveSource: write },
+    ))).toThrow(MarkdownSourceBudgetError);
+    expect(preview()).toContain('Unsaved text.');
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });

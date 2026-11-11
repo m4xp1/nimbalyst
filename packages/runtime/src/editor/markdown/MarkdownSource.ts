@@ -23,11 +23,18 @@ function canonicalValue(value: unknown): unknown {
 interface Edit { start: number; end: number; text: string }
 interface Mapping { start: number; end: number; rawStart: number; rawEnd: number; equal: boolean }
 
+export class MarkdownSourceBudgetError extends Error {
+  constructor(readonly sourceDraft?: string) {
+    super('Cannot preserve Markdown formatting within the edit budget.');
+    this.name = 'MarkdownSourceBudgetError';
+  }
+}
+
 function changes(before: string, after: string): Change[] {
   // A difficult diff must not freeze typing or silently fall back to rewriting
   // the whole file. The host exposes this as a failed save, retaining the buffer.
   const result = diffChars(before, after, { timeout: 100 });
-  if (!result) throw new Error('Cannot preserve Markdown formatting within the edit budget. Use Source Mode to save this edit.');
+  if (!result) throw new MarkdownSourceBudgetError();
   return result;
 }
 
@@ -242,5 +249,12 @@ export function preserveMarkdownSource(source: string, baseline: string, current
       header = bom + splitHeader(applyFrontmatterOps(source.slice(bom.length), ops)).header;
     }
   }
-  return header + preserveMarkdownBody(original.body, before.body, after.body);
+  try {
+    return header + preserveMarkdownBody(original.body, before.body, after.body);
+  } catch (error) {
+    if (!(error instanceof MarkdownSourceBudgetError)) throw error;
+    // Source Mode may show the edited body for explicit recovery. The original
+    // frontmatter can still be kept even when the body's edit map times out.
+    throw new MarkdownSourceBudgetError(header + after.body);
+  }
 }

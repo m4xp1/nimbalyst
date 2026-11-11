@@ -14,7 +14,7 @@ import { ShellTrackingNotice } from './ShellTrackingNotice';
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import {commitPathKey,eligibleCommitPaths,selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
+import {commitPathKey,eligibleCommitPaths,filesWithinCommitRoots,selectedCommitPaths,relativeCommitPath} from '@nimbalyst/runtime/ui/git/commitSelection';
 import { getWorktreeNameFromPath } from '../../utils/pathUtils';
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import { FileEditsSidebar as FileEditsSidebarComponent } from '@nimbalyst/runtime/ui/AgentTranscript/components/FileEditsSidebar';
@@ -139,16 +139,18 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
    * one is listed and committable rather than silently filtered out.
    */
   const workspaceRootPaths = useAtomValue(workspaceRootPathsAtom);
+  const workspaceRootsLoaded = workspaceRootPaths.length > 0
+    && commitPathKey(workspaceRootPaths[0], workspacePath) === commitPathKey(workspacePath, workspacePath);
   const committableRoots = useMemo(
     () => (worktreePath
       ? [worktreePath]
-      : workspaceRootPaths.length > 0
+      : workspaceRootsLoaded
         ? workspaceRootPaths
         : [workspacePath]),
-    [worktreePath, workspaceRootPaths, workspacePath]
+    [worktreePath, workspaceRootPaths, workspacePath, workspaceRootsLoaded]
   );
   /** False while `committableRoots` is still the primary-root-only fallback. */
-  const rootsLoaded = Boolean(worktreePath) || workspaceRootPaths.length > 0;
+  const rootsLoaded = Boolean(worktreePath) || workspaceRootsLoaded;
 
   const isWorkspaceCommittableFile = useWorkspaceFileFilter(committableRoots);
 
@@ -257,89 +259,45 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
   // Helper to check if a file has uncommitted git changes
 
 
-  // Calculate total session files count (deduplicated by filepath)
-  const totalSessionFilesCount = useMemo(() => {
-    if (!allFileEdits.length) return 0;
+  const scopedDirtyPaths = useMemo(
+    () => filesWithinCommitRoots(changedPaths, committableRoots, effectiveWorkspacePath),
+    [changedPaths, committableRoots, effectiveWorkspacePath],
+  );
+  const totalSessionFilesCount = useMemo(
+    () => new Set(allFileEdits.map(edit => commitPathKey(edit.filePath, effectiveWorkspacePath))).size,
+    [allFileEdits, effectiveWorkspacePath],
+  );
 
-    // Deduplicate by filePath (most recent edit wins)
-    const fileMap = new Map<string, FileEditWithSession>();
-    for (const edit of allFileEdits) {
-      const existing = fileMap.get(edit.filePath);
-      if (!existing || new Date(edit.timestamp) > new Date(existing.timestamp)) {
-        fileMap.set(edit.filePath, edit);
-      }
-    }
-    return fileMap.size;
-  }, [allFileEdits]);
-
-  // Filter file edits based on session scope and file scope mode
   const fileEdits = useMemo(() => {
-    // First, filter by session scope
-    let filtered: FileEditWithSession[];
-    if (filterToCurrentSession && activeSessionId) {
-      // Filter to current session only
-      filtered = allFileEdits.filter(edit => edit.sessionId === activeSessionId);
-    } else {
-      // Show all files from workstream, deduplicated by filePath (most recent edit wins)
-      const fileMap = new Map<string, FileEditWithSession>();
-      for (const edit of allFileEdits) {
-        const existing = fileMap.get(edit.filePath);
-        if (!existing || new Date(edit.timestamp) > new Date(existing.timestamp)) {
-          fileMap.set(edit.filePath, edit);
-        }
+    const editsByPath = new Map<string, FileEditWithSession>();
+    for (const edit of allFileEdits) {
+      if (filterToCurrentSession && activeSessionId && edit.sessionId !== activeSessionId) continue;
+      const key = commitPathKey(edit.filePath, effectiveWorkspacePath);
+      const previous = editsByPath.get(key);
+      if (!previous || new Date(edit.timestamp) > new Date(previous.timestamp)) {
+        editsByPath.set(key, edit);
       }
-      filtered = Array.from(fileMap.values());
     }
 
-    // Then, filter by file scope mode
-    switch (fileScopeMode) {
-      case 'current-changes':
-        // Only show files that have uncommitted changes
-        return filtered.filter(edit => isWorkspaceCommittableFile(edit.filePath) && isFileUncommitted(edit.filePath));
-
-      case 'session-files':
-        // Show all files from session(s)
-        return filtered;
-
-      case 'all-changes': {
-        // Merge uncommitted session files with all other uncommitted files
-        // For worktrees, use worktree changed files; for regular sessions, use workspace uncommitted files
-        const uncommittedFiltered = filtered.filter(
-          edit => isWorkspaceCommittableFile(edit.filePath) && isFileUncommitted(edit.filePath)
-        );
-        const sessionFilePaths = new Set(uncommittedFiltered.map(f => f.filePath));
-        let additionalFiles: FileEditWithSession[];
-
-        if (worktreeId && worktreePath) {
-          // For worktrees: add worktree changed files that aren't already in session files
-          // Note: worktreeChangedFiles may be empty, that's OK - we just show session files
-          additionalFiles = worktreeChangedFiles
-            .map(f => `${worktreePath}/${f.path}`) // Convert relative to absolute
-            .filter(filePath => !sessionFilePaths.has(filePath))
-            .map(filePath => ({
-              filePath,
-              linkType: 'edited' as const,
-              timestamp: new Date().toISOString(),
-              sessionId: '', // Not from a session
-            }));
-        } else {
-          // For regular sessions: add uncommitted files from workspace that aren't in session files
-          additionalFiles = allUncommittedFiles
-            .filter(filePath => !sessionFilePaths.has(filePath))
-            .map(filePath => ({
-              filePath,
-              linkType: 'edited' as const,
-              timestamp: new Date().toISOString(),
-              sessionId: '', // Not from a session
-            }));
-        }
-        return [...uncommittedFiltered, ...additionalFiles];
-      }
-
-      default:
-        return filtered;
+    if (fileScopeMode === 'session-files') return [...editsByPath.values()];
+    if (fileScopeMode === 'current-changes') {
+      return [...editsByPath.values()].filter(
+        edit => isWorkspaceCommittableFile(edit.filePath) && isFileUncommitted(edit.filePath),
+      );
     }
-  }, [allFileEdits, filterToCurrentSession, activeSessionId, fileScopeMode, isWorkspaceCommittableFile, isFileUncommitted, allUncommittedFiles, worktreeId, worktreePath, worktreeChangedFiles]);
+    return scopedDirtyPaths.map(filePath => {
+      const edit = editsByPath.get(commitPathKey(filePath, effectiveWorkspacePath));
+      return edit ? { ...edit, filePath } : {
+        filePath,
+        linkType: 'edited' as const,
+        timestamp: new Date().toISOString(),
+        sessionId: '',
+      };
+    });
+  }, [
+    allFileEdits, filterToCurrentSession, activeSessionId, fileScopeMode,
+    effectiveWorkspacePath, isWorkspaceCommittableFile, isFileUncommitted, scopedDirtyPaths,
+  ]);
 
   // Memoize editedFiles array for GitOperationsPanel to prevent unnecessary re-renders
   const editedFilePaths = useMemo(() => {
@@ -551,7 +509,7 @@ export const FilesEditedSidebar: React.FC<FilesEditedSidebarProps> = React.memo(
             onBulkSelectionChange={handleBulkSelectionChange}
             totalSessionFilesCount={totalSessionFilesCount}
             onShowSessionFiles={handleShowSessionFiles}
-            totalUncommittedCount={worktreeId ? worktreeChangedFiles.length : allUncommittedFiles.length}
+            totalUncommittedCount={scopedDirtyPaths.length}
             onShowAllUncommitted={handleShowAllUncommitted}
             scopeMode={fileScopeMode}
             onGetDiff={isGitRepo ? handleGetDiff : undefined}

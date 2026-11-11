@@ -7,6 +7,7 @@
  * identical canonical events.
  */
 
+import { readChatAnnotations } from '../../chatAnnotations';
 import type { TranscriptWriter } from './TranscriptWriter';
 import type { ITranscriptEventStore, TranscriptEvent } from './types';
 import type { CanonicalEventDescriptor } from './parsers/IRawMessageParser';
@@ -22,7 +23,14 @@ const PROMPT_ACTORS = new Set(['human', 'agent', 'system']);
  * auto-resume, which must not close open questions.
  */
 export function stampPromptSource(desc: CanonicalEventDescriptor, msg: Pick<RawMessage, 'metadata'>): CanonicalEventDescriptor {
+  const turnId = msg.metadata?.turnId ?? msg.metadata?.codexSteerTurnId;
+  if (!desc.turnId && typeof turnId === 'string' && turnId) desc.turnId = turnId;
   if (desc.type !== 'user_message' || !msg.metadata) return desc;
+  const annotations = readChatAnnotations(msg.metadata.annotations);
+  if (annotations.length) {
+    desc.annotations = annotations;
+    if (typeof msg.metadata.annotationDisplayPrompt === 'string') desc.text = msg.metadata.annotationDisplayPrompt;
+  }
   const actor = (msg.metadata.promptProvenance as { actor?: unknown } | undefined)?.actor;
   if (typeof actor === 'string' && PROMPT_ACTORS.has(actor)) {
     desc.promptActor = actor as 'human' | 'agent' | 'system';
@@ -74,9 +82,11 @@ export async function processDescriptor(
       return writer.appendUserMessage(sessionId, desc.text, {
         mode: desc.mode,
         attachments: desc.attachments,
+        annotations: desc.annotations,
         createdAt: desc.createdAt,
         promptActor: desc.promptActor,
         promptOrigin: desc.promptOrigin,
+        turnId: desc.turnId,
       });
     }
 
@@ -88,12 +98,16 @@ export async function processDescriptor(
         progressUpdate: desc.progressUpdate,
         thinkingSignature: desc.thinkingSignature,
         model: desc.model,
+        turnId: desc.turnId,
+        assistantPhase: desc.assistantPhase,
       });
     }
 
     case 'system_message': {
       return writer.appendSystemMessage(sessionId, desc.text, {
         systemType: desc.systemType,
+        turnId: desc.turnId,
+        turnBoundary: desc.turnBoundary,
         searchable: desc.searchable,
         createdAt: desc.createdAt,
         isAuthError: desc.isAuthError,
@@ -159,6 +173,7 @@ export async function processDescriptor(
         providerToolCallId: desc.providerToolCallId,
         subagentId: desc.subagentId,
         createdAt: desc.createdAt,
+        turnId: desc.turnId,
       });
       if (desc.providerToolCallId) {
         toolEventIds.set(desc.providerToolCallId, event.id);
@@ -213,6 +228,7 @@ export async function processDescriptor(
         isBackground: desc.isBackground,
         prompt: desc.prompt,
         createdAt: desc.createdAt,
+        turnId: desc.turnId,
       });
       subagentEventIds.set(desc.subagentId, event.id);
       toolEventIds.set(desc.subagentId, event.id);
@@ -236,6 +252,7 @@ export async function processDescriptor(
       return writer.createInteractivePrompt(sessionId, desc.payload, {
         subagentId: desc.subagentId,
         createdAt: desc.createdAt,
+        turnId: desc.turnId,
       });
     }
 
@@ -250,6 +267,9 @@ export async function processDescriptor(
         cumulativeUsage: desc.cumulativeUsage,
         contextCompacted: desc.contextCompacted,
         subagentId: desc.subagentId,
+        createdAt: desc.createdAt,
+        turnId: desc.turnId,
+        turnBoundary: desc.turnBoundary,
       });
     }
 

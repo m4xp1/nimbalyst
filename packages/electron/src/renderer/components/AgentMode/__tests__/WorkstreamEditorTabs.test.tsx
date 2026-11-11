@@ -23,7 +23,7 @@ const { actions, tabs, openDialog } = vi.hoisted(() => ({
     findTabByPath: vi.fn(),
     removeTab: vi.fn(),
   },
-  tabs: [],
+  tabs: [] as Array<{ id: string; filePath: string }>,
 }));
 vi.mock("../../../contexts/DialogContext", () => ({
   useDialog: () => ({ open: openDialog, close: vi.fn(), activeDialogs: [] }),
@@ -45,6 +45,7 @@ vi.mock("../../TabEditor/editorRevealCommand", () => ({
 }));
 afterEach(() => {
   cleanup();
+  tabs.length = 0;
   vi.clearAllMocks();
 });
 
@@ -131,4 +132,24 @@ it("lets the user return from the empty right-side file viewer to edited files",
   );
   fireEvent.click(screen.getByRole("button", { name: "Show edited files" }));
   expect(store.get(workstreamRightPanelModeAtom(id))).toBe("edited-files");
+});
+
+it("reveals the original file tab for a relative Windows path in the worktree", () => {
+  initWorkstreamState("C:/project");
+  const store = createStore();
+  const ref = createRef<WorkstreamEditorTabsRef>();
+  const filePath = 'D:/Worktree/Docs/Plan.md';
+  tabs.push({ id: 'plan', filePath });
+  render(
+    <Provider store={store}>
+      <WorkstreamEditorTabs ref={ref} workstreamId="file-alias" workspacePath="C:/project" basePath="D:/worktree" />
+    </Provider>
+  );
+  act(() => ref.current?.openFile('docs\\plan.md', { line: 3 }));
+  expect(actions.addTab).not.toHaveBeenCalled();
+  expect(actions.switchTab).toHaveBeenCalledWith('plan');
+  expect(revealEditorPosition).toHaveBeenCalledWith(filePath, { line: 3 });
+  act(() => ref.current?.openFile('docs/new.md', { line: 1 }));
+  expect(actions.addTab).toHaveBeenCalledWith('D:/worktree/docs/new.md');
+  expect(revealEditorPosition).toHaveBeenCalledWith('D:/worktree/docs/new.md', { line: 1 });
 });

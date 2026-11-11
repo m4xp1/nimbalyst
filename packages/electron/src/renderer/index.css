@@ -16,6 +16,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Chat prompts use a dedicated surface so changing them does not recolor
+   tool cards, settings, or other secondary panels. */
+:root {
+  --nim-chat-user-bg: #e9f3fe;
+}
+.dark-theme {
+  --nim-chat-user-bg: color-mix(in srgb, var(--nim-primary) 14%, var(--nim-bg));
+}
 
 /* Shared component utilities are now imported via JS in index.tsx */
 

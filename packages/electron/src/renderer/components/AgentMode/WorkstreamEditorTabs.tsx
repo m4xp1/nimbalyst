@@ -13,8 +13,10 @@
 import React, { useCallback, useRef, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { store } from '@nimbalyst/runtime/store';
+import { commitPathKey } from '@nimbalyst/runtime/ui/git/commitSelection';
 import { TabsProvider, useTabs, useTabsActions, useTabNavigationShortcuts } from '../../contexts/TabsContext';
 import { useNavigationDialogs } from '../../dialogs/useNavigationDialogs';
+import { resolveTranscriptClickPath } from '../../utils/resolveTranscriptClickPath';
 import { TabManager } from '../TabManager/TabManager';
 import { TabContent } from '../TabContent/TabContent';
 import { setSessionTabCountAtom } from '../../store/atoms/sessionEditors';
@@ -302,20 +304,24 @@ const WorkstreamEditorTabsInner = forwardRef<WorkstreamEditorTabsRef, Workstream
       ref,
       () => ({
         openFile: (filePath: string, location?: EditorRevealPosition) => {
-          // Check if tab already exists
-          const existing = tabsActions.findTabByPath(filePath);
+          const resolvedPath = filePath.includes('://') ? filePath : resolveTranscriptClickPath(filePath, basePath);
+          const key = commitPathKey(filePath, basePath);
+          const existing = tabsActions.findTabByPath(resolvedPath) ?? tabs.find(tab =>
+            tab.kind !== 'tracker' && !isFeedbackRequestTab(tab.filePath)
+              && commitPathKey(tab.filePath, basePath) === key,
+          );
           if (existing) {
             tabsActions.switchTab(existing.id);
           } else {
             // Add new tab
-            tabsActions.addTab(filePath);
+            tabsActions.addTab(resolvedPath);
             // Workstream state will be synced via the tabs useEffect
           }
 
           // Queued either way: the registry replays it when the editor for this
           // path registers, so an already-open tab and a fresh one behave alike.
           if (location) {
-            revealEditorPosition(filePath, location);
+            revealEditorPosition(existing?.filePath ?? resolvedPath, location);
           }
         },
         openTracker: (trackerItemId: string) => {
@@ -354,7 +360,7 @@ const WorkstreamEditorTabsInner = forwardRef<WorkstreamEditorTabsRef, Workstream
           };
         },
       }),
-      [tabs, activeTabId, tabsActions]
+      [tabs, activeTabId, tabsActions, basePath]
     );
 
     const handleTabClose = useCallback((tabId: string) => {

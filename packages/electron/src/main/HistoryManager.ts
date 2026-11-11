@@ -122,6 +122,20 @@ export class HistoryManager {
     return jsonKeyExpr(database.getEngine(), 'metadata', key);
   }
 
+  private historyFileMatch(filePath: string, parameter: number, prefix = false) {
+    const normalized = filePath.replace(/\\/g, '/');
+    const windows = /^[a-z]:\//i.test(normalized) || normalized.startsWith('//');
+    const field = windows ? "lower(replace(file_path, '\\', '/'))" : 'file_path';
+    const placeholder = windows ? `lower($${parameter})` : `$${parameter}`;
+    const param = windows ? normalized : filePath;
+    return prefix
+      ? {
+          sql: `${field} LIKE ${placeholder} ESCAPE '!'`,
+          param: `${param.replace(/\/+$/, '').replace(/[!%_]/g, '!$&')}/%`,
+        }
+      : { sql: `${field} = ${placeholder}`, param };
+  }
+
   /**
    * Predicate matching every file under a workspace, across all of its roots.
    *
@@ -150,9 +164,10 @@ export class HistoryManager {
     // An unknown key (a worktree root, say) yields just itself, so callers
     // outside the workspace-settings world keep their plain prefix behavior.
     const roots = getWorkspaceRoots(workspacePath);
+    const clauses = roots.map((root, index) => this.historyFileMatch(root, firstParam + index, true));
     return {
-      sql: `(${roots.map((_, i) => `file_path LIKE $${firstParam + i}`).join(' OR ')})`,
-      params: roots.map((root) => `${root.replace(/[/\\]+$/, '')}${path.sep}%`),
+      sql: `(${clauses.map(clause => clause.sql).join(' OR ')})`,
+      params: clauses.map(clause => clause.param),
     };
   }
 
@@ -844,18 +859,20 @@ export class HistoryManager {
         await database.initialize();
       }
 
+      const match = this.historyFileMatch(filePath, 1);
       const result = await database.query<{
+        file_path: string;
         content: Buffer;
         metadata: any;
       }>(`
-        SELECT content, metadata
+        SELECT file_path, content, metadata
         FROM document_history
-        WHERE file_path = $1
+        WHERE ${match.sql}
           AND metadata->>'tagId' = $2
           AND ${this.md('type')} = 'pre-edit'
         ORDER BY timestamp DESC
         LIMIT 1
-      `, [filePath, tagId]);
+      `, [match.param, tagId]);
 
       if (result.rows.length === 0) {
         return null;
@@ -869,7 +886,7 @@ export class HistoryManager {
       const metadata = parseJsonObjectColumn(row.metadata);
       return {
         id: tagId,
-        filePath,
+        filePath: row.file_path,
         content,
         type: metadata.type || 'pre-edit',
         status: metadata.status,
@@ -896,16 +913,17 @@ export class HistoryManager {
 
       const compressed = await gzip(Buffer.from(newContent, 'utf-8'));
       const now = Date.now();
+      const match = this.historyFileMatch(filePath, 4);
 
       await database.query(`
         UPDATE document_history
         SET content = $1,
             size_bytes = $2,
             metadata = jsonb_set(metadata, '{updatedAt}', to_jsonb($3::bigint))
-        WHERE file_path = $4
+        WHERE ${match.sql}
           AND metadata->>'tagId' = $5
           AND ${this.md('type')} = 'pre-edit'
-      `, [compressed, compressed.length, now, filePath, tagId]);
+      `, [compressed, compressed.length, now, match.param, tagId]);
 
       logger.main.debug('[HistoryManager] Updated tag content:', { filePath, tagId });
     } catch (error) {
@@ -920,7 +938,7 @@ export class HistoryManager {
    * @param filePath - Full path to the file
    * @param tagId - The tag ID to update
    * @param status - New status value
-   * @param workspacePath - Optional workspace path for event emission (uses file directory if not provided)
+   * @param workspacePath - Optional workspace path for event emission (uses the tag workspace if omitted)
    */
   async updateTagStatus(filePath: string, tagId: string, status: TagStatus, workspacePath?: string): Promise<void> {
     try {
@@ -930,39 +948,24 @@ export class HistoryManager {
       }
 
       const now = Date.now();
+      const match = this.historyFileMatch(filePath, 3);
 
-      // logger.main.info('[HistoryManager] BEFORE updateTagStatus:', { filePath, tagId, status });
-
-      const result = await database.query(`
+      const result = await database.query<{ workspace_id: string | null }>(`
         UPDATE document_history
         SET metadata = jsonb_set(
               jsonb_set(metadata, '{status}', to_jsonb($1::text)),
               '{updatedAt}', to_jsonb($2::bigint)
             )
-        WHERE file_path = $3
-          AND metadata->>'tagId' = $4
-      `, [status, now, filePath, tagId]);
+        WHERE ${match.sql}
+          AND ${this.md('tagId')} = $4
+        RETURNING workspace_id
+      `, [status, now, match.param, tagId]);
 
-      // logger.main.info('[HistoryManager] AFTER updateTagStatus - rows affected:', (result as any).rowCount || 0);
-
-      // Verify the update worked
-      const checkResult = await database.query(`
-        SELECT metadata->>'status' as status, metadata->>'tagId' as tag_id, metadata->>'type' as type
-        FROM document_history
-        WHERE file_path = $1
-          AND (${this.md('type')} = 'pre-edit' OR ${this.md('type')} = 'incremental-approval')
-      `, [filePath]);
-
-      // logger.main.info('[HistoryManager] All tags for file after update:',
-      //   checkResult.rows.map((r: any) => ({ tagId: r.tag_id, type: r.type, status: r.status }))
-      // );
-
-      // Emit pending count changed event when status changes away from pending-review
       if (status === 'reviewed' || status === 'archived') {
-        // Use provided workspace path, or fall back to file's directory
-        const eventPath = workspacePath || path.dirname(filePath);
-        if (eventPath !== '/' && eventPath !== path.parse(eventPath).root) {
-          this.emitPendingCountChanged(eventPath);
+        const scopes = new Set(result.rows.map(row => row.workspace_id));
+        if (workspacePath) scopes.add(workspacePath);
+        for (const scope of scopes) {
+          if (scope && scope !== path.parse(scope).root) this.emitPendingCountChanged(scope);
         }
       }
     } catch (error) {
@@ -981,11 +984,12 @@ export class HistoryManager {
         await database.initialize();
       }
 
-      const query = filePath
+      const match = filePath ? this.historyFileMatch(filePath, 1) : undefined;
+      const query = match
         ? `
           SELECT file_path, content, metadata
           FROM document_history
-          WHERE file_path = $1
+          WHERE ${match.sql}
             AND ${this.md('status')} = 'pending-review'
           ORDER BY timestamp DESC
         `
@@ -996,7 +1000,7 @@ export class HistoryManager {
           ORDER BY timestamp DESC
         `;
 
-      const params = filePath ? [filePath] : [];
+      const params = match ? [match.param] : [];
       const result = await database.query<{
         file_path: string;
         content: Buffer;
@@ -1075,7 +1079,8 @@ export class HistoryManager {
     filePath: string,
     content: string,
     sessionId: string,
-    metadata?: { acceptedGroups?: string[], rejectedGroups?: string[], remainingGroups?: string[] }
+    metadata?: { acceptedGroups?: string[], rejectedGroups?: string[], remainingGroups?: string[] },
+    workspacePath?: string,
   ): Promise<string> {
     try {
       // Ensure database is initialized
@@ -1090,11 +1095,8 @@ export class HistoryManager {
       const tagId = `incremental-${sessionId}-${now}`;
 
       // Determine workspace ID
-      let workspaceId: string | null = null;
       const dirPath = path.dirname(filePath);
-      if (dirPath !== '/' && dirPath !== path.parse(dirPath).root) {
-        workspaceId = dirPath;
-      }
+      const workspaceId = workspacePath ?? (dirPath !== path.parse(dirPath).root ? dirPath : null);
 
       // CRITICAL: Mark any existing pending tag as reviewed
       // The unique index ensures only ONE can be pending-review at a time

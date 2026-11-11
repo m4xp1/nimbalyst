@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import type { TranscriptActivityPart } from '../utils/transcriptActivity';
 import type { TranscriptViewMessage } from '../../../ai/server/types';
 import { isInteractiveWidgetTool } from '../../../ai/server/interactivePromptTools';
 import { MessageSegment } from './MessageSegment';
@@ -553,6 +554,9 @@ const NO_EXPANDED_TOOLS: Set<string> = new Set();
 const HIDDEN_STYLE: React.CSSProperties = { display: 'none' };
 
 export interface TranscriptMessageRowProps {
+  activity?: TranscriptActivityPart;
+  activityExpanded?: boolean;
+  onToggleActivity?: (key: string, expanded: boolean, completed: boolean) => void;
   message: TranscriptViewMessage;
   index: number;
   info: TranscriptRowInfo;
@@ -588,6 +592,9 @@ function renderToolEntry(entry: TranscriptToolEntry, shared: TranscriptToolShare
 }
 
 export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
+  activity,
+  activityExpanded = true,
+  onToggleActivity,
   message,
   index,
   info,
@@ -611,6 +618,19 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   const { sessionId, workspacePath, onOpenFile, onOpenSession } = toolShared;
   const isUser = message.type === 'user_message';
   const { isNewGroup } = info;
+  const interactiveEntries = info.toolEntries?.filter(entry => isInteractiveWidgetTool(entry.message.toolCall?.toolName));
+  const activityHeader = activity?.header ? (
+    <button
+      type="button"
+      className="rich-transcript-activity-toggle flex items-center gap-1 px-3 py-2 mb-1 text-xs text-[var(--nim-text-muted)] hover:text-[var(--nim-text)] cursor-pointer bg-transparent border-none"
+      aria-expanded={activityExpanded}
+      aria-label={activity.running ? 'Agent activity in progress' : 'Agent activity'}
+      onClick={() => onToggleActivity?.(activity.key, !activityExpanded, activity.completed)}
+    >
+      <span>{activity.running ? 'Working…' : (activity.duration && activity.duration !== '0ms' ? `Worked for ${activity.duration}` : 'Agent activity')}</span>
+      <MaterialSymbol icon={activityExpanded ? 'expand_more' : 'chevron_right'} size={16} />
+    </button>
+  ) : null;
 
   switch (info.kind) {
     case 'hidden':
@@ -619,8 +639,11 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
 
     case 'orphanTool':
       return (
-        <div className="rich-transcript-tool-container orphan ml-6 mb-2">
-          {info.toolEntries?.map(entry => renderToolEntry(entry, toolShared))}
+        <div data-message-index={index} ref={setRef}>
+          {activityHeader}
+          <div className="rich-transcript-tool-container orphan ml-6 mb-2">
+            {(activity && !activityExpanded ? interactiveEntries : info.toolEntries)?.map(entry => renderToolEntry(entry, toolShared))}
+          </div>
         </div>
       );
 
@@ -692,11 +715,24 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   }
 
   const turn = info.turn;
+  if (activity && !activity.answer && !activityExpanded) {
+    return (
+      <div data-message-index={index} ref={setRef}>
+        {activityHeader}
+        {!!interactiveEntries?.length && <div className="rich-transcript-interactive-tools ml-6 mb-2">
+          {interactiveEntries.map(entry => renderToolEntry(entry, toolShared))}
+        </div>}
+      </div>
+    );
+  }
   return (
+    <>
+    {activityHeader}
     <div
       data-message-index={index}
+      data-annotation-message-id={message.id}
       ref={setRef}
-      className={`rich-transcript-message rounded-md relative max-w-full overflow-x-hidden break-words mb-2 ${isUser ? 'user bg-[var(--nim-bg-secondary)]' : 'assistant bg-[var(--nim-bg)]'} ${compactMode ? 'compact p-2' : 'normal p-3'} ${!isNewGroup ? 'continuation -mt-1' : ''}`}
+      className={`rich-transcript-message rounded-md relative max-w-full overflow-x-hidden break-words mb-2 ${isUser ? 'user bg-[var(--nim-chat-user-bg,var(--nim-bg-secondary))]' : 'assistant bg-[var(--nim-bg)]'} ${compactMode ? 'compact p-2' : 'normal p-3'} ${!isNewGroup ? 'continuation -mt-1' : ''}`}
     >
       {/* Restart indicator line (dev mode only) - rendered before the first message after restart */}
       {info.showRestartLine && (
@@ -753,7 +789,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
 
       {info.toolEntries && (
         <div className={`rich-transcript-tool-messages flex flex-col gap-2 mb-1.5 ${isNewGroup ? 'indented ml-6' : ''}`}>
-          {info.toolEntries.map(entry => renderToolEntry(entry, toolShared))}
+          {(activity && !activityExpanded ? interactiveEntries : info.toolEntries)?.map(entry => renderToolEntry(entry, toolShared))}
         </div>
       )}
 
@@ -778,6 +814,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
           isCollapsed={isCollapsed}
           showToolCalls={false}
           showThinking={showThinking}
+          activityThinking={activity ? { expanded: activityExpanded } : undefined}
           expandedTools={NO_EXPANDED_TOOLS}
           onToggleToolExpand={toolShared.onToggleTool}
           documentContext={documentContext}
@@ -806,5 +843,6 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
         </div>
       )}
     </div>
+    </>
   );
 });

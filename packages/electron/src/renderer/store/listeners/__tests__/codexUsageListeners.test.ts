@@ -21,7 +21,7 @@ it('ignores a startup reply after its listeners have been disposed', async () =>
   vi.stubGlobal('window', { electronAPI: { on: vi.fn(() => off), invoke: () => new Promise(r => { resolve = r; }) } });
   const stop = initCodexUsageListeners(); stop();
   resolve({ limits: [], lastUpdated: 123 }); await Promise.resolve(); await Promise.resolve();
-  expect(f.set).not.toHaveBeenCalled(); expect(off).toHaveBeenCalledOnce();
+  expect(f.set).not.toHaveBeenCalled(); expect(off).toHaveBeenCalledTimes(2);
 });
 
 it('applies a manual quota reply even when the host has no broadcast for an early return', async () => {

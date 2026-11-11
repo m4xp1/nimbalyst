@@ -6,7 +6,7 @@ import {
   subscribeEditorContext,
   getEditorContextSnapshot,
 } from '../../stores/editorContextStore';
-import { getTextSelection, clearTextSelection } from './TextSelectionIndicator';
+import { getTextSelectionForFile, clearTextSelection } from './TextSelectionIndicator';
 import { clearMockupAnnotationsForFile } from './MockupAnnotationIndicator';
 
 interface SelectionChipsProps {
@@ -103,13 +103,8 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
   // extension items above): show the selection only when it belongs to the doc
   // this panel is focused on, so a selection made in another mode does not leak
   // into an unrelated chat panel after a mode switch.
-  const textSelection = getTextSelection();
-  const textMatchesFile =
-    !!textSelection &&
-    textSelection.text.trim().length > 0 &&
-    !!currentFilePath &&
-    textSelection.filePath === currentFilePath;
-  if (textMatchesFile && textSelection) {
+  const textSelection = getTextSelectionForFile(currentFilePath);
+  if (textSelection?.text.trim()) {
     const normalizedText = textSelection.text.replace(/\s+/g, ' ').trim();
     const preview = normalizedText.length > 80 ? normalizedText.slice(0, 80) + '…' : normalizedText;
     otherChips.push({

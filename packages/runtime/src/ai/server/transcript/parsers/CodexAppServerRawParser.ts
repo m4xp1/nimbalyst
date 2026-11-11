@@ -128,6 +128,7 @@ interface AppServerItem {
   type?: string;
   status?: string;
   text?: string;
+  phase?: string | null;
   changes?: Array<{ path: string; kind: { type: string; move_path?: string | null }; diff: string }>;
   server?: string;
   tool?: string;
@@ -234,7 +235,15 @@ export class CodexAppServerRawParser implements IRawMessageParser {
         descriptors.push(...this.parseTurnCompleted(msg, params));
         break;
       }
-      case 'turn/failed':
+      case 'turn/failed': {
+        const message = params.turn?.error?.message ?? params.error?.message ?? params.message;
+        if (message) descriptors.push({ type: 'system_message', text: message, systemType: 'error', createdAt: msg.createdAt });
+        descriptors.push({
+          type: 'system_message', text: '', systemType: 'status', searchable: false,
+          turnBoundary: { status: 'failed' }, createdAt: msg.createdAt,
+        });
+        break;
+      }
       case 'error': {
         const message = params.error?.message ?? params.message;
         if (message) {
@@ -255,7 +264,8 @@ export class CodexAppServerRawParser implements IRawMessageParser {
       }
     }
 
-    return descriptors;
+    const turnId = this.extractTurnId(params);
+    return turnId ? descriptors.map(descriptor => ({ ...descriptor, turnId })) : descriptors;
   }
 
   /**
@@ -314,7 +324,12 @@ export class CodexAppServerRawParser implements IRawMessageParser {
     switch (item.type) {
       case 'agentMessage': {
         const text = item.text ?? '';
-        if (text) descriptors.push({ type: 'assistant_message', text, createdAt: msg.createdAt });
+        const assistantPhase = item.phase === 'final_answer' ? 'final'
+          : item.phase === 'commentary' ? 'commentary' : undefined;
+        if (text) descriptors.push({
+          type: 'assistant_message', text, createdAt: msg.createdAt,
+          ...(assistantPhase ? { assistantPhase } : {}),
+        });
         break;
       }
       case 'reasoning': {
@@ -695,16 +710,26 @@ export class CodexAppServerRawParser implements IRawMessageParser {
   }
 
   private parseTurnCompleted(msg: RawMessage, params: NonNullable<AppServerEnvelope['params']>): CanonicalEventDescriptor[] {
-    // The `turn/completed` notification CAN carry usage but in practice usage
-    // arrives via `thread/tokenUsage/updated` and the SDK parser pulls it from
-    // that path. Emit a minimal turn_ended descriptor only when usage is
-    // present; otherwise let other producers handle it.
+    const status = params.turn?.status === 'failed' ? 'failed'
+      : params.turn?.status === 'interrupted' ? 'interrupted' : 'completed';
+    const turnBoundary = { status } as const;
     const usage = params.usage;
-    if (!usage) return [];
+    if (!usage) {
+      const boundary: CanonicalEventDescriptor = {
+        type: 'system_message', text: '', systemType: 'status', searchable: false,
+        turnBoundary, createdAt: msg.createdAt,
+      };
+      const message = params.turn?.error?.message;
+      return message ? [
+        { type: 'system_message', text: message, systemType: 'error', createdAt: msg.createdAt },
+        boundary,
+      ] : [boundary];
+    }
     const input = usage.input_tokens ?? usage.inputTokens ?? 0;
     const output = usage.output_tokens ?? usage.outputTokens ?? 0;
     return [{
       type: 'turn_ended',
+      turnBoundary,
       contextFill: {
         inputTokens: input,
         cacheReadInputTokens: 0,

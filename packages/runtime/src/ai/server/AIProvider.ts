@@ -405,11 +405,15 @@ export abstract class BaseAIProvider extends EventEmitter implements AIProvider 
     documentContext?: DocumentContext,
     metadata: Record<string, unknown> = {},
   ): Record<string, unknown> {
-    if (!documentContext?.promptProvenance && !documentContext?.promptOrigin) {
+    if (!documentContext?.promptProvenance && !documentContext?.promptOrigin && !documentContext?.chatAnnotations?.length) {
       return metadata;
     }
     return {
       ...metadata,
+      ...(documentContext.chatAnnotations?.length ? {
+        annotations: documentContext.chatAnnotations,
+        annotationDisplayPrompt: documentContext.annotationDisplayPrompt,
+      } : {}),
       ...(documentContext.promptOrigin ? { promptOrigin: documentContext.promptOrigin } : {}),
       ...(documentContext.promptProvenance
         ? { promptProvenance: { ...documentContext.promptProvenance } }

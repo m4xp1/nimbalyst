@@ -20,6 +20,7 @@
 
 import { BrowserWindow } from 'electron';
 import { AgentMessagesRepository } from '@nimbalyst/runtime';
+import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import type { ChatAttachment, PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
 
 export interface LogClaudeCliUserPromptInput {
@@ -35,6 +36,7 @@ export interface LogClaudeCliUserPromptInput {
    * (see `claudeCliPromptComposer.ts`), not from here.
    */
   attachments?: ChatAttachment[];
+  annotations?: ChatAnnotation[];
   promptProvenance?: PromptProvenance;
 }
 
@@ -70,9 +72,8 @@ const productionDeps: LogClaudeCliUserPromptDeps = {
 /**
  * Persist the typed prompt as a `direction:'input'` row in the
  * `{ prompt }` shape `ClaudeCodeRawParser.parseInputMessage` reads (same as the
- * SDK path's user rows), then broadcast a transcript reload. Best-effort: a blank
- * prompt is a no-op and a repository failure is swallowed (never surfaces to the
- * user — the CLI turn already started).
+ * SDK path's user rows), then broadcast a transcript reload. A repository
+ * failure is best-effort because the CLI turn has already started.
  */
 export async function logClaudeCliUserPrompt(
   input: LogClaudeCliUserPromptInput,
@@ -80,13 +81,13 @@ export async function logClaudeCliUserPrompt(
 ): Promise<void> {
   const prompt = input.prompt?.trim() ?? '';
   const attachments = input.attachments ?? [];
-  // Persist a row if there's typed text OR at least one attachment (an
-  // image-only submission still has a user turn to show).
-  if (!prompt && attachments.length === 0) return;
+  const annotations = input.annotations ?? [];
+  if (!prompt && attachments.length === 0 && annotations.length === 0) return;
 
   try {
     const metadata = {
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(annotations.length > 0 ? { annotations } : {}),
       ...(input.promptProvenance ? { promptProvenance: input.promptProvenance } : {}),
     };
     await deps.createMessage({

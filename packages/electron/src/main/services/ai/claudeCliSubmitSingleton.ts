@@ -7,7 +7,6 @@ import { claimExternalSessionForLocalExecution } from '../externalSessions/Exter
  * terminal manager, the transcript user-prompt log, and PostHog analytics.
  */
 
-import type { ChatAttachment, PromptProvenance } from '@nimbalyst/runtime/ai/server/types';
 import { getTerminalSessionManager } from '../TerminalSessionManager';
 import { AnalyticsService } from '../analytics/AnalyticsService';
 import { bucketMessageLength } from './aiServiceUtils';
@@ -33,14 +32,13 @@ export async function submitClaudeCliPromptProduction(
     context: input.documentContext,
   });
   const result = await submitClaudeCliPrompt(input, {
-    writeToTerminal: (sessionId: string, data: string) => manager.writeToTerminal(sessionId, data),
-    logUserPrompt: (p: {
-      sessionId: string;
-      workspacePath: string;
-      prompt: string;
-      attachments?: ChatAttachment[];
-      promptProvenance?: PromptProvenance;
-    }) => logClaudeCliUserPrompt(p),
+    writeToTerminal: (sessionId, data) => {
+      if (!manager.isTerminalActive(sessionId)) {
+        throw new Error('The Claude CLI terminal closed before the prompt was sent.');
+      }
+      manager.writeToTerminal(sessionId, data);
+    },
+    logUserPrompt: logClaudeCliUserPrompt,
     sendAnalytics: ({ messageLength, hasAttachments, attachmentCount, hasDocumentContext }) => {
       // Analytics parity with the SDK path (MessageStreamingHandler fires
       // ai_message_sent per send). Document-context and attachment flags are real

@@ -3,6 +3,7 @@ import { buildCodexThreadStartParams } from './codexAppServer/threadConfiguratio
 import { validateCodexSandbox } from './codexAppServer/validateCodexSandbox';
 import { summarizeNotificationParams, extractNotificationRouting } from './codexAppServer/notificationDiagnostics';
 import { captureCodexStderr } from './codexAppServer/stderrLogging';
+import { authenticateCodexWorkspace, stripAmbientCodexCredentials, type CodexWorkspaceAuth } from './codexAppServer/workspaceAuth';
 /**
  * OpenAI Codex app-server Protocol Adapter
  *
@@ -43,7 +44,8 @@ import {
   ProtocolEvent,
   ToolResult,
 } from './ProtocolInterface';
-import { JsonRpcClient } from './codexAppServer/jsonRpcClient';
+import { JsonRpcClient, JsonRpcRequestError } from './codexAppServer/jsonRpcClient';
+import type { CodexSteerResult } from './codexAppServer/turnSteering';
 import { observeCodexShellTracking, prepareCodexShellTracking, type CodexShellTrackingRegistration } from './codexAppServer/shellTracking';
 import {
   getCodexVendorPathEntries,
@@ -144,12 +146,20 @@ interface AppServerSessionRaw {
   dynamicTools: DynamicToolSpec[];
   /** Snapshot of any uncompleted turn for abort handling. */
   activeTurnId: string | null;
+  steerableTurnId: string | null;
+  pendingSteerTurnId: string | null;
   /** stderr buffer for diagnostic surface on failure. */
   stderrTail: string[];
   /** Prevent duplicate cleanup from re-targeting a PID after it exits. */
   cleanupStarted: boolean;
   shellTracking?: CodexShellTrackingRegistration;
 }
+
+export type CodexAppServerMessage = ProtocolMessage & {
+  allowSteering?: boolean;
+  modelOverride?: string;
+  effortOverride?: string;
+};
 
 export class CodexAppServerProtocol implements AgentProtocol {
   readonly platform = 'codex-app-server';
@@ -182,13 +192,33 @@ export class CodexAppServerProtocol implements AgentProtocol {
   async createSession(options: SessionOptions): Promise<ProtocolSession> {
     const raw = await this.spawnAndInit(options);
     const startParams = buildCodexThreadStartParams(raw.options);
-    const startResponse = await raw.client.request<ThreadStartResponse>('thread/start', startParams).then(async response => {
-      await validateCodexSandbox(response.sandbox, startParams.sandbox, raw.client);
-      return response;
-    }).catch(error => {
+    let startResponse: ThreadStartResponse;
+    try {
+      if (startParams.ephemeral) {
+        const auth = await raw.client.request<{ account?: { type?: string } | null }>(
+          'account/read', { refreshToken: false },
+        );
+        if (auth.account?.type !== 'chatgpt') {
+          throw new Error('Sign in to a ChatGPT subscription workspace to run a temporary Smart Commit.');
+        }
+        const response = await raw.client.request<{ config?: { mcp_servers?: Record<string, unknown> } }>(
+          'config/read', { cwd: startParams.cwd, includeLayers: false },
+        );
+        if (!response.config) throw new Error('Could not isolate the temporary Codex session configuration.');
+        const configuredServers = Object.keys(response.config.mcp_servers ?? {});
+        // An empty table can inherit lower-layer MCP entries. Explicitly turn
+        // off each configured server so a temporary proposal cannot call it.
+        startParams.config = {
+          ...startParams.config,
+          mcp_servers: Object.fromEntries(configuredServers.map(name => [name, { enabled: false }])),
+        };
+      }
+      startResponse = await raw.client.request<ThreadStartResponse>('thread/start', startParams);
+      await validateCodexSandbox(startResponse.sandbox, startParams.sandbox, raw.client);
+    } catch (error) {
       this.killChild(raw);
       throw error;
-    });
+    }
     const threadId = startResponse?.thread?.id;
     if (!threadId) {
       this.killChild(raw);
@@ -260,7 +290,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
     return this.createSession(options);
   }
 
-  async *sendMessage(session: ProtocolSession, message: ProtocolMessage): AsyncIterable<ProtocolEvent> {
+  async *sendMessage(session: ProtocolSession, message: CodexAppServerMessage): AsyncIterable<ProtocolEvent> {
     const raw = this.assertRaw(session);
     // Prefer the per-message signal: `raw.options.abortSignal` is the signal
     // of the turn that CREATED the session, which is stale for every turn
@@ -308,6 +338,10 @@ export class CodexAppServerProtocol implements AgentProtocol {
         return;
       }
 
+      if (method === 'turn/completed' || method === 'turn/failed' ||
+          (method === 'error' && (params as ErrorNotification | undefined)?.willRetry !== true)) {
+        raw.steerableTurnId = null;
+      }
       try {
         this.dispatchNotification(
           method,
@@ -322,6 +356,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
           },
         );
       } catch (err) {
+        raw.steerableTurnId = null;
         push({ kind: 'fail', error: err instanceof Error ? err : new Error(String(err)) });
       }
     };
@@ -356,6 +391,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
         .catch((err) => console.warn('[CODEX][APPSERVER] turn/interrupt failed:', err));
     };
     const onAbort = () => {
+      raw.steerableTurnId = null;
       requestInterrupt();
       push({ kind: 'abort' });
     };
@@ -372,12 +408,16 @@ export class CodexAppServerProtocol implements AgentProtocol {
     const turnInput = await this.buildInput(message);
     let turnStartResultId: string | null = null;
     try {
+      (raw.options.raw?.codexWorkspaceAuth as CodexWorkspaceAuth | undefined)?.assertCurrent();
       const turnStart = await raw.client.request<{ turn?: { id?: string } }>('turn/start', {
         threadId: raw.threadId,
         input: turnInput,
+        ...(message.modelOverride ? { model: message.modelOverride } : {}),
+        ...(message.effortOverride ? { effort: message.effortOverride } : {}),
       } as TurnStartParams);
       turnStartResultId = turnStart?.turn?.id ?? null;
       raw.activeTurnId = turnStartResultId;
+      raw.steerableTurnId = message.allowSteering && !abortSignal?.aborted ? turnStartResultId : null;
       turnStartResolved = true;
       for (const pending of pendingTurnNotifications.splice(0)) {
         dispatchOwnedNotification(pending.method, pending.params);
@@ -432,8 +472,54 @@ export class CodexAppServerProtocol implements AgentProtocol {
         try { unsub(); } catch { /* noop */ }
       }
       raw.activeTurnId = null;
+      raw.steerableTurnId = null;
       raw.shellTracking?.endTurn();
     }
+  }
+
+  getSteerableTurnId(session: ProtocolSession): string | null {
+    return this.assertRaw(session).steerableTurnId;
+  }
+
+  async steerTurn(session: ProtocolSession, expectedTurnId: string, prompt: string): Promise<CodexSteerResult> {
+    const raw = this.assertRaw(session);
+    if (!expectedTurnId || raw.steerableTurnId !== expectedTurnId) {
+      return { success: false, code: 'no-active-turn', error: 'The selected Codex turn is no longer active.' };
+    }
+    try {
+      (raw.options.raw?.codexWorkspaceAuth as CodexWorkspaceAuth | undefined)?.assertCurrent();
+    } catch {
+      return {
+        success: false,
+        code: 'rejected',
+        error: 'The Codex workspace changed. Queue this message for the next turn.',
+      };
+    }
+    if (raw.pendingSteerTurnId === expectedTurnId) {
+      return { success: false, code: 'rejected', error: 'An update to this turn is already being sent.' };
+    }
+    raw.pendingSteerTurnId = expectedTurnId;
+    try {
+      const response = await raw.client.request<{ turnId: string }>('turn/steer', {
+        threadId: raw.threadId,
+        expectedTurnId,
+        input: [{ type: 'text', text: prompt }],
+      }, 10_000);
+      if (response?.turnId === expectedTurnId) return { success: true, turnId: expectedTurnId };
+    } catch (error) {
+      if (error instanceof JsonRpcRequestError) {
+        return error.code === -32601
+          ? { success: false, code: 'unsupported', error: 'This Codex server does not support steering.' }
+          : { success: false, code: 'rejected', error: 'Codex rejected the update to the selected turn.' };
+      }
+    } finally {
+      if (raw.pendingSteerTurnId === expectedTurnId) raw.pendingSteerTurnId = null;
+    }
+    return {
+      success: false,
+      code: 'delivery-unknown',
+      error: 'Codex did not confirm delivery. The update may have reached the selected turn.',
+    };
   }
 
   /**
@@ -448,6 +534,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
    */
   async compactSession(session: ProtocolSession): Promise<void> {
     const raw = this.assertRaw(session);
+    (raw.options.raw?.codexWorkspaceAuth as CodexWorkspaceAuth | undefined)?.assertCurrent();
     if (!raw.threadId) {
       throw new Error('[CodexAppServer] cannot compact: no active thread');
     }
@@ -461,6 +548,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
 
   abortSession(session: ProtocolSession): void {
     const raw = this.assertRaw(session);
+    raw.steerableTurnId = null;
     raw.shellTracking?.endTurn();
     if (raw.activeTurnId && raw.threadId) {
       const params: TurnInterruptParams = { threadId: raw.threadId, turnId: raw.activeTurnId };
@@ -543,6 +631,9 @@ export class CodexAppServerProtocol implements AgentProtocol {
 
   private async spawnAndInit(options: SessionOptions, metadataOnly = false): Promise<AppServerSessionRaw> {
     assertCodexAccessAllowed();
+    const workspaceAuth = options.raw?.codexWorkspaceAuth as CodexWorkspaceAuth | undefined;
+    workspaceAuth?.assertCurrent();
+    const tokens = await workspaceAuth?.getTokens?.(false);
     const binary = resolveCodexBinaryPath(this.resolveCodexPathOverride);
     const tracking = metadataOnly ? undefined : await prepareCodexShellTracking(options);
     const env = this.buildEnv(options, binary);
@@ -553,16 +644,23 @@ export class CodexAppServerProtocol implements AgentProtocol {
     //   cwd,
     //   helperPathEntries: getCodexVendorPathEntries(binary),
     // });
-    const child = spawn(binary, [...(tracking?.args ?? []), 'app-server', '--listen', 'stdio://'], {
+    const authArgs = tokens ? ['-c', 'cli_auth_credentials_store="ephemeral"', '-c', 'model_provider="openai"'] : [];
+    const child = spawn(binary, [...authArgs, ...(tracking?.args ?? []), 'app-server', '--listen', 'stdio://'], {
       env,
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    const stderrTail = captureCodexStderr(child.stderr);
+    // An independently signed-in child can emit authentication diagnostics.
+    // The host exposes safe errors for this path without persisting child output.
+    const stderrTail = tokens ? [] : captureCodexStderr(child.stderr);
+    if (tokens) child.stderr.resume();
     const client = new JsonRpcClient(child, {
       ...(metadataOnly ? { defaultTimeoutMs: 10_000 } : {}),
-      logger: {
+      logger: tokens ? {
+        log: () => {},
+        warn: (message) => console.warn('[CODEX][APPSERVER]', message),
+      } : {
         log: (m, ...a) => console.log('[CODEX][APPSERVER]', m, ...a),
         warn: (m, ...a) => console.warn('[CODEX][APPSERVER]', m, ...a),
       },
@@ -579,6 +677,26 @@ export class CodexAppServerProtocol implements AgentProtocol {
         capabilities: { experimentalApi: true },
       });
       client.notify('initialized', {});
+      if (workspaceAuth?.getTokens && tokens) {
+        const getTokens = workspaceAuth.getTokens;
+        client.setServerRequestHandler('account/chatgptAuthTokens/refresh', async () => {
+          try {
+            const refreshed = await getTokens(true);
+            if (refreshed.chatgptAccountId === tokens.chatgptAccountId) return refreshed;
+          } catch {
+            // The account or workspace may have changed since this turn started.
+          }
+          throw new Error('Codex could not refresh the current workspace sign-in.');
+        });
+        // Credentials stay off environment variables, argv, logs and tool inputs.
+        try {
+          workspaceAuth.assertCurrent();
+          await authenticateCodexWorkspace(client, tokens);
+          workspaceAuth.assertCurrent();
+        } catch {
+          throw new Error('Could not sign in to the selected Codex workspace. Retry or sign in again.');
+        }
+      }
       if (tracking) {
         try {
           const trust = await tracking.trust(client);
@@ -595,12 +713,14 @@ export class CodexAppServerProtocol implements AgentProtocol {
       try { client.close('init failed'); } catch { /* noop */ }
       this.terminateProcessTree(child);
       tracking?.registration.dispose();
+      // Native login errors can include account metadata.
+      if (tokens) throw new Error('Could not initialize Codex in the selected workspace. Retry or sign in again.');
       const tail = stderrTail.join('').slice(-2000);
       const rawError = `${err instanceof Error ? err.message : String(err)}${tail ? `\nstderr tail: ${tail}` : ''}`;
       const configHint = describeCodexConfigError(rawError);
       throw new Error(`[CodexAppServer] initialize failed: ${rawError}${configHint ? `\n\n${configHint}` : ''}`);
     }
-    if (!metadataOnly) this.registerSkillRoots(client, cwd);
+    if (!metadataOnly && options.raw?.readOnlyTemporary !== true) this.registerSkillRoots(client, cwd);
     const raw: AppServerSessionRaw = {
       child,
       client,
@@ -609,6 +729,8 @@ export class CodexAppServerProtocol implements AgentProtocol {
       initResponse,
       dynamicTools: this.extractDynamicTools(options),
       activeTurnId: null,
+      steerableTurnId: null,
+      pendingSteerTurnId: null,
       stderrTail,
       cleanupStarted: false,
       shellTracking: tracking?.registration,
@@ -674,6 +796,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
       baseEnv.PATH = mergedPath;
       delete baseEnv.Path;
     }
+    stripAmbientCodexCredentials(baseEnv);
     if (this.apiKey) baseEnv.CODEX_API_KEY = this.apiKey;
     return baseEnv;
   }

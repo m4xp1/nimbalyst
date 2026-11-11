@@ -56,6 +56,7 @@ describe('OpenAICodexProvider', () => {
     OpenAICodexProvider.setPreEditHookScriptPathResolver(null);
     OpenAICodexProvider.setPreEditSidecarDirResolver(null);
     OpenAICodexProvider.setCodexTransportResolver(null);
+    OpenAICodexProvider.setWorkspaceAuthResolver();
     // Default: treat the Codex provider as public OpenAI (not Bedrock) so
     // model-id assertions are deterministic regardless of the developer's real
     // ~/.codex/config.toml. Bedrock-specific tests opt in explicitly.
@@ -1555,7 +1556,7 @@ describe('OpenAICodexProvider', () => {
     expect(cleanupSession).toHaveBeenCalledWith(turn1Session);
   });
 
-  it.each(['reviewer', 'roots', 'sandbox'])('reattaches a live Codex thread when %s changes', async change => {
+  it.each(['reviewer', 'roots', 'sandbox', 'workspace'])('reattaches a live Codex thread when %s changes', async change => {
     let classifierEnabled = false;
     let roots = ['/parent'];
     OpenAICodexProvider.setAdditionalDirectoriesLoader(async () => roots);
@@ -1594,11 +1595,13 @@ describe('OpenAICodexProvider', () => {
       abortSession: vi.fn(),
       cleanupSession,
     } as any;
-    const provider = new OpenAICodexProvider(
-      { apiKey: 'test-key' },
-      { protocol },
-    );
-    await provider.initialize({ apiKey: 'test-key', model: 'openai-codex:gpt-5' });
+    let revision = 1;
+    if (change === 'workspace') {
+      OpenAICodexProvider.setWorkspaceAuthResolver(() => ({ revision, assertCurrent: () => {} }));
+    }
+    const apiKey = change === 'workspace' ? '' : 'test-key';
+    const provider = new OpenAICodexProvider({ apiKey }, { protocol });
+    await provider.initialize({ apiKey, model: 'openai-codex:gpt-5' });
 
     for await (const _chunk of provider.sendMessage(
       'raw access turn',
@@ -1615,7 +1618,8 @@ describe('OpenAICodexProvider', () => {
 
     if (change === 'reviewer') classifierEnabled = true;
     else if (change === 'roots') roots = ['/parent', '/new-worktree'];
-    else codexSandboxSetupCompleted();
+    else if (change === 'sandbox') codexSandboxSetupCompleted();
+    else revision++;
     for await (const _chunk of provider.sendMessage(
       'verified turn',
       undefined,
@@ -1634,6 +1638,12 @@ describe('OpenAICodexProvider', () => {
       }),
     );
     expect(sendMessage.mock.calls[1]![0]).toBe(secondSession);
+    if (change === 'workspace') {
+      expect(resumeSession).toHaveBeenCalledWith(
+        'thread-permission-change',
+        expect.objectContaining({ raw: expect.objectContaining({ codexWorkspaceAuth: expect.objectContaining({ revision: 2 }) }) }),
+      );
+    }
     OpenAICodexProvider.setAdditionalDirectoriesLoader(() => []);
     provider.cleanupSession('session-permission-change');
   });

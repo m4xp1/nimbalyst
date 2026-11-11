@@ -17,6 +17,7 @@ import type {
   InteractivePromptPayload,
   SubagentPayload,
   TurnEndedPayload,
+  TranscriptTurnEnd,
 } from './types';
 
 export class TranscriptWriter {
@@ -54,17 +55,21 @@ export class TranscriptWriter {
       mode?: 'agent' | 'planning' | 'auto';
       inputType?: 'user' | 'system_message';
       attachments?: UserMessagePayload['attachments'];
+      annotations?: UserMessagePayload['annotations'];
       createdAt?: Date;
       promptActor?: UserMessagePayload['promptActor'];
       promptOrigin?: string;
+      turnId?: string;
     },
   ): Promise<TranscriptEvent> {
     const payload: UserMessagePayload = {
       mode: options?.mode ?? 'agent',
       inputType: options?.inputType ?? 'user',
       ...(options?.attachments ? { attachments: options.attachments } : {}),
+      ...(options?.annotations?.length ? { annotations: options.annotations } : {}),
       ...(options?.promptActor ? { promptActor: options.promptActor } : {}),
       ...(options?.promptOrigin ? { promptOrigin: options.promptOrigin } : {}),
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
     };
 
     return this.insertEvent(sessionId, {
@@ -86,6 +91,8 @@ export class TranscriptWriter {
       progressUpdate?: boolean;
       thinkingSignature?: string;
       model?: string;
+      turnId?: string;
+      assistantPhase?: AssistantMessagePayload['assistantPhase'];
     },
   ): Promise<TranscriptEvent> {
     const mode = options?.mode ?? 'agent';
@@ -108,7 +115,9 @@ export class TranscriptWriter {
       last &&
       last.eventType === 'assistant_message' &&
       last.subagentId === null &&
-      last.mode === mode
+      last.mode === mode &&
+      last.turnId === options?.turnId &&
+      last.assistantPhase === options?.assistantPhase
     ) {
       const mergedText = (last.searchableText ?? '') + text;
       await this.store.updateEventText(last.id, mergedText);
@@ -125,6 +134,8 @@ export class TranscriptWriter {
         ? { thinkingSignature: options.thinkingSignature }
         : {}),
       ...(options?.model !== undefined ? { model: options.model } : {}),
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
+      ...(options?.assistantPhase ? { assistantPhase: options.assistantPhase } : {}),
     };
 
     return this.insertEvent(sessionId, {
@@ -156,10 +167,14 @@ export class TranscriptWriter {
       attachmentDetection?: 'reactive' | 'preflight';
       searchable?: boolean;
       createdAt?: Date;
+      turnId?: string;
+      turnBoundary?: TranscriptTurnEnd;
     },
   ): Promise<TranscriptEvent> {
     const payload: SystemMessagePayload = {
       systemType: options?.systemType ?? 'status',
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
+      ...(options?.turnBoundary ? { turnBoundary: options.turnBoundary } : {}),
       ...(options?.statusCode ? { statusCode: options.statusCode } : {}),
       ...(options?.isAuthError ? { isAuthError: true } : {}),
       ...(options?.reminderKind ? { reminderKind: options.reminderKind } : {}),
@@ -201,9 +216,11 @@ export class TranscriptWriter {
       providerToolCallId?: string | null;
       subagentId?: string | null;
       createdAt?: Date;
+      turnId?: string;
     },
   ): Promise<TranscriptEvent> {
     const payload: ToolCallPayload = {
+      ...(params.turnId ? { turnId: params.turnId } : {}),
       toolName: params.toolName,
       toolDisplayName: params.toolDisplayName,
       status: 'running',
@@ -281,13 +298,14 @@ export class TranscriptWriter {
     options?: {
       subagentId?: string | null;
       createdAt?: Date;
+      turnId?: string;
     },
   ): Promise<TranscriptEvent> {
     return this.insertEvent(sessionId, {
       eventType: 'interactive_prompt',
       searchableText: null,
       searchable: false,
-      payload: payload as unknown as Record<string, unknown>,
+      payload: { ...payload, ...(options?.turnId ? { turnId: options.turnId } : {}) },
       subagentId: options?.subagentId ?? null,
       createdAt: options?.createdAt,
     });
@@ -322,9 +340,11 @@ export class TranscriptWriter {
       isBackground?: boolean;
       prompt: string;
       createdAt?: Date;
+      turnId?: string;
     },
   ): Promise<TranscriptEvent> {
     const payload: SubagentPayload = {
+      ...(params.turnId ? { turnId: params.turnId } : {}),
       agentType: params.agentType,
       status: 'running',
       teammateName: params.teammateName ?? null,
@@ -385,9 +405,13 @@ export class TranscriptWriter {
       contextCompacted?: boolean;
       subagentId?: string | null;
       createdAt?: Date;
+      turnId?: string;
+      turnBoundary?: TranscriptTurnEnd;
     },
   ): Promise<TranscriptEvent> {
     const payload: TurnEndedPayload = {
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.turnBoundary ? { turnBoundary: params.turnBoundary } : {}),
       contextFill: params.contextFill,
       contextWindow: params.contextWindow,
       cumulativeUsage: params.cumulativeUsage,
@@ -453,6 +477,8 @@ export class TranscriptWriter {
       searchableText: event.searchableText,
       mode: (event.payload as { mode?: 'agent' | 'planning' })?.mode,
       subagentId: event.subagentId,
+      turnId: typeof event.payload.turnId === 'string' ? event.payload.turnId : undefined,
+      assistantPhase: (event.payload as Partial<AssistantMessagePayload>).assistantPhase,
     });
 
     return event;
@@ -472,6 +498,8 @@ export class TranscriptWriter {
           searchableText: event.searchableText,
           mode: (event.payload as { mode?: 'agent' | 'planning' })?.mode,
           subagentId: event.subagentId,
+          turnId: typeof event.payload.turnId === 'string' ? event.payload.turnId : undefined,
+          assistantPhase: (event.payload as Partial<AssistantMessagePayload>).assistantPhase,
         }
       : null;
     this.lastEventBySession.set(sessionId, state);
@@ -488,7 +516,11 @@ export class TranscriptWriter {
       eventType: state.eventType,
       searchableText: state.searchableText,
       searchable: true,
-      payload: { mode: state.mode } as Record<string, unknown>,
+      payload: {
+        mode: state.mode,
+        ...(state.turnId ? { turnId: state.turnId } : {}),
+        ...(state.assistantPhase ? { assistantPhase: state.assistantPhase } : {}),
+      },
       parentEventId: null,
       subagentId: state.subagentId,
       provider: this.provider,
@@ -503,4 +535,6 @@ interface LastEventState {
   searchableText: string | null;
   mode: 'agent' | 'planning' | 'auto' | undefined;
   subagentId: string | null;
+  turnId?: string;
+  assistantPhase?: AssistantMessagePayload['assistantPhase'];
 }

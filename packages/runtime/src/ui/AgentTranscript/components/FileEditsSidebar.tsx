@@ -1,3 +1,4 @@
+import { commitPathKey } from "../../git/commitSelection";
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   useFloating,
@@ -356,6 +357,10 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
     return !status || status.status === 'unchanged';
   }, [gitStatus,commitEligibleFiles]);
 
+  const pendingReviewKeys = useMemo(
+    () => new Set([...pendingReviewFiles ?? []].map(filePath => commitPathKey(filePath, workspacePath ?? ''))),
+    [pendingReviewFiles, workspacePath],
+  );
   const isSelectableForCommit = useCallback((filePath: string): boolean => {
     if (isFileCommitted(filePath)) {
       return false;
@@ -549,7 +554,7 @@ export const FileEditsSidebar: React.FC<FileEditsSidebarProps> = ({
   };
 
   const renderFile = ({ filePath, operation }: { filePath: string; totalAdded: number; totalRemoved: number; operation?: string }, isInDirectory = false) => {
-    const hasPendingReview = pendingReviewFiles?.has(filePath);
+    const hasPendingReview = pendingReviewKeys.has(commitPathKey(filePath, workspacePath ?? ""));
     const fileColorClass = getFileStatusColor(filePath, operation);
     // Check both operation and git status for deleted files
     const relativePath = getRelativePath(filePath);

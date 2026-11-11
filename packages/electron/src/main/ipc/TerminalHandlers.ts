@@ -345,7 +345,7 @@ export function registerTerminalHandlers(): void {
         payload.documentContext && typeof payload.documentContext === 'object'
           ? payload.documentContext
           : undefined;
-      await submitClaudeCliPromptProduction({
+      const { submitted } = await submitClaudeCliPromptProduction({
         sessionId: payload.sessionId,
         workspacePath: payload.workspacePath,
         prompt,
@@ -358,7 +358,7 @@ export function registerTerminalHandlers(): void {
           },
         },
       });
-      return { success: true };
+      return { success: submitted };
     }
   );
 

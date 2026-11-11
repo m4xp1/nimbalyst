@@ -10,7 +10,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { Provider, createStore } from 'jotai';
 
 import { hiddenGutterItemsAtom } from '../../../store/atoms/appSettings';
@@ -41,7 +41,10 @@ import { ClaudeUsagePopover } from '../../ClaudeUsageIndicator/ClaudeUsagePopove
 import { CodexUsagePopover } from '../../CodexUsageIndicator/CodexUsagePopover';
 import { GeminiUsagePopover } from '../../GeminiUsageIndicator/GeminiUsagePopover';
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function noopRef() {
   return { current: null } as React.RefObject<HTMLElement | null>;
@@ -108,6 +111,32 @@ describe('usage popover "Disable" hides via the gutter customization atom', () =
     expect(store.get(hiddenGutterItemsAtom)).not.toContain('codex-usage');
     fireEvent.click(getByText('Disable'));
     expect(store.get(hiddenGutterItemsAtom)).toContain('codex-usage');
+  });
+
+  it('chooses a workspace through the Codex broker and can return to following Desktop', async () => {
+    const invoke = vi.fn(async (channel: string) => channel === 'codex-workspace:get' ? {
+      independent: true,
+      selectedId: 'test-personal',
+      choices: [{ id: 'test-personal', name: 'Personal' }, { id: 'test-team', name: 'Team' }],
+      signingIn: false,
+    } : undefined);
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, invoke });
+    const store = createStore();
+    store.set(codexUsageAtom, { limits: [], lastUpdated: Date.now() });
+    const { findByRole, getByRole } = render(
+      <Provider store={store}>
+        <CodexUsagePopover anchorRef={noopRef()} onClose={() => {}} onRefresh={async () => {}} />
+      </Provider>,
+    );
+    const picker = await findByRole('combobox', { name: 'ChatGPT workspace' }) as HTMLSelectElement;
+    expect(picker.value).toBe('test-personal');
+    fireEvent.change(picker, { target: { value: 'test-team' } });
+    expect(invoke).toHaveBeenCalledWith('codex-workspace:select', 'test-team');
+    const followDesktop = getByRole('button', { name: 'Follow ChatGPT Desktop' }) as HTMLButtonElement;
+    await waitFor(() => expect(followDesktop.disabled).toBe(false));
+    fireEvent.click(followDesktop);
+    expect(invoke).toHaveBeenCalledWith('codex-workspace:follow-desktop', undefined);
+    await waitFor(() => expect(followDesktop.disabled).toBe(false));
   });
 
   it('GeminiUsagePopover Disable adds gemini-usage to hiddenGutterItemsAtom', () => {

@@ -17,6 +17,7 @@ import { useElapsedTimeRef } from './CustomToolWidgets/useElapsedTime';
 import type { SubagentChildContext, TranscriptToolShared } from './TranscriptToolCard';
 import { TranscriptMessageRow, computeTranscriptRowInfos, type TranscriptRowInfo } from './TranscriptMessageRow';
 import { TranscriptImageGalleryProvider } from './TranscriptImageGallery';
+import { buildTranscriptActivity, isActivityExpanded, type ActivityExpandedOverride, type TranscriptActivityPart } from '../utils/transcriptActivity';
 
 // Edit/diff extraction moved with the tool card; re-exported for existing importers.
 export {
@@ -370,6 +371,8 @@ const PromptAdditionsInline: React.FC<{
 
 
 interface RichTranscriptViewProps {
+  activityExpandedOverrides?: Readonly<Record<string, ActivityExpandedOverride>>;
+  onActivityExpandedChange?: (key: string, expanded: boolean, completed: boolean) => void;
   sessionId: string;
   sessionStatus?: string;
   isProcessing?: boolean; // Whether the session is currently processing a request
@@ -523,7 +526,16 @@ const getTranscriptMessageKey = (
 export const RichTranscriptView = React.forwardRef<
   { scrollToMessage: (index: number, toolCallId?: string) => void; scrollToTop: () => void },
   RichTranscriptViewProps
->(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, backgroundTasks, appStartTime, renderEmbeddedFile, canEmbedFile, loadToolCallDiffs, onSearchBarVisibilityChange, persistScrollState = true }, ref) => {
+>(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, backgroundTasks, appStartTime, renderEmbeddedFile, canEmbedFile, loadToolCallDiffs, onSearchBarVisibilityChange, persistScrollState = true, activityExpandedOverrides, onActivityExpandedChange }, ref) => {
+  const [localActivityOverrides, setLocalActivityOverrides] = useState<Record<string, Record<string, ActivityExpandedOverride>>>({});
+  const [revealedActivity, setRevealedActivity] = useState<{ sessionId: string; key: string; completed: boolean }>();
+  const expandedOverrides = activityExpandedOverrides ?? localActivityOverrides[sessionId] ?? {};
+  const changeActivityExpanded = useCallback((key: string, expanded: boolean, completed: boolean) => {
+    setRevealedActivity(current => current?.sessionId === sessionId && current.key === key ? undefined : current);
+    if (onActivityExpandedChange) onActivityExpandedChange(key, expanded, completed);
+    else setLocalActivityOverrides(previous => ({ ...previous, [sessionId]: { ...previous[sessionId], [key]: { expanded, completed } } }));
+  }, [sessionId, onActivityExpandedChange]);
+  const revealActivityRef = useRef<(index: number) => void>(() => {});
   const [collapsedMessages, setCollapsedMessages] = useState<Set<number>>(new Set());
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const scrollButtonRef = useRef<HTMLDivElement>(null);
@@ -813,6 +825,7 @@ export const RichTranscriptView = React.forwardRef<
   React.useImperativeHandle(ref, () => ({
     scrollToMessage: (index: number, toolCallId?: string) => {
       if (!vlistRef.current) return;
+      revealActivityRef.current(index);
       vlistRef.current.scrollToIndex(index, { align: toolCallId ? 'start' : 'center' });
       // Highlight after scroll settles
       setTimeout(() => {
@@ -1032,15 +1045,43 @@ export const RichTranscriptView = React.forwardRef<
     return next;
   }, [messages, settings.showToolCalls, expandedTools, supersededToolIndices, skippedQuestionIds, subagentContext, isWaitingForResponse, restartAfterIndex]);
 
+  const previousActivityRef = useRef<(TranscriptActivityPart | undefined)[]>([]);
+  const activityParts = useMemo(() => {
+    const next = buildTranscriptActivity(messages, rowInfos, isProcessing ?? isWaitingForResponse, previousActivityRef.current);
+    previousActivityRef.current = next;
+    return next;
+  }, [messages, rowInfos, isProcessing, isWaitingForResponse]);
+  revealActivityRef.current = (index: number) => {
+    // Tools may be rendered in the following assistant row. Keep the external
+    // message-index contract used by prompt markers and transcript search.
+    let owner = index;
+    while (owner < messages.length && rowInfos[owner]?.kind === 'hidden') owner++;
+    const part = activityParts[index] ?? activityParts[owner];
+    if (part && !isActivityExpanded(part, expandedOverrides[part.key])) {
+      setRevealedActivity({ sessionId, key: part.key, completed: part.completed });
+    }
+  };
+  const scrollToSearchMessage = useCallback((index: number) => {
+    revealActivityRef.current(index);
+    requestAnimationFrame(() => vlistRef.current?.scrollToIndex(index, { align: 'center' }));
+  }, []);
+
   // Rendered message rows. Each row's outer div carries `data-message-index`
   // and registers its DOM node in `messageRefs` so imperative scroll and
   // selection helpers can find them.
-  const renderedMessages = messages.map((message, index) => (
+  const renderedMessages = messages.map((message, index) => {
+    const activity = activityParts[index];
+    const revealed = activity && revealedActivity?.sessionId === sessionId &&
+      revealedActivity.key === activity.key && revealedActivity.completed === activity.completed;
+    return (
     <TranscriptMessageRow
       key={getTranscriptMessageKey(sessionId, message, index)}
       message={message}
       index={index}
       info={rowInfos[index]}
+      activity={activity}
+      activityExpanded={!activity || revealed || isActivityExpanded(activity, expandedOverrides[activity.key])}
+      onToggleActivity={changeActivityExpanded}
       isCollapsed={collapsedMessages.has(index)}
       isCopied={copiedMessageIndex === index}
       showThinking={settings.showThinking}
@@ -1054,7 +1095,8 @@ export const RichTranscriptView = React.forwardRef<
       onCopy={copyTranscriptViewMessageContent}
       registerMessageRef={registerMessageRef}
     />
-  ));
+    );
+  });
 
   return (
     <TranscriptImageGalleryProvider messages={messages} readFile={readFile}>
@@ -1065,9 +1107,7 @@ export const RichTranscriptView = React.forwardRef<
           messages={messages}
           containerRef={scrollContainerRef}
           onClose={() => setShowSearchBar(false)}
-          onScrollToMessage={(index) => {
-            vlistRef.current?.scrollToIndex(index, { align: 'center' });
-          }}
+          onScrollToMessage={scrollToSearchMessage}
         />
 
         {/* Settings Panel */}
