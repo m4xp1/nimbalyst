@@ -62,6 +62,18 @@ describe('pending question navigation', () => {
       provider="claude-code" persistScrollState={false} />
   );
 
+  it('keeps a pending question reachable when the active turn is manually folded', () => {
+    const messages = [makeMessage(0, { text: 'Checking options', assistantPhase: 'commentary' }), question(1)];
+    const { container } = render(
+      <RichTranscriptView sessionId="folded-question" sessionStatus="running" isProcessing messages={messages}
+        provider="claude-code" persistScrollState={false} />,
+    );
+    fireEvent.click(screen.getByLabelText('Agent activity in progress'));
+    expect(screen.queryByText('Checking options')).toBeNull();
+    expect(container.querySelector('[data-transcript-tool-id="question-1"]')).not.toBeNull();
+    expect(screen.getByLabelText('Jump to question')).toBeTruthy();
+  });
+
   beforeEach(() => {
     frames = new Map();
     nextFrame = 0;

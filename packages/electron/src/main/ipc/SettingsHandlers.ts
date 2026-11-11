@@ -1,4 +1,5 @@
 import { registerProviderCredentialHandlers } from './ProviderCredentialHandlers';
+import { setTranscriptActivityOverride } from '../services/transcriptActivityPreferences';
 import { registerCloudflareSandboxHandlers } from './CloudflareSandboxHandlers';
 import { BrowserWindow, safeStorage, session, dialog } from 'electron';
 import { getWindowIdForWindow, windowStates } from '../window/windowState';
@@ -178,6 +179,10 @@ export function registerSettingsHandlers() {
 
     safeHandle('settings:getAll', () => {
         return settingsService.getAll();
+    });
+
+    safeHandle('settings:set-turn-activity', (_event, input: unknown) => {
+        setTranscriptActivityOverride(settingsService, input);
     });
 
     safeHandle('settings:set', (_event, key: string, value: unknown) => {

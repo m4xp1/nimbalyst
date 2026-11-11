@@ -35,6 +35,61 @@ describe('projectRawMessagesToViewMessages', () => {
   });
 
   describe('Codex provider', () => {
+    it('preserves native turn and phase metadata without merging commentary into the final answer', async () => {
+      const item = (id: number, phase?: string, turnId = 'turn-1') => raw({
+        id, source: 'openai-codex', metadata: { transport: 'app-server' },
+        content: JSON.stringify({ method: 'item/completed', params: {
+          threadId: 'thread', turnId, item: { id: 'item-' + id, type: 'agentMessage', text: 'Text ' + id, phase },
+        } }),
+      });
+      const rows = [
+        item(1, 'commentary'),
+        raw({ id: 2, direction: 'input', content: JSON.stringify({ prompt: 'A correction' }), metadata: { codexSteerTurnId: 'turn-1' } }),
+        item(3, 'final_answer'),
+        raw({
+          id: 4, source: 'openai-codex', metadata: { transport: 'app-server' },
+          content: JSON.stringify({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } }),
+        }),
+        item(5, undefined, 'turn-2'),
+      ];
+      const events = await rawMessagesToCanonicalEvents(rows, 'openai-codex');
+      const boundary = events.find(event => event.payload.turnBoundary);
+      expect(boundary).toMatchObject({
+        eventType: 'system_message', searchable: false,
+        payload: { turnId: 'turn-1', turnBoundary: { status: 'completed' } },
+      });
+      expect(boundary?.payload).not.toHaveProperty('contextFill');
+      const messages = await projectRawMessagesToViewMessages(rows, 'openai-codex');
+      expect(messages).toHaveLength(4);
+      expect(messages[0]).toMatchObject({ text: 'Text 1', turnId: 'turn-1', assistantPhase: 'commentary' });
+      expect(messages[1]).toMatchObject({ text: 'A correction', turnId: 'turn-1' });
+      expect(messages[2]).toMatchObject({ text: 'Text 3', assistantPhase: 'final', turnEnd: { status: 'completed' } });
+      expect(messages[3]).toMatchObject({ text: 'Text 5', turnId: 'turn-2' });
+      expect(messages[3].assistantPhase).toBeUndefined();
+      expect(messages[3].turnEnd).toBeUndefined();
+    });
+
+    it.each(['failed', 'interrupted'] as const)('preserves %s completion and error text without promoting commentary to a final answer', async (status) => {
+      const messages = await projectRawMessagesToViewMessages([
+        raw({
+          id: 1, metadata: { transport: 'app-server' },
+          content: JSON.stringify({ method: 'item/completed', params: {
+            turnId: 't1', item: { id: 'm1', type: 'agentMessage', text: 'Still working', phase: 'commentary' },
+          } }),
+        }),
+        raw({
+          id: 2, metadata: { transport: 'app-server' },
+          content: JSON.stringify({ method: 'turn/completed', params: {
+            turn: { id: 't1', status, ...(status === 'failed' ? { error: { message: 'Provider failed' } } : {}) },
+          } }),
+        }),
+      ], 'openai-codex');
+      expect(messages[0].assistantPhase).toBe('commentary');
+      expect(messages.at(-1)?.turnEnd).toEqual({ status });
+      if (status === 'failed') {
+        expect(messages.at(-1)).toMatchObject({ type: 'system_message', isError: true, text: 'Provider failed' });
+      }
+    });
     it('projects a user prompt followed by an assistant text response', async () => {
       const messages: RawMessage[] = [
         raw({

@@ -37,6 +37,8 @@ function logPanelMemoDiff(
 }
 
 interface AgentTranscriptPanelProps {
+  activityExpandedOverrides?: React.ComponentProps<typeof RichTranscriptView>['activityExpandedOverrides'];
+  onActivityExpandedChange?: React.ComponentProps<typeof RichTranscriptView>['onActivityExpandedChange'];
   sessionId: string;
   sessionData: SessionData;
   todos?: Todo[];
@@ -140,6 +142,8 @@ const AgentTranscriptPanelComponent = React.forwardRef<
 >(({
   sessionId,
   sessionData,
+  activityExpandedOverrides,
+  onActivityExpandedChange,
   todos = [],
   isProcessing,
   hasPendingInteractivePrompt,
@@ -283,6 +287,8 @@ const AgentTranscriptPanelComponent = React.forwardRef<
       {/* Main Content */}
       <div className="flex-1 overflow-hidden relative">
         <RichTranscriptView
+          activityExpandedOverrides={activityExpandedOverrides}
+          onActivityExpandedChange={onActivityExpandedChange}
           ref={transcriptRef}
           sessionId={sessionId}
           sessionStatus={sessionData.metadata?.sessionStatus as string}
@@ -427,6 +433,10 @@ const getSessionStatus = (sessionData: SessionData): string | undefined => {
 export const AgentTranscriptPanel = React.memo(
   AgentTranscriptPanelComponent,
   (prevProps, nextProps) => {
+    if (
+      prevProps.activityExpandedOverrides !== nextProps.activityExpandedOverrides ||
+      prevProps.onActivityExpandedChange !== nextProps.onActivityExpandedChange
+    ) return false;
     // Session ID changed - must re-render
     if (prevProps.sessionId !== nextProps.sessionId) {
       logPanelMemoDiff(nextProps.sessionId, 'sessionId', {

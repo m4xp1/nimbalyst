@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add multiple draft chat annotations from Markdown and transcript selections, with links back to their sources.
 - Queue a follow-up, send it into the active Codex turn, or stop the turn. Smart Commit remembers model, effort, and temporary-session settings.
 - Choose a separate ChatGPT workspace in Codex Usage for Nimbalyst subscription requests.
+- Fold the agent's intermediate messages, reasoning and tools into a per-turn activity section. It opens during work, folds when the answer arrives and remembers manual changes.
+
+### Changed
+- Use a pale blue background for user messages in the light theme.
 
 ### Fixed
 - Keep and Keep All update review markers. The right pane resolves paths consistently and lists current Git changes in All Uncommitted Files.

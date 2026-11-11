@@ -11,7 +11,7 @@
  */
 
 import type { RawMessage } from '../TranscriptTransformer';
-import type { TranscriptEvent, InteractivePromptPayload, TurnEndedPayload, UserMessagePayload, PermissionDeniedReasonType } from '../types';
+import type { TranscriptEvent, InteractivePromptPayload, TurnEndedPayload, UserMessagePayload, PermissionDeniedReasonType, TranscriptTurnMetadata, TranscriptTurnEnd } from '../types';
 
 // ---------------------------------------------------------------------------
 // Parse context (provided by the transformer to parsers)
@@ -45,7 +45,7 @@ export interface ParseContext {
 // Canonical event descriptors (plain data, no DB writes)
 // ---------------------------------------------------------------------------
 
-export interface UserMessageDescriptor {
+export interface UserMessageDescriptor extends TranscriptTurnMetadata {
   type: 'user_message';
   text: string;
   mode?: 'agent' | 'planning' | 'auto';
@@ -58,7 +58,8 @@ export interface UserMessageDescriptor {
   promptOrigin?: string;
 }
 
-export interface AssistantMessageDescriptor {
+export interface AssistantMessageDescriptor extends TranscriptTurnMetadata {
+  assistantPhase?: 'commentary' | 'final';
   type: 'assistant_message';
   text: string;
   mode?: 'agent' | 'planning' | 'auto';
@@ -83,7 +84,8 @@ export interface AssistantMessageDescriptor {
   model?: string;
 }
 
-export interface SystemMessageDescriptor {
+export interface SystemMessageDescriptor extends TranscriptTurnMetadata {
+  turnBoundary?: TranscriptTurnEnd;
   type: 'system_message';
   text: string;
   systemType?: 'status' | 'slash_command' | 'error' | 'init' | 'permission_denied';
@@ -112,7 +114,7 @@ export interface SystemMessageDescriptor {
   attachmentDetection?: 'reactive' | 'preflight';
 }
 
-export interface ToolCallStartedDescriptor {
+export interface ToolCallStartedDescriptor extends TranscriptTurnMetadata {
   type: 'tool_call_started';
   toolName: string;
   toolDisplayName: string;
@@ -125,7 +127,7 @@ export interface ToolCallStartedDescriptor {
   createdAt?: Date;
 }
 
-export interface ToolCallCompletedDescriptor {
+export interface ToolCallCompletedDescriptor extends TranscriptTurnMetadata {
   type: 'tool_call_completed';
   providerToolCallId: string;
   status: 'completed' | 'error';
@@ -135,7 +137,7 @@ export interface ToolCallCompletedDescriptor {
   durationMs?: number;
 }
 
-export interface ToolProgressDescriptor {
+export interface ToolProgressDescriptor extends TranscriptTurnMetadata {
   type: 'tool_progress';
   providerToolCallId: string;
   toolName: string;
@@ -145,7 +147,7 @@ export interface ToolProgressDescriptor {
   createdAt?: Date;
 }
 
-export interface SubagentStartedDescriptor {
+export interface SubagentStartedDescriptor extends TranscriptTurnMetadata {
   type: 'subagent_started';
   subagentId: string;
   agentType: string;
@@ -159,7 +161,7 @@ export interface SubagentStartedDescriptor {
   createdAt?: Date;
 }
 
-export interface SubagentCompletedDescriptor {
+export interface SubagentCompletedDescriptor extends TranscriptTurnMetadata {
   type: 'subagent_completed';
   subagentId: string;
   status: 'completed';
@@ -168,20 +170,21 @@ export interface SubagentCompletedDescriptor {
   reasoningEffort?: string | null;
 }
 
-export interface InteractivePromptCreatedDescriptor {
+export interface InteractivePromptCreatedDescriptor extends TranscriptTurnMetadata {
   type: 'interactive_prompt_created';
   payload: InteractivePromptPayload;
   subagentId?: string | null;
   createdAt?: Date;
 }
 
-export interface InteractivePromptUpdatedDescriptor {
+export interface InteractivePromptUpdatedDescriptor extends TranscriptTurnMetadata {
   type: 'interactive_prompt_updated';
   requestId: string;
   update: Partial<InteractivePromptPayload>;
 }
 
-export interface TurnEndedDescriptor {
+export interface TurnEndedDescriptor extends TranscriptTurnMetadata {
+  turnBoundary?: TranscriptTurnEnd;
   type: 'turn_ended';
   contextFill: TurnEndedPayload['contextFill'];
   contextWindow: number;

@@ -430,6 +430,16 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   const [currentModel, setCurrentModel] = useAtom(sessionModelAtom(sessionId));
   const [isArchived, setIsArchived] = useAtom(sessionArchivedAtom(sessionId));
   const [isProcessing, setIsProcessing] = useAtom(sessionProcessingAtom(sessionId));
+  const activityOverrides = useAtomValue(settingAtom('ai.turnActivityOverrides'))?.[sessionId];
+  const [activitySaveError, setActivitySaveError] = useState<string | null>(null);
+  const changeActivityExpanded = useCallback((turnKey: string, expanded: boolean, completed: boolean) => {
+    setActivitySaveError(null);
+    void window.electronAPI.invoke('settings:set-turn-activity', { sessionId, turnKey, expanded, completed })
+      .catch((error: unknown) => {
+        console.error('Failed to save agent activity preference:', error);
+        setActivitySaveError(sessionId);
+      });
+  }, [sessionId]);
   const hasPendingInteractivePrompt = useAtomValue(sessionHasPendingInteractivePromptAtom(sessionId));
   const backgroundTasks = useAtomValue(sessionBackgroundTasksAtom(sessionId));
   const worktreeId = useAtomValue(sessionWorktreeIdAtom(sessionId));
@@ -2667,7 +2677,14 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
           {annotationTranscriptRoot && (
             <TranscriptAnnotationControls sessionId={sessionId} root={annotationTranscriptRoot} />
           )}
+          {activitySaveError === sessionId && (
+            <div role="alert" className="px-3 py-1 text-xs text-[var(--nim-error)]">
+              Could not save agent activity preference. Try again.
+            </div>
+          )}
           <AgentTranscriptPanel
+            activityExpandedOverrides={activityOverrides}
+            onActivityExpandedChange={changeActivityExpanded}
             ref={transcriptPanelRef}
             sessionId={sessionId}
             sessionData={sessionData}

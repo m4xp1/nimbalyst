@@ -150,6 +150,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Desktop Codex app-server composer offers Queue, Send now, and Stop during a turn. Send now adds the follow-up to that turn. Files attached to a follow-up can be sent through Queue.
 - Add to chat turns selected Markdown or transcript text into a draft annotation for the active session. Draft markers reopen their comments, and the composer list can navigate back to them. Saving an empty comment removes its marker.
 - Smart Commit remembers the model, reasoning effort, and optional temporary Codex session setting across sessions. A temporary session proposes a message for selected paths and shows the proposal for confirmation.
+- Chat shows intermediate messages, reasoning and tool calls under a per-turn activity disclosure. It opens while the agent works and folds when the final answer arrives. Manual choices persist for each turn, and requests for user action remain accessible.
 - Slash command typeahead
 - Action prompts dropdown in composer (reusable prompt presets defined in `nimbalyst-local/ai-actions.md`; pick to insert verbatim into the draft, with undo support)
 

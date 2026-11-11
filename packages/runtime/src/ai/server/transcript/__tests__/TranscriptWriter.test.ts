@@ -61,6 +61,19 @@ describe('TranscriptWriter', () => {
   });
 
   describe('appendAssistantMessage', () => {
+    it('keeps commentary and final phases separate across streaming batches', async () => {
+      const first = await writer.appendAssistantMessage('session-1', 'Working', { turnId: 't1', assistantPhase: 'commentary' });
+      const resumed = new TranscriptWriter(store, 'claude-code');
+      const more = await resumed.appendAssistantMessage('session-1', ' on it', { turnId: 't1', assistantPhase: 'commentary' });
+      expect(more.id).toBe(first.id);
+      const final = await resumed.appendAssistantMessage('session-1', 'Done', { turnId: 't1', assistantPhase: 'final' });
+      expect(final.id).not.toBe(first.id);
+      const next = await resumed.appendAssistantMessage('session-1', 'Another answer', { turnId: 't2', assistantPhase: 'final' });
+      expect(next.id).not.toBe(final.id);
+      const legacy = await resumed.appendAssistantMessage('session-1', 'Unknown phase');
+      expect(legacy.id).not.toBe(next.id);
+      expect(final.payload).toMatchObject({ turnId: 't1', assistantPhase: 'final' });
+    });
     it('sets searchable=true', async () => {
       const event = await writer.appendAssistantMessage('session-1', 'Here is my response');
 

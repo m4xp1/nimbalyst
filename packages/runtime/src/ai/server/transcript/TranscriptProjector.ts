@@ -16,6 +16,7 @@ import type {
   SubagentPayload,
   TurnEndedPayload,
   AssistantMessagePayload,
+  TranscriptTurnEnd,
 } from './types';
 import { isBackgroundedToolAck, isInteractiveWidgetTool } from '../interactivePromptTools';
 
@@ -56,6 +57,9 @@ export interface ToolCallDiffLoadResult {
 }
 
 export interface TranscriptViewMessage {
+  turnId?: string;
+  assistantPhase?: AssistantMessagePayload['assistantPhase'];
+  turnEnd?: TranscriptTurnEnd;
   id: number;
   /** Matches the canonical event's ephemeral runtime store generation. */
   transcriptGeneration?: number;
@@ -150,13 +154,28 @@ export class TranscriptProjector {
       }
     }
 
-    // Build view messages for non-progress, non-turn-ended events
+    // Boundaries annotate the previous row without adding a transcript row.
     const allMessages: TranscriptViewMessage[] = [];
+    const latestByTurn = new Map<string, TranscriptViewMessage>();
     for (const event of events) {
-      if (event.eventType === 'tool_progress' || event.eventType === 'turn_ended') {
-        continue; // progress grouped under parent tool_call; turn_ended is metadata-only
+      const payload = event.payload;
+      const turnId = typeof payload.turnId === 'string' ? payload.turnId : undefined;
+      const scope = event.subagentId ?? '';
+      const candidate = payload.turnBoundary as TranscriptTurnEnd | undefined;
+      const boundary = candidate && ['completed', 'failed', 'interrupted'].includes(candidate.status)
+        ? candidate : undefined;
+      if (event.eventType === 'turn_ended' || (event.eventType === 'system_message' && boundary)) {
+        const prior = latestByTurn.get(scope + '|' + (turnId ?? ''));
+        if (prior) {
+          if (boundary) prior.turnEnd = boundary;
+          if (event.eventType === 'turn_ended') prior.turnEnded = payload as unknown as TurnEndedPayload;
+        }
+        continue;
       }
-      allMessages.push(projectEvent(event, progressByParent));
+      if (event.eventType === 'tool_progress') continue;
+      const message = projectEvent(event, progressByParent);
+      allMessages.push(message);
+      latestByTurn.set(scope + '|' + (turnId ?? ''), message);
     }
 
     // Separate subagent child events from top-level
@@ -220,12 +239,17 @@ function coalesceAdjacentAssistantMessages(
       message.type === 'assistant_message' &&
       previous.subagentId === message.subagentId &&
       previous.mode === message.mode &&
+      previous.turnId === message.turnId &&
+      previous.assistantPhase === message.assistantPhase &&
+      !previous.turnEnd &&
       // Don't fuse a thinking-only message into a regular text message --
       // the renderer needs them as distinct UI blocks.
       previous.thinking === undefined &&
       message.thinking === undefined
     ) {
       previous.text = `${previous.text ?? ''}${message.text ?? ''}`;
+      if (message.turnEnd) previous.turnEnd = message.turnEnd;
+      if (message.turnEnded) previous.turnEnded = message.turnEnded;
       continue;
     }
 
@@ -246,6 +270,7 @@ function projectEvent(
     createdAt: event.createdAt,
     type: event.eventType,
     subagentId: event.subagentId,
+    ...(typeof event.payload.turnId === 'string' ? { turnId: event.payload.turnId } : {}),
   };
 
   switch (event.eventType) {
@@ -268,6 +293,7 @@ function projectEvent(
       if (p.thinking !== undefined) base.thinking = p.thinking;
       if (p.progressUpdate) base.progressUpdate = true;
       if (p.model !== undefined) base.model = p.model;
+      if (p.assistantPhase) base.assistantPhase = p.assistantPhase;
       break;
     }
     case 'system_message': {

@@ -25,6 +25,8 @@ interface MessageSegmentProps {
   isCollapsed?: boolean;
   showToolCalls: boolean;
   showThinking: boolean;
+  /** A turn-level activity disclosure owns thinking visibility when supplied. */
+  activityThinking?: { expanded: boolean };
   expandedTools: Set<string>;
   onToggleToolExpand: (toolId: string) => void;
   documentContext?: { filePath?: string }; // For passing file path to edits
@@ -49,6 +51,7 @@ export const MessageSegment = React.memo(function MessageSegment({
   isCollapsed = false,
   showToolCalls,
   showThinking,
+  activityThinking,
   expandedTools,
   onToggleToolExpand,
   documentContext,
@@ -158,6 +161,7 @@ export const MessageSegment = React.memo(function MessageSegment({
     if (isUser) return null;
     const { thinking, progressUpdate } = message as TranscriptViewMessage;
     if (!thinking || !thinking.trim()) return null;
+    if (activityThinking && !activityThinking.expanded) return null;
     // An API progress update is the only trace of text the model wrote for
     // the user between tool calls (#1801), so it is shown, never collapsed.
     if (progressUpdate) {
@@ -168,6 +172,9 @@ export const MessageSegment = React.memo(function MessageSegment({
       );
     }
     if (!showThinking) return null;
+    if (activityThinking) {
+      return <div className="rich-transcript-thinking text-xs text-[var(--nim-text-muted)] whitespace-pre-wrap">{thinking}</div>;
+    }
     return (
       <details className="rich-transcript-thinking rounded-md border border-[var(--nim-border)] bg-[var(--nim-bg-secondary)]">
         <summary className="flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--nim-text-muted)] cursor-pointer select-none">

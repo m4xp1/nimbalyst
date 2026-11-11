@@ -55,7 +55,7 @@ describe('CodexAppServerRawParser', () => {
       }),
     });
     const descs = await parser.parseMessage(msg, makeContext());
-    expect(descs).toEqual([{ type: 'assistant_message', text: 'hello there', createdAt: msg.createdAt }]);
+    expect(descs).toEqual([{ type: 'assistant_message', text: 'hello there', createdAt: msg.createdAt, turnId: 'turn-1' }]);
   });
 
   it('dedupes repeated item and terminal turn notifications on the same parser instance', async () => {
@@ -70,7 +70,7 @@ describe('CodexAppServerRawParser', () => {
     });
     const firstMessage = await parser.parseMessage(messageCompleted, makeContext());
     const secondMessage = await parser.parseMessage(messageCompleted, makeContext());
-    expect(firstMessage).toEqual([{ type: 'assistant_message', text: 'hello there', createdAt: messageCompleted.createdAt }]);
+    expect(firstMessage).toEqual([{ type: 'assistant_message', text: 'hello there', createdAt: messageCompleted.createdAt, turnId: 'turn-1' }]);
     expect(secondMessage).toEqual([]);
 
     const turnCompleted = makeRawMessage({
@@ -239,7 +239,7 @@ describe('CodexAppServerRawParser', () => {
       }),
     });
     const descs = await parser.parseMessage(msg, makeContext());
-    expect(descs).toEqual([{ type: 'system_message', text: 'rate limited', systemType: 'error', createdAt: msg.createdAt }]);
+    expect(descs).toEqual([{ type: 'system_message', text: 'rate limited', systemType: 'error', createdAt: msg.createdAt, turnId: 'turn-1' }]);
   });
 
   it('returns no descriptors for delta and status-only notifications', async () => {
@@ -348,6 +348,7 @@ describe('CodexAppServerRawParser', () => {
     }));
     expect(startedDescs).toEqual([{
       type: 'subagent_started',
+      turnId: 'turn-1',
       subagentId: 'spawn-1',
       agentType: 'Session',
       prompt: 'Create a plan',
@@ -378,6 +379,7 @@ describe('CodexAppServerRawParser', () => {
     }));
     expect(completedDescs).toEqual([{
       type: 'subagent_completed',
+      turnId: 'turn-1',
       subagentId: 'spawn-1',
       status: 'completed',
       resultSummary: 'receiver_thread_ids: thread-child-1',
@@ -463,6 +465,7 @@ describe('CodexAppServerRawParser', () => {
     expect(descs).toEqual([{
       type: 'assistant_message',
       text: '- [x] Inspect transcript parser\n- [ ] Add collab-agent coverage',
+      turnId: 'turn-1',
       createdAt: msg.createdAt,
     }]);
   });

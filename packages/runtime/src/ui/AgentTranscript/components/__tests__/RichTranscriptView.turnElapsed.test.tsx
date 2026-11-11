@@ -12,7 +12,7 @@
  */
 
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TranscriptViewMessage } from '../../../../ai/server/transcript/TranscriptProjector';
 import { RichTranscriptView } from '../RichTranscriptView';
@@ -33,6 +33,71 @@ vi.mock('virtua', async () => {
       return <div data-testid="mock-vlist">{ReactModule.Children.toArray(children)}</div>;
     }),
   };
+});
+
+describe('agent activity', () => {
+  const prompt = { ...userTurn, turnId: 'native-turn' };
+  const progress = makeMessage(1, {
+    turnId: 'native-turn', assistantPhase: 'commentary', text: 'Checking the repository',
+    thinking: 'Inspect the workspace',
+  });
+  const command = makeMessage(2, {
+    turnId: 'native-turn', type: 'tool_call', toolCall: {
+      toolName: 'Bash', toolDisplayName: 'Bash', status: 'completed',
+      description: null, arguments: { command: 'git status --short' },
+      targetFilePath: null, mcpServer: null, mcpTool: null,
+      providerToolCallId: 'command', progress: [], result: 'clean',
+    },
+  });
+  const final = makeMessage(4, { turnId: 'native-turn', assistantPhase: 'final', text: 'The repository is clean.' });
+  const finished = [prompt, progress, command, final];
+
+  it('keeps activity open during work and collapses it as the final answer starts', () => {
+    const steering = makeMessage(3, { type: 'user_message', turnId: 'native-turn', text: 'Check only tracked files' });
+    const { rerender, container } = render(view([prompt, progress, command, steering], true));
+    expect(screen.getByLabelText('Agent activity in progress').getAttribute('aria-expanded')).toBe('true');
+    screen.getByText(progress.text!);
+    screen.getByText(progress.thinking!);
+    expect(container.querySelector('[data-transcript-tool-id="command"]')).not.toBeNull();
+
+    rerender(view([...finished.slice(0, 3), steering, final], true));
+    expect(screen.getByLabelText('Agent activity').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText(progress.text!)).toBeNull();
+    expect(container.querySelector('[data-transcript-tool-id="command"]')).toBeNull();
+    screen.getByText(final.text!);
+    screen.getByText(steering.text!);
+  });
+
+  it('restores the manual choice and temporarily reveals a collapsed result when navigating', () => {
+    const save = vi.fn();
+    const ref = React.createRef<React.ElementRef<typeof RichTranscriptView>>();
+    const renderHistory = (expanded: boolean) => (
+      <RichTranscriptView ref={ref} sessionId="activity" messages={finished} isProcessing={false}
+        activityExpandedOverrides={{ 'message:1': { expanded, completed: true } }}
+        onActivityExpandedChange={save} persistScrollState={false} />
+    );
+    const first = render(renderHistory(true));
+    screen.getByText(progress.text!);
+    fireEvent.click(screen.getByLabelText('Agent activity'));
+    expect(save).toHaveBeenCalledWith('message:1', false, true);
+    first.unmount();
+    render(renderHistory(false));
+    expect(screen.queryByText(progress.text!)).toBeNull();
+    save.mockClear();
+    act(() => ref.current?.scrollToMessage(1));
+    screen.getByText(progress.text!);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('leaves activity and the error visible after a failed turn with no answer', () => {
+    render(view([prompt, progress, command, makeMessage(4, {
+      turnId: 'native-turn', type: 'system_message', isError: true,
+      text: 'Provider disconnected', systemMessage: { systemType: 'error' }, turnEnd: { status: 'failed' },
+    })], false));
+    expect(screen.getByLabelText('Agent activity').getAttribute('aria-expanded')).toBe('true');
+    screen.getByText(progress.text!);
+    screen.getByText('Provider disconnected');
+  });
 });
 
 function makeMessage(
