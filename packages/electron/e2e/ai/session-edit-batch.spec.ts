@@ -38,7 +38,7 @@ for (const backend of ['sqlite', 'pglite']) test(`33 session edits survive commi
     await waitForAppReady(page);
     expect(await page.evaluate(() => (window as any).electronAPI.invoke('db:migration:get-status'))).toMatchObject({ activeBackend: backend });
     const inserted = await page.evaluate(({ sessionId, workspace }) =>
-      (window as any).electronAPI.invoke('test:insert-session', { id: sessionId, workspaceId: workspace, provider: 'openai-codex', model: 'gpt-6-sol', title: 'Artificial bulk session' }), { sessionId, workspace });
+      (window as any).electronAPI.invoke('test:insert-session', { id: sessionId, workspaceId: workspace, provider: 'openai-codex', model: 'openai-codex:gpt-6-sol', title: 'Artificial bulk session' }), { sessionId, workspace });
     expect(inserted.success).toBe(true);
     for (const name of names) {
       const file = path.join(workspace, name);
