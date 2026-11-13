@@ -5,9 +5,10 @@ import path from 'node:path';
 
 const fixture = vi.hoisted(() => ({ observed: undefined as undefined | ((event: string, file: string, at: number) => void) }));
 // Hoisted so the mock factory below can read it without a TDZ hazard.
-const packageRoot = vi.hoisted(() => ({
-  value: new URL('../../../../../', import.meta.url).pathname.replace(/\/$/, ''),
-}));
+const packageRoot = await vi.hoisted(async () => {
+  const { fileURLToPath } = await import('node:url');
+  return { value: fileURLToPath(new URL('../../../../../', import.meta.url)) };
+});
 vi.mock('electron', () => ({ app: { isPackaged: false } }));
 vi.mock('@nimbalyst/runtime/storage/repositories/SessionFilesRepository', () => ({ SessionFilesRepository: { addFileLink: vi.fn() } }));
 vi.mock('@nimbalyst/runtime/ai/server', () => ({ OpenAICodexProvider: { setShellTrackingHost: vi.fn() } }));

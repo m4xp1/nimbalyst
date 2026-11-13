@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { ShellFileAttribution, type ShellAttributionDependencies, type ShellFileState, type ShellFileEvidence, type ShellPersistenceOutcome } from '../ShellFileAttribution';
 import { ShellTrackingCoverage } from '../ShellTrackingCoverage';
 import { AgentToolActivityRegistry } from '@nimbalyst/runtime/ai/server/agentToolActivity';
+import { SHELL_BASELINE_CAPTURE_MS } from '../ShellContentBaseline';
 
 function fixture(beforeRead?: () => Promise<void>, prepareCheckout?: () => Promise<any>, overrides: Partial<ShellAttributionDependencies> = {}) {
   let now = 1000;
@@ -38,9 +39,9 @@ function fixture(beforeRead?: () => Promise<void>, prepareCheckout?: () => Promi
     persist,
     known,
     unsubscribe,
-    write: (file: string, fingerprint: string) => {
+    write: (file: string, fingerprint: string, modifiedAt?: number) => {
       now++;
-      state.set(file, { fingerprint, modifiedAt: now });
+      state.set(file, { fingerprint, modifiedAt: modifiedAt ?? now });
       emit(file);
     },
     event: (file: string) => emit(file),
@@ -48,19 +49,89 @@ function fixture(beforeRead?: () => Promise<void>, prepareCheckout?: () => Promi
   };
 }
 describe('shell hook attribution', () => {
+  it('retains the owner while a deferred batch outlasts the former release budget', async () => {
+    vi.useFakeTimers();
+    let resume!: () => void;
+    const stalled = new Promise<void>(resolve => { resume = resolve; });
+    const f = fixture(undefined, async () => ({
+      defer: async () => true,
+      finish: async (candidates: Array<{ filePath: string }>) =>
+        new Map(candidates.map(candidate => [candidate.filePath, 'edit'])),
+    }));
+    f.persist.mockImplementationOnce(async () => { await stalled; return 'persisted'; });
+    const a = await f.service.register('A', path.resolve('/workspace'));
+    try {
+      await f.service.pre(a, 'bulk-save', 'Bash');
+      for (let index = 0; index < 33; index++)
+        f.write(path.resolve('/workspace', `document-${index}.md`), `edited-${index}`);
+      const post = f.service.post(a, 'bulk-save');
+      await vi.advanceTimersByTimeAsync(1);
+      const release = f.service.release(a);
+      await vi.advanceTimersByTimeAsync(1600);
+      await release;
+      expect(f.unsubscribe).not.toHaveBeenCalled();
+      resume();
+      await post;
+      expect(f.persist).toHaveBeenCalledTimes(33);
+      await f.service.release(a, true);
+      expect(f.unsubscribe).toHaveBeenCalledTimes(1);
+    } finally {
+      resume();
+      vi.useRealTimers();
+      await f.service.release(a);
+    }
+  });
+
+  it('uses captured bytes when a real edit preserves the original modification time', async () => {
+    const f = fixture(undefined, async () => ({
+      defer: async () => true,
+      finish: async (candidates: Array<{ filePath: string }>) =>
+        new Map(candidates.map(candidate => [candidate.filePath, 'edit'])),
+    }));
+    const a = await f.service.register('A', path.resolve('/workspace'));
+    await f.service.pre(a, 'preserved-time', 'Bash');
+    f.write(path.resolve('/workspace/edited.md'), 'edited', 900);
+    await f.service.post(a, 'preserved-time');
+    expect(f.persist).toHaveBeenCalledTimes(1);
+    await f.service.release(a);
+  });
+
+  it('retains all files when pre-command Git capture takes longer than 1250 ms', async () => {
+    vi.useFakeTimers();
+    const f = fixture(undefined, async () => {
+      await new Promise(resolve => setTimeout(resolve, 1600));
+      return undefined;
+    });
+    const a = await f.service.register('A', path.resolve('/workspace'));
+    try {
+      const pre = f.service.pre(a, 'bulk-edit', 'Bash');
+      await vi.advanceTimersByTimeAsync(1601);
+      await pre;
+      for (let index = 0; index < 33; index++)
+        f.write(path.resolve('/workspace', `document-${index}.md`), `edited-${index}`);
+      const post = f.service.post(a, 'bulk-edit');
+      await vi.advanceTimersByTimeAsync(1);
+      await post;
+      expect(f.persist).toHaveBeenCalledTimes(33);
+      expect(f.report.mock.calls.map(([, reason]) => reason)).not.toContain('checkoutBaseline');
+    } finally {
+      vi.useRealTimers();
+      await f.service.release(a);
+    }
+  });
   it('withholds an edit made while Bash commands from two sessions overlap', async () => {
     const coverage = new ShellTrackingCoverage({ load: async () => undefined, save: async () => {}, notify: () => {} });
     const f = fixture(undefined, async () => ({
       defer: async () => true,
-      finish: async () => new Map([['/workspace/named.ts', 'edit']]),
+      finish: async () => new Map([[path.resolve('/workspace/named.ts'), 'edit']]),
     }), { report: (...args) => coverage.record(...args) });
-    const a = await f.service.register('A', '/workspace');
-    const b = await f.service.register('B', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
+    const b = await f.service.register('B', path.resolve('/workspace'));
     await coverage.open('A', a);
     await coverage.open('B', b);
     await f.service.pre(a, 'sleep', 'Bash');
     await f.service.pre(b, 'writer', 'Bash');
-    f.write('/workspace/named.ts', 'changed');
+    f.write(path.resolve('/workspace/named.ts'), 'changed');
     await f.service.flush();
     expect(f.persist).not.toHaveBeenCalled(); // Reconciliation may suppress unchanged bytes, never select an owner.
     await f.service.post(b, 'writer');
@@ -79,12 +150,12 @@ describe('shell hook attribution', () => {
 
   it.each(['lost observation', 'mixed tools'] as const)('withholds an overlapping edit with %s', async kind => {
     const f = fixture();
-    const a = await f.service.register('A', path.resolve('/workspace'));
-    const b = await f.service.register('B', path.resolve('/workspace'));
+    const a = await f.service.register('A', path.resolve(path.resolve('/workspace')));
+    const b = await f.service.register('B', path.resolve(path.resolve('/workspace')));
     await f.service.pre(a, 'other', kind === 'mixed tools' ? 'apply_patch' : 'Bash');
     await f.service.pre(b, 'writer', 'Bash');
-    if (kind === 'lost observation') f.service.watcherLost(path.resolve('/workspace'));
-    f.write(path.resolve('/workspace/named.ts'), 'edit');
+    if (kind === 'lost observation') f.service.watcherLost(path.resolve(path.resolve('/workspace')));
+    f.write(path.resolve(path.resolve('/workspace/named.ts')), 'edit');
     await f.service.post(b, 'writer');
     await f.service.post(a, 'other');
     expect(f.persist).not.toHaveBeenCalled();
@@ -98,17 +169,17 @@ describe('shell hook attribution', () => {
     let finish!: (baseline: any) => void;
     const preparing = vi.fn(() => new Promise<any>(resolve => { finish = resolve; }));
     const f = fixture(undefined, preparing);
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     try {
       const pre = f.service.pre(a, 'timeout', 'Bash');
-      await vi.advanceTimersByTimeAsync(1250);
+      await vi.advanceTimersByTimeAsync(SHELL_BASELINE_CAPTURE_MS);
       await pre;
       expect(f.report).toHaveBeenCalledWith(a, 'checkoutBaseline', undefined, 'timeout', {
-        tool: 'Bash', error: 'capture timeout: 1250 ms budget exceeded',
+        tool: 'Bash', error: `capture timeout: ${SHELL_BASELINE_CAPTURE_MS} ms budget exceeded`,
       });
-      finish({ defer: async () => true, finish: async () => new Map([['/workspace/rebuilt.d.ts', 'edit']]) });
+      finish({ defer: async () => true, finish: async () => new Map([[path.resolve('/workspace/rebuilt.d.ts'), 'edit']]) });
       await Promise.resolve();
-      f.write('/workspace/rebuilt.d.ts', 'identical');
+      f.write(path.resolve('/workspace/rebuilt.d.ts'), 'identical');
       const completed = f.service.completed(a, 'timeout');
       await vi.advanceTimersByTimeAsync(1);
       await completed;
@@ -125,10 +196,10 @@ describe('shell hook attribution', () => {
       defer: async () => { if (site !== 'finish') throw error; return true; },
       finish: async () => { throw error; },
     }));
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'failure', 'Bash', { sessionId: 'root' });
     if (site === 'ambiguous defer') f.service.started(a, 'competing', 'mcp');
-    f.write('/workspace/rebuilt.d.ts', 'identical');
+    f.write(path.resolve('/workspace/rebuilt.d.ts'), 'identical');
     await f.service.completed(a, 'failure');
     expect(f.persist).not.toHaveBeenCalled();
     expect(f.report).toHaveBeenCalledWith(a, 'checkoutBaseline', undefined, 'failure', {
@@ -140,11 +211,11 @@ describe('shell hook attribution', () => {
   it('keeps an MCP start ambiguous without a pending writer or unmatched-tool fault', async () => {
     const activity = vi.fn(async () => {});
     const f = fixture(undefined, undefined, { activity });
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     f.service.started(a, 'question', 'mcp');
     expect(activity).not.toHaveBeenCalled();
     await f.service.pre(a, 'shell', 'Bash');
-    f.write('/workspace/overlap.ts', 'ambiguous');
+    f.write(path.resolve('/workspace/overlap.ts'), 'ambiguous');
     await f.service.post(a, 'shell');
     expect(f.persist).not.toHaveBeenCalled();
     expect(f.report.mock.calls.map(([, reason]) => reason)).toEqual(['toolOverlap']);
@@ -157,7 +228,7 @@ describe('shell hook attribution', () => {
   it.each(['Bash', 'apply_patch'])('silently retires event-free %s windows and clears their durable marker', async tool => {
     const activity = vi.fn(async () => {});
     const f = fixture(undefined, undefined, { activity });
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'empty', tool);
     f.service.endTurn(a);
     expect(f.report).not.toHaveBeenCalled();
@@ -171,27 +242,27 @@ describe('shell hook attribution', () => {
   it.each([{ turnId: 'child-turn' }, { turnId: 'root-turn', agentType: '' }, { agentType: 'worker' }])('fences foreign pre and post hooks without disturbing a root window: %j', async identity => {
     const activity = vi.fn(async () => {});
     const f = fixture(undefined, undefined, { currentTurn: () => 'root-turn', activity });
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'foreign', 'Bash', { sessionId: 'root-session', ...identity });
     expect(f.service.getStats().activeWindows).toBe(0);
     expect(activity).not.toHaveBeenCalled();
-    f.write('/workspace/subagent.ts', 'candidate');
+    f.write(path.resolve('/workspace/subagent.ts'), 'candidate');
     await f.service.flush();
     expect(f.persist).not.toHaveBeenCalled();
     // Session identity is diagnostic only; old hooks without turn_id still work.
     await f.service.pre(a, 'root', 'Bash', { sessionId: 'another-session' });
     await f.service.post(a, 'root', { tool: 'Bash', ...identity });
     expect(f.service.getStats().activeWindows).toBe(1);
-    f.write('/workspace/root.ts', 'owned');
+    f.write(path.resolve('/workspace/root.ts'), 'owned');
     await f.service.post(a, 'root');
-    expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/root.ts']);
+    expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/root.ts')]);
     expect(f.report.mock.calls.map(([, reason]) => reason)).toEqual(['foreignTool', 'foreignTool']);
     await f.service.release(a);
   });
 
   it('records missing-pre and stale-pre context without inventing absent hook identity', async () => {
     const f = fixture(undefined, undefined, { currentTurn: () => 'root' });
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     f.service.started(a, 'missing', 'shell');
     await f.service.completed(a, 'missing');
     expect(f.report).toHaveBeenCalledWith(a, 'missingPre', undefined, 'missing', { tool: 'Uninstrumented' });
@@ -208,7 +279,7 @@ describe('shell hook attribution', () => {
     const gate = new Promise<void>(resolve => { finish = resolve; });
     const preparing = vi.fn(async () => { await gate; return undefined; });
     const f = fixture(undefined, preparing, { currentTurn: () => turn });
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     const pre = f.service.pre(a, 'slow-pre', 'Bash', { turnId: 'old' });
     await vi.waitFor(() => expect(preparing).toHaveBeenCalled());
     f.service.endTurn(a);
@@ -224,9 +295,9 @@ describe('shell hook attribution', () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const f = fixture(() => gate);
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'queued', tool);
-    f.write('/workspace/queued.ts', 'candidate');
+    f.write(path.resolve('/workspace/queued.ts'), 'candidate');
     f.service.endTurn(a);
     expect(f.report.mock.calls.map(([, reason]) => reason)).toContain('unmatchedTool');
     release();
@@ -238,36 +309,36 @@ describe('shell hook attribution', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let reads = 0;
     const f = fixture(() => ++reads === 1 ? gate : Promise.resolve());
-    const a = await f.service.register('A', '/workspace');
+    const a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'lookup', 'mcp__fixture__fail_lookup');
-    f.write('/workspace/during-lookup.ts', 'ambiguous');
+    f.write(path.resolve('/workspace/during-lookup.ts'), 'ambiguous');
     const next = f.service.pre(a, 'next-shell', 'Bash');
     await Promise.resolve();
     const completed = f.service.post(a, 'lookup');
     release();
     await next;
-    f.write('/workspace/next.ts', 'owned');
+    f.write(path.resolve('/workspace/next.ts'), 'owned');
     await f.service.post(a, 'next-shell');
     await completed;
-    expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/next.ts']);
+    expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/next.ts')]);
     await f.service.release(a);
   });
 
   it('drains a terminal MCP window before the next shell pre-hook, retaining real overlap', async () => {
-    const f = fixture(), a = await f.service.register('A', '/workspace');
+    const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'lookup', 'mcp__fixture__fail_lookup');
     await f.service.pre(a, 'overlapping-shell', 'Bash');
-    f.write('/workspace/overlap.ts', 'ambiguous');
+    f.write(path.resolve('/workspace/overlap.ts'), 'ambiguous');
     await f.service.post(a, 'overlapping-shell');
     // The protocol receives completion but cannot await it before the next hook.
     const completed = f.service.completed(a, 'lookup');
     const duplicate = f.service.completed(a, 'lookup');
     await f.service.pre(a, 'next-shell', 'Bash');
-    f.write('/workspace/next.ts', 'owned');
+    f.write(path.resolve('/workspace/next.ts'), 'owned');
     await f.service.post(a, 'next-shell');
     await Promise.all([completed, duplicate]);
     expect(f.persist.mock.calls.map(([e]) => [e.filePath, e.toolUseId])).toEqual([
-      ['/workspace/next.ts', 'next-shell'],
+      [path.resolve('/workspace/next.ts'), 'next-shell'],
     ]);
     expect(f.service.getStats().ambiguous).toBe(1);
     expect(f.report.mock.calls.map(([, r]) => r)).not.toContain('missingPre');
@@ -276,35 +347,35 @@ describe('shell hook attribution', () => {
 
   it('records sequential owners without using a dirty Git baseline or inventing a diff', async () => {
     const f = fixture(),
-      a = await f.service.register('A', '/workspace'),
-      b = await f.service.register('B', '/workspace');
-    f.write('/workspace/shared.ts', 'pre-dirty');
+      a = await f.service.register('A', path.resolve('/workspace')),
+      b = await f.service.register('B', path.resolve('/workspace'));
+    f.write(path.resolve('/workspace/shared.ts'), 'pre-dirty');
     await f.service.flush();
     await f.service.pre(a, 'read', 'Bash');
-    f.event('/workspace/shared.ts');
+    f.event(path.resolve('/workspace/shared.ts'));
     await f.service.post(a, 'read');
     expect(f.persist).not.toHaveBeenCalled();
     await f.service.pre(a, 'one', 'Bash');
-    f.write('/workspace/shared.ts', 'A');
+    f.write(path.resolve('/workspace/shared.ts'), 'A');
     await f.service.post(a, 'one');
     await f.service.pre(b, 'same-content-rewrite', 'Bash');
-    f.write('/workspace/shared.ts', 'A');
+    f.write(path.resolve('/workspace/shared.ts'), 'A');
     await f.service.post(b, 'same-content-rewrite');
     await f.service.pre(b, 'two', 'Bash');
-    f.write('/workspace/shared.ts', 'B');
+    f.write(path.resolve('/workspace/shared.ts'), 'B');
     await f.service.post(b, 'two');
     expect(f.persist.mock.calls.map(([e]) => e)).toEqual([
       expect.objectContaining({
         sessionId: 'A',
         toolUseId: 'one',
         source: 'shell-hook-inferred',
-        filePath: '/workspace/shared.ts',
+        filePath: path.resolve('/workspace/shared.ts'),
       }),
       expect.objectContaining({
         sessionId: 'B',
         toolUseId: 'two',
         source: 'shell-hook-inferred',
-        filePath: '/workspace/shared.ts',
+        filePath: path.resolve('/workspace/shared.ts'),
       }),
     ]);
     await f.service.release(a);
@@ -314,39 +385,39 @@ describe('shell hook attribution', () => {
   });
   it('captures ambiguity at event arrival and suppresses known saves and structured tools', async () => {
     const f = fixture(),
-      a = await f.service.register('A', '/workspace'),
-      b = await f.service.register('B', '/workspace');
+      a = await f.service.register('A', path.resolve('/workspace')),
+      b = await f.service.register('B', path.resolve('/workspace'));
     await f.service.pre(a, 'reader', 'Bash');
     await f.service.pre(b, 'writer', 'Bash');
-    f.write('/workspace/b.ts', 'B');
+    f.write(path.resolve('/workspace/b.ts'), 'B');
     await f.service.post(b, 'writer');
     await f.service.post(a, 'reader');
     expect(f.persist).not.toHaveBeenCalled();
     expect(f.service.getStats().ambiguous).toBe(1);
     await f.service.pre(a, 'shell', 'Bash');
-    f.known.set('/workspace/edit.ts', 'editor');
-    f.write('/workspace/edit.ts', 'editor');
+    f.known.set(path.resolve('/workspace/edit.ts'), 'editor');
+    f.write(path.resolve('/workspace/edit.ts'), 'editor');
     await f.service.flush();
     expect(f.persist).not.toHaveBeenCalled();
-    f.write('/workspace/edit.ts', 'agent-after-save');
+    f.write(path.resolve('/workspace/edit.ts'), 'agent-after-save');
     await f.service.flush();
     expect(f.persist).toHaveBeenCalledTimes(1);
     await f.service.pre(b, 'patch', 'apply_patch');
-    f.write('/workspace/patch.ts', 'patch');
+    f.write(path.resolve('/workspace/patch.ts'), 'patch');
     await f.service.post(b, 'patch');
     await f.service.post(a, 'shell');
     expect(f.persist).toHaveBeenCalledTimes(1);
   });
   it('ignores released generations and never credits outside-workspace paths', async () => {
     const f = fixture(),
-      a = await f.service.register('A', '/workspace');
+      a = await f.service.register('A', path.resolve('/workspace'));
     await f.service.pre(a, 'old', 'Bash');
     await f.service.release(a);
     await f.service.pre(a, 'late', 'Bash');
-    f.write('/workspace/late.ts', 'late');
+    f.write(path.resolve('/workspace/late.ts'), 'late');
     await f.service.flush();
     expect(f.persist).not.toHaveBeenCalled();
-    const b = await f.service.register('B', '/workspace');
+    const b = await f.service.register('B', path.resolve('/workspace'));
     await f.service.pre(b, 'new', 'Bash');
     f.write('/workspace-other/file.ts', 'outside');
     await f.service.post(b, 'new');
@@ -356,17 +427,17 @@ describe('shell hook attribution', () => {
 
 it('abstains after registry overflow until turn cleanup and ignores events between turns', async () => {
   const f = fixture(),
-    a = await f.service.register('A', '/workspace');
+    a = await f.service.register('A', path.resolve('/workspace'));
   for (let i = 0; i < 257; i++) await f.service.pre(a, String(i), 'Bash');
-  f.write('/workspace/overflow.ts', 'dropped');
+  f.write(path.resolve('/workspace/overflow.ts'), 'dropped');
   await f.service.flush();
   expect(f.persist).not.toHaveBeenCalled();
   f.service.endTurn(a);
-  f.write('/workspace/late.ts', 'late');
+  f.write(path.resolve('/workspace/late.ts'), 'late');
   await f.service.flush();
   expect(f.persist).not.toHaveBeenCalled();
   await f.service.pre(a, 'next', 'Bash');
-  f.write('/workspace/next.ts', 'next');
+  f.write(path.resolve('/workspace/next.ts'), 'next');
   await f.service.post(a, 'next');
   expect(f.persist).toHaveBeenCalledTimes(1);
   await f.service.release(a);
@@ -374,11 +445,11 @@ it('abstains after registry overflow until turn cleanup and ignores events betwe
 
 it('keeps an overlapping event ambiguous when one candidate exits before the queued read', async () => {
   const f = fixture(),
-    a = await f.service.register('A', '/workspace'),
-    b = await f.service.register('B', '/workspace');
+    a = await f.service.register('A', path.resolve('/workspace')),
+    b = await f.service.register('B', path.resolve('/workspace'));
   await f.service.pre(a, 'one', 'Bash');
   await f.service.pre(b, 'two', 'Bash');
-  f.write('/workspace/mixed.ts', 'B');
+  f.write(path.resolve('/workspace/mixed.ts'), 'B');
   await f.service.release(b);
   await f.service.flush();
   expect(f.persist).not.toHaveBeenCalled();
@@ -387,43 +458,43 @@ it('keeps an overlapping event ambiguous when one candidate exits before the que
 
 
 it('reports lost pre-hooks and rejects delayed pre-hooks after terminal cleanup', async () => {
-  const f = fixture(), a = await f.service.register('A', '/workspace');
+  const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
   f.service.started(a, 'no-hook', 'shell');
-  f.write('/workspace/missed.ts', 'unknown');
+  f.write(path.resolve('/workspace/missed.ts'), 'unknown');
   await f.service.completed(a, 'no-hook');
   await f.service.pre(a, 'no-hook', 'Bash');
-  f.write('/workspace/late.ts', 'unknown');
+  f.write(path.resolve('/workspace/late.ts'), 'unknown');
   await f.service.flush();
   expect(f.persist).not.toHaveBeenCalled();
   expect(f.report.mock.calls.map(([, reason]) => reason)).toEqual(expect.arrayContaining(['missingPre', 'staleEvent']));
   await f.service.pre(a, 'good', 'Bash');
-  f.write('/workspace/good.ts', 'owned');
+  f.write(path.resolve('/workspace/good.ts'), 'owned');
   await f.service.post(a, 'good');
-  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/good.ts']);
+  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/good.ts')]);
   await f.service.release(a);
 });
 
 it('retries original evidence and reports quota or exhausted saves without recording success', async () => {
-  const f = fixture(), a = await f.service.register('A', '/workspace');
+  const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
   f.persist.mockRejectedValueOnce(Error('busy'));
   await f.service.pre(a, 'first', 'Bash');
-  f.write('/workspace/retried.ts', 'A');
+  f.write(path.resolve('/workspace/retried.ts'), 'A');
   await f.service.completed(a, 'first');
   expect(f.persist).toHaveBeenCalledTimes(2);
   expect(f.persist.mock.calls[0][0]).toEqual(f.persist.mock.calls[1][0]);
   f.persist.mockResolvedValue('throttled');
   await f.service.pre(a, 'second', 'Bash');
-  f.write('/workspace/dropped.ts', 'B');
+  f.write(path.resolve('/workspace/dropped.ts'), 'B');
   await f.service.completed(a, 'second');
   expect(f.report.mock.calls.map(([, r]) => r)).toContain('throttled');
   f.persist.mockResolvedValue('quota');
   await f.service.pre(a, 'third', 'Bash');
-  f.write('/workspace/quota.ts', 'C');
+  f.write(path.resolve('/workspace/quota.ts'), 'C');
   await f.service.completed(a, 'third');
   expect(f.report.mock.calls.map(([, r]) => r)).toContain('quota');
   f.persist.mockResolvedValue('persisted');
   await f.service.pre(a, 'fourth', 'Bash');
-  f.write('/workspace/dropped.ts', 'D');
+  f.write(path.resolve('/workspace/dropped.ts'), 'D');
   await f.service.completed(a, 'fourth');
   expect(f.persist.mock.calls.at(-1)?.[0].toolUseId).toBe('fourth');
   await f.service.release(a);
@@ -432,9 +503,9 @@ it('retries original evidence and reports quota or exhausted saves without recor
 it('bounds commit drains and preserves uncertainty when both completion signals disappear', async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const f = fixture(() => gate), a = await f.service.register('A', '/workspace');
+  const f = fixture(() => gate), a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'stuck', 'Bash');
-  f.write('/workspace/queued.ts', 'A');
+  f.write(path.resolve('/workspace/queued.ts'), 'A');
   expect(await f.service.drain(['A'], 5)).toBe(false);
   expect(f.report.mock.calls.map(([, r]) => r)).toContain('drainTimeout');
   f.service.endTurn(a);
@@ -450,32 +521,32 @@ it('abstains for one command when the pre-hook drain times out, not for the rest
   const gate = new Promise<void>(resolve => { release = resolve; });
   let gated = true;
   const f = fixture(() => gated ? gate : Promise.resolve(), undefined, { preDrainMs: 5 });
-  const a = await f.service.register('A', '/workspace');
+  const a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'big-build', 'Bash');
-  f.write('/workspace/slow-hash.ts', 'A');
+  f.write(path.resolve('/workspace/slow-hash.ts'), 'A');
   await f.service.pre(a, 'during-backlog', 'Bash');
   expect(f.report.mock.calls.map(([, r]) => r)).toContain('drainTimeout');
   gated = false;
-  f.write('/workspace/unattributable.ts', 'B');
+  f.write(path.resolve('/workspace/unattributable.ts'), 'B');
   release();
   await f.service.post(a, 'during-backlog');
   await f.service.post(a, 'big-build');
   await f.service.pre(a, 'after-backlog', 'Bash');
-  f.write('/workspace/recovered.ts', 'C');
+  f.write(path.resolve('/workspace/recovered.ts'), 'C');
   await f.service.post(a, 'after-backlog');
   expect(f.persist.mock.calls.map(([e]) => [e.filePath, e.toolUseId])).toEqual([
-    ['/workspace/slow-hash.ts', 'big-build'],
-    ['/workspace/recovered.ts', 'after-backlog'],
+    [path.resolve('/workspace/slow-hash.ts'), 'big-build'],
+    [path.resolve('/workspace/recovered.ts'), 'after-backlog'],
   ]);
   await f.service.release(a);
 });
 
 it('does not assign a session without tool tracking’s edits to a long-running test command', async () => {
   const f = fixture(undefined, undefined, { otherSessions: () => ['cli-session'] });
-  const a = await f.service.register('A', '/workspace');
+  const a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'shell', 'Bash');
   f.advance(100_000);
-  f.write('/workspace/shared.ts', 'written by the concurrent session');
+  f.write(path.resolve('/workspace/shared.ts'), 'written by the concurrent session');
   await f.service.post(a, 'shell');
   expect(f.persist).not.toHaveBeenCalled();
   expect(f.report.mock.calls.map(([, r]) => r)).toEqual(['unreportedSession']);
@@ -488,9 +559,9 @@ it('retains uncertainty after an uninstrumented writer finishes before reconcili
   let finishRead!: () => void;
   const reading = new Promise<void>(resolve => { finishRead = resolve; });
   const f = fixture(() => reading, undefined, { otherSessions: () => others });
-  const a = await f.service.register('test-runner', '/workspace');
+  const a = await f.service.register('test-runner', path.resolve('/workspace'));
   await f.service.pre(a, 'test', 'Bash');
-  f.write('/workspace/other-session.ts', 'edit');
+  f.write(path.resolve('/workspace/other-session.ts'), 'edit');
   others = [];
   finishRead();
   await f.service.post(a, 'test');
@@ -505,25 +576,25 @@ it('judges a concurrent hook-reporting session by its tool windows, not its acti
     otherSessions: (_w, file, at) => ['claude', ...activity.activeSessions(file, at)],
     otherWriter: (id, file, at) => activity.writerEvidence(id, file, at),
   });
-  activity.declare('claude', path.resolve('/workspace'));
-  const codex = await f.service.register('codex', path.resolve('/workspace'));
+  activity.declare('claude', path.resolve(path.resolve('/workspace')));
+  const codex = await f.service.register('codex', path.resolve(path.resolve('/workspace')));
   await f.service.pre(codex, 'test', 'Bash');
   // Claude's Edit owns its file; the long Codex command must not claim it.
-  activity.started('claude', 'edit', 'Edit', { file_path: path.resolve('/workspace/edited.ts') });
-  f.write(path.resolve('/workspace/edited.ts'), 'claude edit');
+  activity.started('claude', 'edit', 'Edit', { file_path: path.resolve(path.resolve('/workspace/edited.ts')) });
+  f.write(path.resolve(path.resolve('/workspace/edited.ts')), 'claude edit');
   activity.finished('claude', 'edit');
   await f.service.flush();
   // A Claude shell command could have written anything: withhold.
   f.advance(10_000);
   activity.started('claude', 'gen', 'Bash', { command: 'node gen.js' });
-  f.write(path.resolve('/workspace/generated.ts'), 'claude or codex');
+  f.write(path.resolve(path.resolve('/workspace/generated.ts')), 'claude or codex');
   activity.finished('claude', 'gen');
   await f.service.flush();
   // Claude is mid-turn but between tools: the change is Codex's.
   f.advance(10_000);
-  f.write(path.resolve('/workspace/codex.ts'), 'codex');
+  f.write(path.resolve(path.resolve('/workspace/codex.ts')), 'codex');
   await f.service.post(codex, 'test');
-  expect(f.persist.mock.calls.map(([e]) => [e.sessionId, e.filePath])).toEqual([['codex', path.resolve('/workspace/codex.ts')]]);
+  expect(f.persist.mock.calls.map(([e]) => [e.sessionId, e.filePath])).toEqual([['codex', path.resolve(path.resolve('/workspace/codex.ts'))]]);
   expect(f.report.mock.calls.map(([, r]) => r)).toEqual(['competingOwners']);
   await f.service.release(codex);
 });
@@ -536,14 +607,14 @@ it('lets an in-flight completion persist and clear its tool marker before releas
     defer: async () => true,
     finish: async (candidates: Array<{ filePath: string }>) => { await gate; return new Map(candidates.map(c => [c.filePath, 'edit'])); },
   }), { activity });
-  const a = await f.service.register('A', '/workspace');
+  const a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'last-command', 'Bash');
-  f.write('/workspace/deferred.ts', 'A');
+  f.write(path.resolve('/workspace/deferred.ts'), 'A');
   const completing = f.service.post(a, 'last-command');
   const released = f.service.release(a);
   setTimeout(finish, 5);
   await Promise.all([completing, released]);
-  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/deferred.ts']);
+  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/deferred.ts')]);
   expect(activity.mock.calls.at(-1)).toEqual([a, 'last-command', false]);
 });
 
@@ -553,10 +624,10 @@ it.each(['drain', 'release', 'queued'] as const)('reconciles turn-end checkout e
   const activity = vi.fn(async () => {});
   const reconcile = vi.fn(async () => {
     await gate;
-    return new Map([['/workspace/edit.ts', 'edit'], ['/workspace/same.ts', 'unchanged'], ['/workspace/copy.ts', 'initialization']]);
+    return new Map([[path.resolve('/workspace/edit.ts'), 'edit'], [path.resolve('/workspace/same.ts'), 'unchanged'], [path.resolve('/workspace/copy.ts'), 'initialization']]);
   });
   const f = fixture(boundary === 'queued' ? () => gate : undefined, async () => ({ defer: async () => true, finish: reconcile }), { activity });
-  const a = await f.service.register('A', '/workspace');
+  const a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'orphan', 'Bash');
   for (const name of ['edit', 'same', 'copy']) f.write(`/workspace/${name}.ts`, name);
   if (boundary !== 'queued') await f.service.flush();
@@ -566,11 +637,11 @@ it.each(['drain', 'release', 'queued'] as const)('reconciles turn-end checkout e
   await new Promise(resolve => setTimeout(resolve, 5));
   expect(settled).toBe(false);
   expect(activity).toHaveBeenLastCalledWith(a, 'orphan', true);
-  f.write('/workspace/after-turn.ts', 'unrelated');
+  f.write(path.resolve('/workspace/after-turn.ts'), 'unrelated');
   finish();
   await done;
   expect(reconcile).toHaveBeenCalledTimes(1);
-  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/edit.ts']);
+  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/edit.ts')]);
   expect(f.report.mock.calls.map(([, reason]) => reason)).toEqual(['unmatchedTool', 'initialization']);
   expect(activity).toHaveBeenLastCalledWith(a, 'orphan', false);
   await f.service.release(a);
@@ -579,9 +650,9 @@ it.each(['drain', 'release', 'queued'] as const)('reconciles turn-end checkout e
 it('does not turn a slow quit-time drain into a coverage fault', async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const f = fixture(() => gate), a = await f.service.register('A', '/workspace');
+  const f = fixture(() => gate), a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'last', 'Bash');
-  f.write('/workspace/pending.ts', 'A');
+  f.write(path.resolve('/workspace/pending.ts'), 'A');
   // The read never resolves inside the bounded quit wait; release must still return without a fault.
   await f.service.release(a);
   expect(f.report.mock.calls.map(([, r]) => r)).not.toContain('drainTimeout');
@@ -589,50 +660,50 @@ it('does not turn a slow quit-time drain into a coverage fault', async () => {
 });
 
 it('reports watcher loss and recovers on the next turn without importing missed changes', async () => {
-  const f = fixture(), a = await f.service.register('A', '/workspace');
+  const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'before', 'Bash');
-  f.service.watcherLost('/workspace');
-  f.write('/workspace/lost.ts', 'unobserved');
+  f.service.watcherLost(path.resolve('/workspace'));
+  f.write(path.resolve('/workspace/lost.ts'), 'unobserved');
   await f.service.post(a, 'before');
   expect(f.persist).not.toHaveBeenCalled();
   expect(f.report.mock.calls.map(([, r]) => r)).toContain('watcherLoss');
   f.service.endTurn(a);
-  f.service.watcherRecovered('/workspace');
+  f.service.watcherRecovered(path.resolve('/workspace'));
   await f.service.pre(a, 'after', 'Bash');
-  f.event('/workspace/lost.ts');
-  f.write('/workspace/future.ts', 'observed');
+  f.event(path.resolve('/workspace/lost.ts'));
+  f.write(path.resolve('/workspace/future.ts'), 'observed');
   await f.service.post(a, 'after');
-  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/future.ts']);
+  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/future.ts')]);
   await f.service.release(a);
 });
 
 
 it('does not blame idle sessions or turn a watcher outage into overlap; recovers within the turn', async () => {
-  const f = fixture(), a = await f.service.register('A', '/workspace');
-  const idle = await f.service.register('idle', '/workspace');
+  const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
+  const idle = await f.service.register('idle', path.resolve('/workspace'));
   await f.service.pre(a, 'interrupted', 'Bash');
-  f.service.watcherLost('/workspace');
+  f.service.watcherLost(path.resolve('/workspace'));
   expect(f.report.mock.calls.map(([g, r]) => [g, r])).toEqual([[a, 'watcherLoss']]);
-  f.service.watcherRecovered('/workspace');
+  f.service.watcherRecovered(path.resolve('/workspace'));
   await f.service.pre(a, 'during-old-window', 'Bash');
-  f.write('/workspace/ambiguous.ts', 'unknown');
+  f.write(path.resolve('/workspace/ambiguous.ts'), 'unknown');
   await f.service.post(a, 'during-old-window');
   await f.service.post(a, 'interrupted');
   expect(f.persist).not.toHaveBeenCalled();
   expect(f.report.mock.calls.map(([, r]) => r)).not.toContain('overlap');
   await f.service.pre(a, 'fresh-boundary', 'Bash');
-  f.write('/workspace/good.ts', 'owned');
+  f.write(path.resolve('/workspace/good.ts'), 'owned');
   await f.service.post(a, 'fresh-boundary');
-  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual(['/workspace/good.ts']);
+  expect(f.persist.mock.calls.map(([e]) => e.filePath)).toEqual([path.resolve('/workspace/good.ts')]);
   await f.service.release(a);
   await f.service.release(idle);
 });
 
 it('does not convert a long-running acknowledged tool into a permanent coverage gap', async () => {
-  const f = fixture(), a = await f.service.register('A', '/workspace');
+  const f = fixture(), a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'long-build', 'Bash');
   f.advance(6 * 60_000);
-  f.write('/workspace/real-edit.ts', 'owned');
+  f.write(path.resolve('/workspace/real-edit.ts'), 'owned');
   await f.service.post(a, 'long-build');
   expect(f.report.mock.calls.map(([, r]) => r)).not.toContain('suspiciousWindow');
   expect(f.persist).toHaveBeenCalledTimes(1);
@@ -645,7 +716,7 @@ it('bounds authored links after reconciling a large checkout without charging in
     defer: async () => true,
     finish: async (candidates: Array<{filePath: string}>) => new Map(candidates.map(c => [c.filePath, 'edit'])),
   }));
-  const a = await f.service.register('A', '/workspace');
+  const a = await f.service.register('A', path.resolve('/workspace'));
   await f.service.pre(a, 'checkout-many-edits', 'Bash');
   for (let i = 0; i < 501; i++) f.write(`/workspace/file-${i}.ts`, `edit-${i}`);
   await f.service.post(a, 'checkout-many-edits');

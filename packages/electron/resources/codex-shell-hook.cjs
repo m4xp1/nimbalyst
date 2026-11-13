@@ -14,7 +14,7 @@ process.stdin.on('end', () => {
     const p = JSON.parse(input),
       url = process.env.NIMBALYST_SHELL_HOOK_URL;
     if (!url) return;
-    const req = http.request(url, { method: 'POST', timeout: 4500 }, (res) => {
+    const req = http.request(url, { method: 'POST', timeout: 30_000 }, (res) => {
       res.resume();
       res.on('end', () => process.stdout.write('{}'));
     });
