@@ -13,7 +13,7 @@ export const shellCoverageReasons = {
   competingOwners: 'Edits made while another session was running a command were not linked',
   toolOverlap: 'Overlapping tools made ownership uncertain',
   observationGap: 'Events arrived during an interrupted tracking window',
-  checkoutBaseline: 'Repository initialization could not be reconciled',
+  checkoutBaseline: 'The Git snapshot for a file command could not be captured or verified',
   initialization: 'Repository checkout files were excluded',
   // Recorded by earlier versions, which shared the link with the other session. No longer emitted.
   uninstrumented: 'Another agent session was active; links are shared, not exclusive',

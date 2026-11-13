@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Update the chat's document and selection context immediately when switching files.
+- Retain bulk shell edits while tracking finishes, recognize content changes with preserved file dates, and show the affected turn when file tracking fails.
 
 ## [0.83.0+m4xp1.2]
 

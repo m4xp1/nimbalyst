@@ -4,7 +4,9 @@ import { contentFingerprint } from '../../file/knownFileWrites';
 import type { CheckoutCandidate } from './ShellCheckoutBaseline';
 
 type Git = (cwd: string, args: string[]) => Promise<string>;
-export const SHELL_BASELINE_CAPTURE_MS = 1250;
+// Includes Git process startup and reading already-dirty files on slow volumes.
+// The native hook waits longer than this complete capture budget.
+export const SHELL_BASELINE_CAPTURE_MS = 10_000;
 
 /** Pin clean files to an immutable revision; hash only already-dirty/untracked files. */
 export async function prepareShellContentBaseline(root: string, captureGit: Git, git: Git = captureGit) {

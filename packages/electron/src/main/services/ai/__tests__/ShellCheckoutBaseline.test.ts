@@ -9,6 +9,52 @@ import { prepareShellCheckoutBaseline } from '../ShellCheckoutBaseline';
 import { SHELL_BASELINE_CAPTURE_MS } from '../ShellContentBaseline';
 import { contentFingerprint } from '../../../file/knownFileWrites';
 import { ShellTrackingCoverage } from '../ShellTrackingCoverage';
+import { assertGitSandbox, gitSandboxEnv, FIXTURE_IDENTITY_ARGS } from '../../testSupport/gitTestSandbox';
+
+it('retains a 33-file shell batch using real Git snapshots and ignores an earlier dirty file', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'nim-shell-bulk-'));
+  const root = await fs.realpath(temp);
+  const env = gitSandboxEnv(root);
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', env });
+  const files = Array.from({ length: 33 }, (_, index) => path.join(root, `document-${index}.md`));
+  const earlier = path.join(root, 'earlier.md');
+  const persist = vi.fn(async (_e: ShellFileEvidence) => 'persisted' as const);
+  let emit!: (file: string) => void;
+  const service = new ShellFileAttribution({
+    subscribe: async (_root, changed) => { emit = changed; return () => {}; },
+    prepareCheckout: prepareShellCheckoutBaseline,
+    read: async file => {
+      const [content, stat] = await Promise.all([fs.readFile(file), fs.stat(file)]);
+      return { fingerprint: contentFingerprint(content), modifiedAt: stat.mtimeMs };
+    },
+    knownWrite: () => false, otherSessions: () => [], persist, settleMs: 0,
+  });
+  let generation: string | undefined;
+  try {
+    git('init', '-q');
+    assertGitSandbox(root, root);
+    git('config', 'core.autocrlf', 'false');
+    for (const file of [...files, earlier]) await fs.writeFile(file, 'before\n');
+    git('add', '--', '.');
+    git(...FIXTURE_IDENTITY_ARGS, 'commit', '-qm', 'Artificial baseline');
+    expect(git('status', '--porcelain')).toBe('');
+    await fs.writeFile(earlier, 'changed before the session\n');
+    generation = await service.register('bulk-session', root);
+    await service.pre(generation, 'bulk-command', 'Bash');
+    for (const file of files) {
+      await fs.writeFile(file, 'changed by the command\n');
+      await fs.utimes(file, new Date(0), new Date(0));
+      emit(file);
+    }
+    await service.post(generation, 'bulk-command');
+    await service.release(generation, true);
+    expect(persist.mock.calls.map(([e]) => e.filePath).sort()).toEqual([...files].sort());
+    expect(git('status', '--porcelain', '-z').split('\0').filter(Boolean)).toHaveLength(34);
+  } finally {
+    if (generation) await service.release(generation, true);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 type GitExec = (command: string, args: readonly string[], options: ExecFileOptionsWithStringEncoding,
   callback: (error: Error | null, stdout: string, stderr: string) => void) => ReturnType<typeof execFile>;
@@ -33,7 +79,8 @@ it.each(['retry', 'exhausted', 'non-timeout'] as const)('keeps Git attempts insi
   }) as GitExec as typeof execFile);
   try {
     await expect(prepareShellCheckoutBaseline('/workspace')).rejects.toThrow(mode === 'non-timeout' ? 'permission denied' : 'timed out');
-    expect(timeouts).toEqual(mode === 'retry' ? [625, 625] : [625]);
+    const attemptBudget = SHELL_BASELINE_CAPTURE_MS / 2;
+    expect(timeouts).toEqual(mode === 'retry' ? [attemptBudget, attemptBudget] : [attemptBudget]);
     expect(timeouts.reduce((sum, timeout) => sum + timeout, 0)).toBeLessThanOrEqual(SHELL_BASELINE_CAPTURE_MS);
   } finally {
     clock.mockRestore();
@@ -57,7 +104,7 @@ it('shares one decreasing deadline across inventory, content and common-director
   }) as GitExec as typeof execFile);
   try {
     expect(await prepareShellCheckoutBaseline(root)).toBeDefined();
-    expect(timeouts).toEqual([625, 575, 525, 475, 425]);
+    expect(timeouts).toEqual([0, 1, 2, 3, 4].map(index => (SHELL_BASELINE_CAPTURE_MS - index * 100) / 2));
   } finally {
     clock.mockRestore();
     vi.mocked(execFile).mockImplementation(realExec);

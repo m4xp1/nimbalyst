@@ -103,6 +103,16 @@ jobs:
           packages/electron/src/renderer/services/__tests__/GitStatusObserver.test.ts
           packages/electron/src/renderer/utils/__tests__/gitStatus.test.ts
           packages/electron/src/renderer/components/WindowTopBar/__tests__/WindowTopBar.test.tsx
+      - name: Mandatory session file tracking and context regressions
+        run: >-
+          pnpm exec vitest run
+          packages/electron/src/main/services/ai/__tests__/ShellFileAttribution.test.ts
+          packages/electron/src/main/services/ai/__tests__/ShellCheckoutBaseline.test.ts
+          packages/electron/src/main/services/ai/__tests__/ShellTrackingCoverage.test.ts
+          packages/electron/src/main/services/ai/__tests__/codexShellTrackingHost.test.ts
+          packages/electron/src/main/services/__tests__/WorkspaceAttributionThrottle.test.ts
+          packages/electron/src/renderer/components/AgentMode/__tests__/ShellTrackingNotice.test.tsx
+          packages/runtime/src/ai/server/protocols/__tests__/shellTracking.test.ts
       - name: Build isolated Electron application
         run: pnpm --filter @nimbalyst/electron run build
       - name: Build all shipped extensions for app checks
@@ -112,7 +122,7 @@ jobs:
       - name: Mandatory built-app search, Git and file tracker
         run: |
           $env:NIMBALYST_E2E_MAIN_PATH = (Resolve-Path 'packages/electron/out/main/index.js').Path
-          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts')
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts', 'sidebar-document-context.spec.ts', 'session-edit-batch.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Built application regression failed: $spec" }
