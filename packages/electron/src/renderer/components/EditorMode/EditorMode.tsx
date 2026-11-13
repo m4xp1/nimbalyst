@@ -1,5 +1,5 @@
 import { usePendingFileOpen } from '../../hooks/usePendingFileOpen';
-import React, { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore, useImperativeHandle, forwardRef } from 'react';
 import { useSetAtom, useAtomValue, useAtom } from 'jotai';
 import type { ConfigTheme } from '@nimbalyst/runtime';
 import { asTeamJwt } from '@nimbalyst/runtime/auth/jwtScopes';
@@ -403,8 +403,8 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
   }, []); // No dependencies - uses refs for all mutable state
 
 
-  // Get current file info imperatively from tabsActions
-  // Note: This doesn't subscribe to changes - TabContent will subscribe and pass data down
+  // Subscribe only to file identity. Editor content and dirty-state updates
+  // must not rerender the mode, while the sidebar needs each tab switch.
   const getCurrentFileInfo = useCallback(() => {
     const store = tabsActions.getSnapshot();
     if (!store.activeTabId) return { filePath: null, fileName: null };
@@ -415,10 +415,8 @@ const EditorMode = forwardRef<EditorModeRef, EditorModeProps>(function EditorMod
     };
   }, [tabsActions]);
 
-  // For effects that need current file path, we read it imperatively
-  const currentFileInfo = getCurrentFileInfo();
-  const currentFilePath = currentFileInfo.filePath;
-  const currentFileName = currentFileInfo.fileName;
+  const currentFilePath = useSyncExternalStore(tabsActions.subscribe, () => getCurrentFileInfo().filePath);
+  const currentFileName = useSyncExternalStore(tabsActions.subscribe, () => getCurrentFileInfo().fileName);
 
   // Expose current document path and workspace path to window for image paste/rendering
   // __workspacePath is read by EmbedFrame, the document-link plugin and the
