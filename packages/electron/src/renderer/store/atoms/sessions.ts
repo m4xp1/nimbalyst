@@ -120,6 +120,9 @@ export const sessionUnreadAtom = atomFamily((_sessionId: string) =>
   atom(false)
 );
 
+/** Local authoritative usage updates must win over older asynchronous DB reads. */
+export const sessionTokenUsageRevisionAtom = atomFamily((_sessionId: string) => atom<{ revision: number; usage: SessionData['tokenUsage'] }>({ revision: 0, usage: undefined }));
+
 /**
  * Per-session "last activity" timestamp.
  *
@@ -717,6 +720,7 @@ export const updateSessionStoreAtom = atom(
   null,
   (get, set, update: { sessionId: string; updates: SessionUpdateFields }) => {
     const { sessionId, updates } = update;
+    if (Object.hasOwn(updates, 'tokenUsage')) set(sessionTokenUsageRevisionAtom(sessionId), value => ({ revision: value.revision + 1, usage: updates.tokenUsage }));
 
     // 1. Update full session data if loaded
     // Note: Derived atoms (sessionModeAtom, sessionModelAtom, sessionArchivedAtom) automatically sync
@@ -1853,6 +1857,7 @@ export const loadSessionDataAtom = atom(
     set(sessionLoadErrorAtom(sessionId), null);
     const draftWasHydrated = get(sessionDraftHydratedAtom(sessionId));
     const draftModifiedAtStart = get(sessionDraftLocalModifiedAtAtom(sessionId));
+    const usageRevision = get(sessionTokenUsageRevisionAtom(sessionId)).revision;
 
     const messagesAtStart = captureTranscriptMessages(get(sessionStoreAtom(sessionId))?.messages ?? []);
     const loadPromise = (async () => {
@@ -1861,6 +1866,9 @@ export const loadSessionDataAtom = atom(
       if (get(sessionWorkspaceGenerationsAtom).get(workspacePath) !== generation ||
           (get(closedSessionWorkspacesAtom).has(workspacePath) && canReleaseSessionData(get, sessionId))) return null;
       if (sessionData) {
+        if (get(sessionTokenUsageRevisionAtom(sessionId)).revision !== usageRevision) {
+          sessionData.tokenUsage = get(sessionTokenUsageRevisionAtom(sessionId)).usage;
+        }
         // Validate model field (for debugging)
         const model = sessionData.model;
         if (!model || !model.includes(':')) {
@@ -2022,6 +2030,7 @@ export const reloadSessionDataAtom = atom(
 
     const currentVersion = (existingPending?.version || 0) + 1;
     const thisReload = { version: currentVersion, aborted: false, workspacePath };
+    const usageRevision = get(sessionTokenUsageRevisionAtom(sessionId)).revision;
     pendingReloads.set(sessionId, thisReload);
     const messagesAtStart = captureTranscriptMessages(get(sessionStoreAtom(sessionId))?.messages ?? []);
 
@@ -2041,6 +2050,7 @@ export const reloadSessionDataAtom = atom(
           current?.messages ?? [], sessionData.messages ?? [], { startedWith: messagesAtStart },
         );
         if (current) {
+          if (get(sessionTokenUsageRevisionAtom(sessionId)).revision !== usageRevision) sessionData.tokenUsage = get(sessionTokenUsageRevisionAtom(sessionId)).usage;
           // Preserve read state
           const preservedTimestamp = current.lastReadMessageTimestamp || 0;
           const dbTimestamp = sessionData.lastReadMessageTimestamp || 0;
@@ -2088,6 +2098,7 @@ export const cleanupSessionAtom = atom(null, (get, set, sessionId: string) => {
   sessionArchivedAtom.remove(sessionId);
   sessionProcessingAtom.remove(sessionId);
   sessionUnreadAtom.remove(sessionId);
+  sessionTokenUsageRevisionAtom.remove(sessionId);
   sessionPendingPromptAtom.remove(sessionId);
   sessionHasPendingInteractivePromptAtom.remove(sessionId);
   sessionLastReadAtom.remove(sessionId);
@@ -2140,8 +2151,6 @@ export const anyPendingInteractivePromptAtom = atom((get) => {
  * Persists to database metadata for cross-device sync.
  */
 export const markSessionReadAtom = atom(null, (get, set, sessionId: string) => {
-  const wasUnread = get(sessionUnreadAtom(sessionId));
-
   const now = Date.now();
   set(sessionUnreadAtom(sessionId), false);
   set(sessionLastReadAtom(sessionId), now);
@@ -2296,7 +2305,9 @@ export const refreshSessionListAtom = atom(
           registry.set(s.id, sessionListMetadata(s, workspacePath));
 
           // Initialize unread state from database metadata (for cross-device sync)
-          if (s.hasUnread) {
+          // A list reply can predate a local read or its debounced persistence.
+          // Only newer activity may restore the dot cleared in the open chat.
+          if (s.hasUnread && s.updatedAt > get(sessionLastReadAtom(s.id))) {
             set(sessionUnreadAtom(s.id), true);
           }
           // Rehydrate the pending-interactive-prompt indicator from the

@@ -9,6 +9,7 @@
 
 import { store } from '../index';
 import { sessionBackgroundTasksAtom, type BackgroundTaskSummary } from '../atoms/sessionBackgroundTasks';
+import { applyChatAnnotationSnapshot } from '../../components/UnifiedAI/chatAnnotationDraft';
 import {
   refreshSessionListAtom,
   sessionListWorkspaceAtom,
@@ -61,6 +62,10 @@ export function initSessionListListeners(): () => void {
   // Handle targeted session metadata updates (e.g., phase/tags from MCP tools)
   // Updates the registry entry directly without a full refresh
   const handleSessionUpdated = (sessionId: string, updates: Record<string, unknown>) => {
+    const metadata = updates.metadata as Record<string, unknown> | undefined;
+    if (metadata && Object.hasOwn(metadata, 'draftAnnotations')) {
+      applyChatAnnotationSnapshot(sessionId, metadata.draftAnnotations);
+    }
     // console.log('[sessionListListeners] session-updated received:', sessionId, updates);
     // Live-only drain state; it is not a registry field, so a list refresh cannot drop it.
     if (Array.isArray(updates.backgroundTasks)) {

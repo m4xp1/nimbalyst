@@ -36,6 +36,23 @@ for (const database of ['sqlite', 'pglite'] as const) test(`Codex usage follows 
     const indicator = page.getByRole('button', { name: 'Codex Usage', exact: true });
     await publish(snapshot(100)); await expect(indicator).toHaveText('100%'); await indicator.click();
     const popover = page.getByTestId('codex-usage-popover'); await expect(popover).toBeVisible();
+    await expect(popover.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+    const publishWorkspace = (data: any) => app!.evaluate(({ BrowserWindow }, payload) => {
+      for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send('codex-workspace:changed', payload);
+    }, data);
+    const workspaceState = { independent: true, authenticated: true, canSwitch: true, email: 'synthetic@example.invalid', selectedId: 'work', signingIn: false,
+      choices: [{ id: 'work', name: 'Work' }, { id: 'personal', name: 'Personal' }] };
+    await publishWorkspace(workspaceState);
+    await expect(popover.getByRole('link', { name: 'synthetic@example.invalid' })).toBeVisible();
+    await expect(popover.getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue('work');
+    await popover.getByRole('button', { name: 'Close', exact: true }).click();
+    await indicator.click();
+    await expect(popover.getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue('work');
+    await publishWorkspace({ ...workspaceState, independent: false, canSwitch: false, selectedId: 'personal' });
+    await expect(popover.getByRole('combobox', { name: 'Workspace', exact: true })).toBeDisabled();
+    await expect(popover.getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue('personal');
+    await publishWorkspace({ ...workspaceState, choices: [workspaceState.choices[0]] });
+    await expect(popover.getByRole('combobox', { name: 'Workspace', exact: true })).toHaveCount(0);
     // Manual refresh is deliberately denied in automated launches.
     await popover.getByRole('button', { name: 'Refresh usage' }).click();
     await expect(popover).toContainText('Codex account access is disabled');

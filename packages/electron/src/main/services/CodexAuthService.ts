@@ -56,6 +56,7 @@ export interface CodexLoginStartedChatGpt {
 
 interface CodexLoginSession {
   sessionId: string;
+  email?: string | null;
   userId?: unknown;
   isActive: boolean;
   selectedWorkspaceAccountId: string | null;
@@ -70,7 +71,10 @@ interface CodexLoginSessions {
 const independentWorkspaceSetting = 'codexIndependentWorkspace';
 
 function activeLogin(accounts: CodexLoginSessions): CodexLoginSession | undefined {
-  return accounts.sessions?.find(session => session.isActive && session.sessionId === accounts.activeSessionId);
+  const active = accounts.sessions?.filter(session => session.isActive) ?? [];
+  return accounts.activeSessionId
+    ? active.find(session => session.sessionId === accounts.activeSessionId)
+    : active.length === 1 ? active[0] : undefined;
 }
 
 class CodexAuthServiceImpl {
@@ -88,6 +92,12 @@ class CodexAuthServiceImpl {
   private independentConnection: Promise<{ client: JsonRpcClient; child: ChildProcessWithoutNullStreams }> | undefined;
   private independentLoginId: string | null = null;
   private independentLoginError: string | undefined;
+  private loginTimer: ReturnType<typeof setTimeout> | undefined;
+  private earlyLoginNotifications: AccountLoginCompletedNotification[] = [];
+  private workspaceSnapshot: CodexWorkspaceStatus | null = null;
+  private workspaceRead: Promise<CodexWorkspaceStatus> | null = null;
+  private workspaceMetadataAt = 0;
+  private publishedWorkspace = '';
 
   private independentEnabled(): boolean {
     return this.independentWorkspaceId() !== undefined;
@@ -108,14 +118,30 @@ class CodexAuthServiceImpl {
     const pending = this.openConnection('nimbalyst-workspace-auth', this.independentHome());
     this.independentConnection = pending;
     const clear = () => {
-      if (this.independentConnection === pending) this.independentConnection = undefined;
+      if (this.independentConnection !== pending) return;
+      this.independentConnection = undefined;
+      if (this.independentLoginId || this.independentLoginStarting) {
+        this.clearLogin();
+        this.independentLoginError = 'ChatGPT sign-in was interrupted. Select your account to try again.';
+        this.publishWorkspaceState();
+      }
     };
     void pending.then(({ client, child }) => {
       child.on('exit', clear);
       client.onNotification((method, params) => {
-        if (this.independentConnection !== pending || method !== 'account/login/completed') return;
+        if (this.independentConnection !== pending) return;
+        if (method === 'account/updated') {
+          this.workspaceMetadataAt = 0;
+          void this.getWorkspaceStatus(true).catch(() => {});
+          return;
+        }
+        if (method !== 'account/login/completed') return;
         const notification = params as AccountLoginCompletedNotification;
-        if (!this.independentLoginId || notification.loginId !== this.independentLoginId) return;
+        if (!this.independentLoginId && (this.independentLoginStarting || this.workspaceSwitching)) {
+          this.earlyLoginNotifications.push(notification);
+          return;
+        }
+        if (!this.independentLoginId || (notification.loginId && notification.loginId !== this.independentLoginId)) return;
         void this.completeIndependentLogin(client, notification);
       });
     }, clear);
@@ -123,25 +149,33 @@ class CodexAuthServiceImpl {
   }
 
   private async completeIndependentLogin(client: JsonRpcClient, notification: AccountLoginCompletedNotification): Promise<void> {
-    let accountId: string | null | undefined;
+    const loginId = this.independentLoginId;
+    if (!loginId) return;
+    let account: CodexLoginSession | undefined;
     try {
       if (notification.success) {
-        accountId = activeLogin(await client.request<CodexLoginSessions>(
-          'accountSession/list', { refreshWorkspaceMetadata: false },
-        ))?.selectedWorkspaceAccountId;
+        let response: CodexLoginSessions;
+        try {
+          response = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: true }, 15_000);
+        } catch {
+          response = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }, 15_000);
+        }
+        account = activeLogin(response);
       }
     } catch {
-      accountId = null;
+      account = undefined;
     }
-    if (notification.loginId !== this.independentLoginId) return;
-    this.independentLoginId = null;
-    if (accountId) {
-      setAppSetting(independentWorkspaceSetting, accountId);
+    if (loginId !== this.independentLoginId) return;
+    this.clearLogin();
+    if (account?.selectedWorkspaceAccountId) {
+      setAppSetting(independentWorkspaceSetting, account.selectedWorkspaceAccountId);
+      this.independentLoginError = undefined;
+      this.rememberWorkspace(account);
       this.workspaceChanged();
       this.broadcast('openai-codex:auth-login-completed', notification);
     } else {
       this.independentLoginError = 'ChatGPT sign-in did not complete. Try again.';
-      this.broadcast('codex-workspace:changed', {});
+      this.publishWorkspaceState();
       this.broadcast('openai-codex:auth-login-completed', {
         loginId: notification.loginId, success: false, error: this.independentLoginError,
       });
@@ -153,42 +187,109 @@ class CodexAuthServiceImpl {
     this.cachedStatus = null;
     ModelRegistry.clearCache('openai-codex');
     for (const listener of this.accountUpdatedListeners) listener();
-    this.broadcast('codex-workspace:changed', {});
+    this.publishWorkspaceState(true);
   }
 
-  async getWorkspaceStatus(refreshWorkspaceMetadata = false): Promise<CodexWorkspaceStatus> {
-    const expected = this.independentWorkspaceId();
-    const independent = Boolean(expected);
-    const status = {
-      independent,
+  private rememberWorkspace(account: CodexLoginSession | undefined): CodexWorkspaceStatus {
+    const names = new Map<string, number>();
+    const choices = [...new Map((account?.workspaces ?? []).map(workspace => [workspace.accountId, workspace])).values()].map(workspace => ({
+        id: workspace.accountId,
+        name: workspace.name?.trim() || (workspace.kind === 'personal' ? 'Personal' : 'Workspace'),
+    }));
+    for (const choice of choices) names.set(choice.name, (names.get(choice.name) ?? 0) + 1);
+    for (const choice of choices) {
+      if ((names.get(choice.name) ?? 0) > 1) choice.name += ' (' + choice.id.slice(-6) + ')';
+    }
+    this.workspaceSnapshot = {
+      independent: this.independentEnabled(), authenticated: Boolean(account?.selectedWorkspaceAccountId),
+      email: account?.email || null, selectedId: account?.selectedWorkspaceAccountId ?? null,
+      selectedName: choices.find(choice => choice.id === account?.selectedWorkspaceAccountId)?.name ?? null,
+      choices, signingIn: Boolean(this.independentLoginId),
+      canSwitch: this.independentEnabled(), error: this.independentLoginError,
+    };
+    this.publishWorkspaceState();
+    return this.workspaceSnapshot;
+  }
+
+  private publishWorkspaceState(force = false): void {
+    const snapshot: CodexWorkspaceStatus = {
+      ...this.workspaceSnapshot,
+      independent: this.independentEnabled(),
+      selectedId: this.workspaceSnapshot?.selectedId ?? null,
+      choices: this.workspaceSnapshot?.choices ?? [],
       signingIn: Boolean(this.independentLoginId),
       error: this.independentLoginError,
     };
-    if (!independent) return { ...status, selectedId: null, choices: [] };
-    const { client } = await this.independentClient();
-    const account = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata }));
-    return {
-      ...status,
-      selectedId: account?.selectedWorkspaceAccountId === expected ? expected ?? null : null,
-      choices: (account?.workspaces ?? []).map(workspace => ({
-        id: workspace.accountId,
-        name: workspace.name || (workspace.kind === 'personal' ? 'Personal' : 'ChatGPT workspace'),
-      })),
-    };
+    this.workspaceSnapshot = snapshot;
+    const serialized = JSON.stringify(snapshot);
+    if (force || serialized !== this.publishedWorkspace) {
+      this.publishedWorkspace = serialized;
+      this.broadcast('codex-workspace:changed', snapshot);
+    }
+  }
+
+  async getWorkspaceStatus(refreshWorkspaceMetadata = false): Promise<CodexWorkspaceStatus> {
+    if (!codexAccessAllowed()) return { independent: false, authenticated: false, selectedId: null, choices: [], signingIn: false };
+    const refresh = refreshWorkspaceMetadata && Date.now() - this.workspaceMetadataAt > 60_000;
+    if (this.workspaceSnapshot && !refresh) return this.workspaceSnapshot;
+    if (this.workspaceRead) return this.workspaceRead;
+    const revision = this.workspaceRevision;
+    const pending = (async () => {
+      const independent = this.independentEnabled();
+      const { client, child } = await (independent ? this.independentClient() : this.openConnection('nimbalyst-workspace-read'));
+      try {
+        const accounts = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: refresh }, 15_000);
+        if (revision !== this.workspaceRevision && this.workspaceSnapshot) return this.workspaceSnapshot;
+        if (refresh) this.workspaceMetadataAt = Date.now();
+        return this.rememberWorkspace(activeLogin(accounts));
+      } finally {
+        if (!independent) {
+          client.close('workspace read completed');
+          child.stdin.end();
+          if (!child.killed) child.kill();
+        }
+      }
+    })();
+    this.workspaceRead = pending;
+    const clear = () => { if (this.workspaceRead === pending) this.workspaceRead = null; };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private clearLogin(): void {
+    if (this.loginTimer) clearTimeout(this.loginTimer);
+    this.loginTimer = undefined;
+    this.independentLoginId = null;
+    this.earlyLoginNotifications = [];
+  }
+
+  private async beginLogin(client: JsonRpcClient, login: CodexLoginStartedChatGpt): Promise<void> {
+    this.independentLoginId = login.loginId;
+    this.loginTimer = setTimeout(() => {
+      void this.cancelIndependentLogin().finally(() => {
+        this.independentLoginError = 'ChatGPT sign-in expired. Select your account to try again.';
+        this.publishWorkspaceState();
+      }).catch(() => {});
+    }, 5 * 60_000);
+    this.loginTimer.unref?.();
+    this.publishWorkspaceState();
+    const early = this.earlyLoginNotifications.find(notification => !notification.loginId || notification.loginId === login.loginId);
+    this.earlyLoginNotifications = [];
+    if (early) await this.completeIndependentLogin(client, early);
   }
 
   async signInIndependently(): Promise<CodexLoginStartedChatGpt> {
-    if (this.workspaceSwitching || this.independentLoginStarting || this.independentLoginId) {
+    if (this.workspaceSwitching || this.independentLoginStarting) {
       throw new Error('Finish or cancel the current Codex account change first.');
     }
+    if (this.independentLoginId) await this.cancelIndependentLogin();
     this.independentLoginStarting = true;
     try {
       const { client } = await this.independentClient();
       this.independentLoginError = undefined;
       const response = await client.request<AccountLoginStartResponse>('account/login/start', { type: 'chatgpt' });
       if (response.type !== 'chatgpt') throw new Error('Codex could not start ChatGPT sign-in.');
-      this.independentLoginId = response.loginId;
-      this.broadcast('codex-workspace:changed', {});
+      await this.beginLogin(client, response);
       return response;
     } finally {
       this.independentLoginStarting = false;
@@ -198,37 +299,52 @@ class CodexAuthServiceImpl {
   async cancelIndependentLogin(): Promise<void> {
     const loginId = this.independentLoginId;
     if (!loginId || !this.independentConnection) return;
-    this.independentLoginId = null;
-    const { client } = await this.independentConnection;
+    this.clearLogin();
+    this.publishWorkspaceState();
+    const connection = this.independentConnection;
+    const { client, child } = await connection;
     try {
-      await client.request('account/login/cancel', { loginId });
+      await client.request('account/login/cancel', { loginId }, 10_000);
+    } catch {
+      if (this.independentConnection === connection) this.independentConnection = undefined;
+      client.close('cancelled sign-in');
+      if (!child.killed) child.kill();
     } finally {
-      this.broadcast('codex-workspace:changed', {});
+      this.publishWorkspaceState();
     }
   }
 
-  async selectWorkspace(accountId: string): Promise<void> {
+  async selectWorkspace(accountId: string): Promise<CodexLoginStartedChatGpt | void> {
     if (!this.independentEnabled()) throw new Error('Sign in to Nimbalyst’s independent Codex account first.');
     if (this.workspaceSwitching || this.independentLoginStarting || this.independentLoginId) {
       throw new Error('Finish or cancel the current Codex account change first.');
     }
     this.workspaceSwitching = true;
-    this.workspaceChanged();
     try {
       const { client } = await this.independentClient();
-      const login = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }));
+      let login = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }));
+      if (!login?.workspaces?.some(workspace => workspace.accountId === accountId)) {
+        login = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: true }));
+      }
       if (!login?.workspaces?.some(workspace => workspace.accountId === accountId)) {
         throw new Error('The selected workspace is not available for this ChatGPT sign-in.');
       }
-      const result = await client.request<CodexLoginSessions>('accountSession/switch', {
+      const result = await client.request<CodexLoginSessions | { login_id: string; auth_url: string }>('accountSession/switch', {
         sessionId: login.sessionId,
         accountId,
-        allowBrowserLogin: false,
+        allowBrowserLogin: true,
       });
+      if ('login_id' in result) {
+        const browserLogin: CodexLoginStartedChatGpt = { type: 'chatgpt', loginId: result.login_id, authUrl: result.auth_url };
+        await this.beginLogin(client, browserLogin);
+        return browserLogin;
+      }
       if (activeLogin(result)?.selectedWorkspaceAccountId !== accountId) {
         throw new Error('Codex could not select the requested workspace. Sign in to that workspace again.');
       }
       setAppSetting(independentWorkspaceSetting, accountId);
+      this.independentLoginError = undefined;
+      this.rememberWorkspace(activeLogin(result));
     } finally {
       this.workspaceSwitching = false;
       this.workspaceChanged();
@@ -328,16 +444,14 @@ class CodexAuthServiceImpl {
     const expected = this.independentWorkspaceId();
     const { client, child } = await (expected ? this.independentClient() : this.openConnection('nimbalyst-usage'));
     try {
-      const accounts = await client.request<{
-        activeSessionId: string | null;
-        sessions: Array<{ sessionId: string; userId?: unknown; isActive: boolean; selectedWorkspaceAccountId: string | null }>;
-      }>('accountSession/list', { refreshWorkspaceMetadata: false });
-      const active = accounts.sessions.filter(session => session.isActive && session.sessionId === accounts.activeSessionId);
-      if (active.length !== 1 || !active[0].selectedWorkspaceAccountId) {
+      const accounts = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false });
+      const account = activeLogin(accounts);
+      if (!account?.selectedWorkspaceAccountId) {
+        this.rememberWorkspace(undefined);
         onAccountIdentified?.(null);
         throw new Error('Current ChatGPT account could not be identified. Sign in with ChatGPT to view subscription limits.');
       }
-      const account = active[0];
+      this.rememberWorkspace(account);
       if (expected && account.selectedWorkspaceAccountId !== expected) {
         onAccountIdentified?.(null);
         throw new Error('Sign in to the selected Codex workspace.');
@@ -439,7 +553,14 @@ class CodexAuthServiceImpl {
     this.initializing = null;
     const independent = this.independentConnection;
     this.independentConnection = undefined;
-    this.independentLoginId = null;
+    this.clearLogin();
+    this.independentLoginStarting = false;
+    this.workspaceSwitching = false;
+    this.workspaceSnapshot = null;
+    this.workspaceRead = null;
+    this.workspaceMetadataAt = 0;
+    this.publishedWorkspace = '';
+    this.independentLoginError = undefined;
     void independent?.then(({ client, child }) => {
       client.close('shutdown');
       child.stdin.end();

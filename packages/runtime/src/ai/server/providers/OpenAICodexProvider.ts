@@ -1394,6 +1394,9 @@ export class OpenAICodexProvider extends BaseAgentProvider {
           && (event as { metadata?: { transport?: string } }).metadata?.transport === 'app-server';
 
         if (isAppServerEvent) {
+          if (!this.config?.apiKey && event.metadata?.method === 'account/rateLimits/updated') {
+            this.emit('codex:rateLimitsUpdated', { workspaceRevision: workspaceAuth?.revision });
+          }
           // NIM-2962: surface MCP server health instead of discarding it.
           this.handleAppServerMcpStatus(event, sessionId);
           try {
@@ -1462,6 +1465,10 @@ export class OpenAICodexProvider extends BaseAgentProvider {
               yield { type: 'tool_call', toolCall: item.toolCall };
               break;
 
+            case 'context_usage':
+              yield { type: 'context_usage', contextFillTokens: item.event.contextFillTokens, contextWindow: item.event.contextWindow, contextCompacted: item.event.contextCompacted };
+              break;
+
             case 'complete':
               yield {
                 type: 'complete',
@@ -1470,6 +1477,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
                 usage: item.event.usage,
                 ...(item.event.contextFillTokens !== undefined ? { contextFillTokens: item.event.contextFillTokens } : {}),
                 ...(item.event.contextWindow !== undefined ? { contextWindow: item.event.contextWindow } : {}),
+                ...(item.event.contextCompacted ? { contextCompacted: true } : {}),
               };
               break;
 

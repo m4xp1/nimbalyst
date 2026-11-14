@@ -10,6 +10,7 @@ import { warnIfUnpublished } from '@nimbalyst/runtime/sync/pushOutcome';
  */
 
 import path from 'node:path';
+import { createWindowsTrayIcon } from './windowsTrayIcon';
 import { Tray, Menu, app, nativeImage, nativeTheme, systemPreferences, BrowserWindow } from 'electron';
 import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import type { SessionStateEvent } from '@nimbalyst/runtime/ai/server/types/SessionState';
@@ -1049,6 +1050,7 @@ export class TrayManager {
 
   /** Cached base template image (loaded once from disk) */
   private templateIcon: Electron.NativeImage | null = null;
+  private windowsIcons = new Map<boolean, Electron.NativeImage>();
 
   private updateIcon(): void {
     if (!this.tray) return;
@@ -1532,14 +1534,23 @@ export class TrayManager {
   }
 
   private getIconForState(state: TrayIconState): Electron.NativeImage {
-    const baseIcon = this.loadTemplateIcon();
     const needsColorDot = state === 'attention' || state === 'error';
+    if (process.platform === 'win32') {
+      let icon = this.windowsIcons.get(needsColorDot);
+      if (!icon) {
+        // icon.png is shipped in app.asar as well as at the development package root.
+        icon = createWindowsTrayIcon(path.join(getPackageRoot(), 'icon.png'), needsColorDot);
+        this.windowsIcons.set(needsColorDot, icon);
+      }
+      return icon;
+    }
+    const baseIcon = this.loadTemplateIcon();
 
     // For states without a colored dot, use the template image directly.
     // macOS automatically tints template images white on dark menu bars and
     // dark on light menu bars. This tinting is handled by the OS at the
     // NSStatusBar level and is NOT affected by nativeTheme.themeSource.
-    if (!needsColorDot && process.platform !== 'win32') {
+    if (!needsColorDot) {
       // Ensure the template flag is set (Electron auto-detects from filename
       // "trayTemplate.png" but be explicit)
       baseIcon.setTemplateImage(true);
@@ -1556,26 +1567,6 @@ export class TrayManager {
     // Get the raw bitmap at @2x scale (macOS uses BGRA byte order)
     const baseBitmap = baseIcon.toBitmap({ scaleFactor });
     const canvas = Buffer.from(baseBitmap);
-
-    if (process.platform === 'win32') {
-      // Windows renders the image as supplied, including in the light overflow flyout.
-      // A dark outline keeps the white glyph visible on both light and dark backgrounds.
-      for (let y = 1; y < physicalSize - 1; y++) {
-        for (let x = 1; x < physicalSize - 1; x++) {
-          const offset = (y * physicalSize + x) * 4;
-          if (baseBitmap[offset + 3]) continue;
-          const hasGlyphNeighbor = [-1, 0, 1].some(dy => [-1, 0, 1].some(dx =>
-            baseBitmap[((y + dy) * physicalSize + x + dx) * 4 + 3] >= 128,
-          ));
-          if (hasGlyphNeighbor) {
-            canvas[offset] = 55;
-            canvas[offset + 1] = 40;
-            canvas[offset + 2] = 28;
-            canvas[offset + 3] = 255;
-          }
-        }
-      }
-    }
 
     // Always use white (255) foreground for the attention/error icon.
     //

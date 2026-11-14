@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.83.0+m4xp1.4]
+
+### Fixed
+- Keep annotation drafts in sync across session views, save after a short typing pause, close editors on scrolling, and clear submitted annotations without duplicating Selection.
+- Show active-turn controls as two rows of icons; Enter sends a correction to the current Codex turn.
+- Refresh Codex account and workspace details after sign-in, reuse cached details when opening Usage, and update limits during active work without idle polling.
+- Clear unread dots when reading the open session and preserve newer context counts through reloads and compaction.
+- Follow Markdown heading links after the target editor opens and render the Windows tray icon in color at native display sizes.
+
 ## [0.83.0+m4xp1.3]
 
 ### Fixed

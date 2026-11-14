@@ -14,7 +14,7 @@
 import { defineExtension, type LexicalEditor } from 'lexical';
 import { HeadingNode } from '@lexical/rich-text';
 
-import { slugify } from '../../utils/headingSlug';
+import { headingSlugs } from '../../utils/headingNavigation';
 
 function recomputeHeadingIds(editor: LexicalEditor): void {
   const root = editor.getRootElement();
@@ -22,27 +22,17 @@ function recomputeHeadingIds(editor: LexicalEditor): void {
     return;
   }
   const headings = root.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  const taken = new Map<string, number>();
-  headings.forEach((element) => {
-    const text = element.textContent ?? '';
-    const slug = slugify(text);
+  const slugs = headingSlugs([...headings].map(element => element.textContent ?? ''));
+  headings.forEach((element, index) => {
+    const slug = slugs[index];
     if (!slug) {
       if (element.id) {
         element.removeAttribute('id');
       }
       return;
     }
-    let candidate = slug;
-    const count = taken.get(slug);
-    if (count !== undefined) {
-      const next = count + 1;
-      candidate = `${slug}-${next}`;
-      taken.set(slug, next);
-    } else {
-      taken.set(slug, 0);
-    }
-    if (element.id !== candidate) {
-      element.id = candidate;
+    if (element.id !== slug) {
+      element.id = slug;
     }
   });
 }

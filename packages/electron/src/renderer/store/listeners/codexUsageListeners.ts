@@ -8,9 +8,24 @@
  */
 
 import { store } from '../index';
-import { codexUsageAtom, codexWorkspaceRevisionAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
+import { codexUsageAtom, codexWorkspaceAtom, codexWorkspaceRevisionAtom, CodexUsageData } from '../atoms/codexUsageAtoms';
+import type { CodexWorkspaceStatus } from '../../../shared/codexWorkspace';
 
 let usageRevision = 0;
+let workspaceRead: Promise<CodexWorkspaceStatus | null> | null = null;
+
+export function refreshCodexWorkspace(refreshMetadata = false): Promise<CodexWorkspaceStatus | null> {
+  if (workspaceRead) return workspaceRead;
+  const revision = store.get(codexWorkspaceRevisionAtom);
+  const pending = window.electronAPI.invoke('codex-workspace:get', refreshMetadata).then((data: CodexWorkspaceStatus) => {
+    if (data && typeof data.independent === 'boolean' && store.get(codexWorkspaceRevisionAtom) === revision) store.set(codexWorkspaceAtom, data);
+    return data ?? null;
+  });
+  workspaceRead = pending;
+  const clear = () => { if (workspaceRead === pending) workspaceRead = null; };
+  void pending.then(clear, clear);
+  return pending;
+}
 function applyUsage(data: CodexUsageData): void {
   usageRevision++;
   store.set(codexUsageAtom, data);
@@ -28,8 +43,11 @@ export function initCodexUsageListeners(): () => void {
 
   cleanups.push(
     window.electronAPI.on('codex-usage:update', handleUsageUpdate),
-    window.electronAPI.on('codex-workspace:changed', () => {
-      if (active) store.set(codexWorkspaceRevisionAtom, value => value + 1);
+    window.electronAPI.on('codex-workspace:changed', (data?: CodexWorkspaceStatus) => {
+      if (!active) return;
+      store.set(codexWorkspaceRevisionAtom, value => value + 1);
+      if (data && typeof data.independent === 'boolean') store.set(codexWorkspaceAtom, data);
+      else void refreshCodexWorkspace().catch(() => {});
     }),
   );
 
@@ -38,6 +56,7 @@ export function initCodexUsageListeners(): () => void {
     if (active && usageRevision === initialRevision && data) {
       applyUsage(data);
     }
+    if (active) void refreshCodexWorkspace().catch(() => {});
   }).catch((error: Error) => {
     console.error('[CodexUsageListeners] Failed to get initial usage:', error);
   });

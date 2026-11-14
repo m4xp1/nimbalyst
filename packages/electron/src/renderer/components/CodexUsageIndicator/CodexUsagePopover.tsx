@@ -10,7 +10,7 @@ import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
   codexUsageColor,
   codexUsageAtom,
-  codexWorkspaceRevisionAtom,
+  codexWorkspaceAtom,
   formatCodexWindowLabel,
   formatCodexWindowSubtitle,
   formatResetTime,
@@ -19,7 +19,7 @@ import {
 import { toggleGutterItemHiddenAtom } from '../../store/atoms/appSettings';
 import { useFloatingMenu, FloatingPortal } from '../../hooks/useFloatingMenu';
 import { WeeklyUsageHistory } from '../UsageHistory/WeeklyUsageHistory';
-import type { CodexWorkspaceStatus } from '../../../shared/codexWorkspace';
+import { refreshCodexWorkspace } from '../../store/listeners/codexUsageListeners';
 
 interface CodexUsagePopoverProps {
   anchorRef: RefObject<HTMLElement | null>;
@@ -107,30 +107,16 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
   const usage = useAtomValue(codexUsageAtom);
   const toggleGutterItemHidden = useSetAtom(toggleGutterItemHiddenAtom);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
-  const workspaceRevision = useAtomValue(codexWorkspaceRevisionAtom);
-  const [workspace, setWorkspace] = React.useState<CodexWorkspaceStatus>();
+  const workspace = useAtomValue(codexWorkspaceAtom);
   const [workspaceBusy, setWorkspaceBusy] = React.useState(false);
   const [workspaceError, setWorkspaceError] = React.useState('');
-  const workspaceLoaded = React.useRef(false);
-
-  useEffect(() => {
-    if (!window.electronAPI?.invoke) return;
-    let current = true;
-    const refresh = !workspaceLoaded.current;
-    workspaceLoaded.current = true;
-    window.electronAPI.invoke('codex-workspace:get', refresh).then((status: CodexWorkspaceStatus) => {
-      if (current) setWorkspace(status);
-    }).catch(() => {
-      if (current) setWorkspaceError('Could not load Codex workspaces.');
-    });
-    return () => { current = false; };
-  }, [workspaceRevision]);
 
   const updateWorkspace = async (channel: string, accountId?: string) => {
     setWorkspaceBusy(true);
     setWorkspaceError('');
     try {
       await window.electronAPI.invoke(channel, accountId);
+      await refreshCodexWorkspace();
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : 'Could not change the Codex workspace.');
     } finally {
@@ -212,15 +198,25 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
 
         {/* Content */}
         <div className="px-4 py-3">
-          {workspace && (
             <div className="codex-usage-workspace mb-3 space-y-1.5 border-b border-nim pb-3 text-[12px]">
-              {workspace.independent && workspace.choices.length > 0 ? (
-                <label className="block">
-                  <span className="mb-1 block text-nim-muted">ChatGPT workspace</span>
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold text-nim">Workspace</span>
+                <button type="button" role="link" className="min-w-0 truncate text-nim-primary hover:underline disabled:opacity-50"
+                  disabled={workspaceBusy}
+                  title={workspace?.signingIn ? 'Restart ChatGPT sign-in' : 'Sign in with another account'}
+                  onClick={() => void updateWorkspace('codex-workspace:sign-in')}>
+                  {workspace?.authenticated === false || !workspace ? 'Sign in' : workspace.email || 'ChatGPT Desktop'}
+                </button>
+              </div>
+              {workspace && workspace.choices.length > 1 && (
+                <div className="relative">
                   <select
-                    className="w-full rounded-md border border-nim bg-nim-primary px-2 py-1.5 text-nim"
+                    aria-label="Workspace"
+                    className="w-full appearance-none rounded-md border border-nim bg-nim-primary py-1.5 pl-2 pr-7 text-white disabled:opacity-60"
                     value={workspace.selectedId ?? ''}
-                    disabled={workspaceBusy || workspace.signingIn}
+                    disabled={workspaceBusy || workspace.signingIn || !(workspace.canSwitch ?? workspace.independent)}
+                    onPointerDown={() => { void refreshCodexWorkspace(true).catch(() => setWorkspaceError('Could not update workspaces.')); }}
+                    onFocus={() => { void refreshCodexWorkspace(true).catch(() => setWorkspaceError('Could not update workspaces.')); }}
                     onChange={event => void updateWorkspace('codex-workspace:select', event.currentTarget.value)}
                   >
                     {!workspace.choices.some(choice => choice.id === workspace.selectedId) && (
@@ -228,39 +224,11 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
                     )}
                     {workspace.choices.map(choice => <option key={choice.id} value={choice.id}>{choice.name}</option>)}
                   </select>
-                </label>
-              ) : (
-                <div className="text-nim-muted">
-                  {workspace.independent ? 'Independent ChatGPT sign-in' : 'Following the ChatGPT Desktop workspace'}
+                  <MaterialSymbol icon="expand_more" size={18} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white" />
                 </div>
               )}
-              {workspace.signingIn ? (
-                <button
-                  type="button"
-                  className="text-nim-muted hover:text-nim"
-                  disabled={workspaceBusy}
-                  onClick={() => void updateWorkspace('codex-workspace:cancel-sign-in')}
-                >Cancel ChatGPT sign-in</button>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="text-blue-500 hover:underline"
-                    disabled={workspaceBusy}
-                    onClick={() => void updateWorkspace('codex-workspace:sign-in')}
-                  >{workspace.independent ? 'Sign in again' : 'Sign in to choose a workspace'}</button>
-                  {workspace.independent && (
-                    <button
-                      type="button"
-                      className="text-nim-muted hover:text-nim"
-                      disabled={workspaceBusy}
-                      onClick={() => void updateWorkspace('codex-workspace:follow-desktop')}
-                    >Follow ChatGPT Desktop</button>
-                  )}
-                </div>
-              )}
+              {workspace?.signingIn && <div role="status" className="text-nim-muted">Complete sign-in in your browser.</div>}
             </div>
-          )}
           {(workspaceError || workspace?.error) && (
             <div className="mb-2 text-[12px] text-nim-error" role="alert">{workspaceError || workspace?.error}</div>
           )}

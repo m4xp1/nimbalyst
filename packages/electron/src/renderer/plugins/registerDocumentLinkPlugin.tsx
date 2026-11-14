@@ -10,6 +10,7 @@
  */
 
 import React, { useMemo } from 'react';
+import { decodeMarkdownLinkPath, splitMarkdownLinkTarget } from '@nimbalyst/runtime/utils/markdownLink';
 import { isAbsolute, join } from 'pathe';
 import {
   TypeaheadMenuPlugin,
@@ -232,10 +233,11 @@ export function registerDocumentLinkPlugin(): void {
   // through the document service instead of window.open, which would spawn a
   // blank Electron child window (NIM-1487).
   setWorkspaceFileLinkOpener((rawHref, currentDocumentPath) => {
+    const linkTarget = splitMarkdownLinkTarget(rawHref);
     const workspacePath =
       (window as unknown as { __workspacePath?: string }).__workspacePath ?? null;
     const candidatePaths = resolveDocumentLinkLookupPaths(
-      rawHref,
+      linkTarget.path,
       currentDocumentPath,
       workspacePath,
     );
@@ -243,12 +245,12 @@ export function registerDocumentLinkPlugin(): void {
       for (const candidate of candidatePaths) {
         const resolvedDoc = await documentService.getDocumentByPath(candidate);
         if (resolvedDoc) {
-          await documentService.openDocument(resolvedDoc.id, { path: resolvedDoc.path });
+          await documentService.openDocument(resolvedDoc.id, { path: resolvedDoc.path, ...(linkTarget.fragment ? { fragment: linkTarget.fragment } : {}) });
           return;
         }
       }
       const fallbackPath = candidatePaths[candidatePaths.length - 1];
-      await documentService.openDocument('', { path: fallbackPath || rawHref });
+      await documentService.openDocument('', { path: fallbackPath || decodeMarkdownLinkPath(linkTarget.path), ...(linkTarget.fragment ? { fragment: linkTarget.fragment } : {}) });
     })().catch((error) => {
       console.error('Failed to open workspace file link', rawHref, error);
     });

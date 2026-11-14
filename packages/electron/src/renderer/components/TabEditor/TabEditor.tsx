@@ -62,6 +62,7 @@ import { SearchReplaceStateManager, isLexicalSearchEditor } from '@nimbalyst/run
 import { hasEditorFind, registerEditorFindHandler } from './editorFindCommand';
 import { hasEditorReveal, registerEditorRevealHandler } from './editorRevealCommand';
 import { revealMarkdownLine } from '@nimbalyst/runtime/editor/markdown/revealMarkdownLine';
+import { markdownHeadingLine, revealHeading } from '@nimbalyst/runtime/editor/utils/headingNavigation';
 import { MarkdownSourceBudgetError, preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
 import { $readMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSourceSnapshot';
 import { useSuppressedDocumentHeaderProviderIds } from './DocumentHeaderSuppressionContext';
@@ -572,18 +573,23 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   useEffect(() => {
     if (!isEditorReady) return;
 
-    return registerEditorRevealHandler(filePath, ({ line, column }) => {
+    return registerEditorRevealHandler(filePath, ({ line, column, fragment }) => {
       const editor = editorRef.current;
       if (!editor) return;
 
       // Monaco (code files, and markdown in source mode) reveals the exact line.
       if (hasEditorReveal(editor)) {
-        editor.revealPosition(line, column);
+        const targetLine = fragment && isMarkdown ? markdownHeadingLine(contentRef.current, fragment) : line;
+        if (targetLine !== undefined) editor.revealPosition(targetLine, column);
         return;
       }
 
       // The rich markdown view has no lines; map the line onto a block.
       if (isMarkdown && !sourceModeRef.current) {
+        if (fragment) {
+          revealHeading(editor.getRootElement(), fragment);
+          return;
+        }
         revealMarkdownLine({
           editor,
           transformers: getEditorTransformers(),
@@ -657,7 +663,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       return undefined;
     }
 
-    // Debounce timer for selection updates
+    // Code editors still debounce cursor events; Markdown selection is local UI state.
     let debounceTimer: NodeJS.Timeout | null = null;
 
     // For Lexical editor (markdown in rich text mode)
@@ -668,6 +674,16 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         // The Lexical SelectionAlwaysOnDisplay plugin may show a visual selection,
         // but we want a clean slate - user must re-select to use "+ selection" feature
         clearTextSelection(filePath, selectionOwner);
+
+        const publishNativeSelection = () => {
+          const root = editor.getRootElement();
+          const selection = window.getSelection();
+          if (!root || !selection?.rangeCount || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return;
+          const text = selection.toString();
+          if (text.trim()) setTextSelection(text, filePath, selectionOwner);
+          else clearTextSelection(filePath, selectionOwner);
+        };
+        document.addEventListener('selectionchange', publishNativeSelection);
 
         const unregister = editor.registerUpdateListener(() => {
           // Only update selection if the editor has focus
@@ -681,14 +697,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             return;
           }
 
-          // Clear any pending debounce
-          if (debounceTimer) {
-            clearTimeout(debounceTimer);
-          }
-
-          // Debounce selection updates to reduce performance impact
-          debounceTimer = setTimeout(() => {
-            editor.getEditorState().read(() => {
+          editor.getEditorState().read(() => {
               const selection = $getSelection();
               if ($isRangeSelection(selection) && !selection.isCollapsed()) {
                 const selectedText = selection.getTextContent();
@@ -701,14 +710,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 // User clicked in editor without selection - clear it
                 clearTextSelection(filePath, selectionOwner);
               }
-            });
-          }, 150); // 150ms debounce
+          });
         });
         return () => {
           if (debounceTimer) {
             clearTimeout(debounceTimer);
           }
           unregister();
+          document.removeEventListener('selectionchange', publishNativeSelection);
           clearTextSelection(filePath, selectionOwner);
         };
       }

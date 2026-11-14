@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { store } from '@nimbalyst/runtime/store';
-import { markSessionsReadAtom, sessionUnreadAtom } from '../sessions';
+import { markSessionReadAtom, markSessionsReadAtom, refreshSessionListAtom, sessionListWorkspaceAtom, sessionUnreadAtom } from '../sessions';
 
 describe('markSessionsReadAtom', () => {
   afterEach(() => {
@@ -26,5 +26,19 @@ describe('markSessionsReadAtom', () => {
       .filter(([channel]) => channel === 'ai:updateSessionMetadata')
       .map(([, sessionId]) => sessionId);
     expect(persisted).toEqual([parent, ...children]);
+  });
+
+  it('does not restore an old unread snapshot after the session was read locally', async () => {
+    const id = 'read-before-list-snapshot';
+    const oldTime = Date.now() - 1000;
+    const invoke = vi.fn(async (channel: string) => channel === 'sessions:list' ? {
+      success: true, sessions: [{ id, createdAt: oldTime, updatedAt: oldTime, hasUnread: true }],
+    } : { success: true });
+    vi.stubGlobal('window', { electronAPI: { invoke } });
+    store.set(sessionListWorkspaceAtom, '/synthetic/unread');
+    store.set(markSessionReadAtom, id);
+    await store.set(refreshSessionListAtom);
+    expect(store.get(sessionUnreadAtom(id))).toBe(false);
+    store.set(sessionListWorkspaceAtom, null);
   });
 });

@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai';
 import { useTabsActions, useTabsHydrated } from '../contexts/TabsContext';
 import { pendingFileOpensAtom, refreshPendingFileOpens, acknowledgePendingFileOpen } from '../store/listeners/fileOpenListeners';
 import { handleWorkspaceFileSelect } from '../utils/workspaceFileOperations';
+import { revealEditorPosition } from '../components/TabEditor/editorRevealCommand';
 
 /** Mounted by the real Files editor, after App's workspace/extension gate. */
 export function usePendingFileOpen(workspacePath: string, revealFiles: () => void): void {
@@ -47,7 +48,10 @@ export function usePendingFileOpen(workspacePath: string, revealFiles: () => voi
         console.error('[FileOpen] Failed to open pending file:', error);
       }
       if (cancelled || current.current.workspacePath !== workspacePath) return;
-      if (opened) current.current.revealFiles();
+      if (opened) {
+        current.current.revealFiles();
+        if (request.fragment) revealEditorPosition(request.path, { line: 1, fragment: request.fragment });
+      }
       // A reported failure is terminal too; it must not block later requests.
       await acknowledgePendingFileOpen(request, workspacePath);
     })().catch(error => console.error('[FileOpen] Failed to acknowledge pending file open:', error));

@@ -11,9 +11,11 @@
  * It must NEVER re-render or it will destroy all TabEditor state.
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useContext, useEffect, useRef } from 'react';
 import { createRoot, Root } from 'react-dom/client';
-import { Provider as JotaiProvider, useAtomValue } from 'jotai';
+import { useAtomValue } from 'jotai';
+import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
+import { AnnotationEditorProvider } from '../UnifiedAI/AnnotationEditorProvider';
 import { fileSaveRequestAtom } from '../../store/atoms/appCommands';
 import type { TextReplacement } from '@nimbalyst/runtime';
 import type { CollabOpenOptions, CollabScope } from '@nimbalyst/collab-client/core';
@@ -113,6 +115,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
 
   // Use actions only - NO subscription that causes re-renders
   const tabsActions = useTabsActions();
+  const annotationTarget = useContext(AnnotationSessionContext);
 
   // Container ref for imperative DOM updates
   const containerRef = useRef<HTMLDivElement>(null);
@@ -341,7 +344,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
       const workspacePath = propsRef.current.workspaceId;
       const SectionTab = sectionView.view === 'search' ? PagesSearchTab : PagesTypesTab;
       root.render(
-        <JotaiProvider store={store}>
+        <AnnotationEditorProvider target={annotationTarget}>
           <TabEditorErrorBoundary
             filePath={tab.filePath}
             fileName={tab.fileName}
@@ -355,7 +358,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
           >
             {workspacePath ? <SectionTab lane={sectionView.lane} workspacePath={workspacePath} /> : null}
           </TabEditorErrorBoundary>
-        </JotaiProvider>
+        </AnnotationEditorProvider>
       );
       tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
       return;
@@ -366,7 +369,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
     // this tab only reads it.
     if (isFeedbackRequestTab(tab.filePath)) {
       root.render(
-        <JotaiProvider store={store}>
+        <AnnotationEditorProvider target={annotationTarget}>
           <TabEditorErrorBoundary
             filePath={tab.filePath}
             fileName={tab.fileName}
@@ -383,7 +386,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
               workspacePath={propsRef.current.workspaceId}
             />
           </TabEditorErrorBoundary>
-        </JotaiProvider>
+        </AnnotationEditorProvider>
       );
       tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
       return;
@@ -397,7 +400,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
       const trackerItemId = tab.trackerItemId ?? tab.filePath.replace(/^tracker:\/\//, '');
       const pageWorkspacePath = propsRef.current.trackerPageHeader ? propsRef.current.workspaceId : undefined;
       root.render(
-        <JotaiProvider store={store}>
+        <AnnotationEditorProvider target={annotationTarget}>
           <TabEditorErrorBoundary
             filePath={tab.filePath}
             fileName={tab.fileName}
@@ -432,7 +435,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
               />
             )}
           </TabEditorErrorBoundary>
-        </JotaiProvider>
+        </AnnotationEditorProvider>
       );
       tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
       return;
@@ -443,7 +446,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
       const typeId = tab.trackerTypeId ?? tab.filePath.slice(TYPE_TAB_PREFIX.length);
       const workspacePath = propsRef.current.workspaceId;
       root.render(
-        <JotaiProvider store={store}>
+        <AnnotationEditorProvider target={annotationTarget}>
           <TabEditorErrorBoundary
             filePath={tab.filePath}
             fileName={tab.fileName}
@@ -463,7 +466,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
               />
             ) : null}
           </TabEditorErrorBoundary>
-        </JotaiProvider>
+        </AnnotationEditorProvider>
       );
       tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
       return;
@@ -475,7 +478,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
       const documentId = tab.personalDocumentId ?? tab.filePath.slice(PERSONAL_PAGE_TAB_PREFIX.length);
       const workspacePath = propsRef.current.workspaceId;
       root.render(
-        <JotaiProvider store={store}>
+        <AnnotationEditorProvider target={annotationTarget}>
           <TabEditorErrorBoundary
             filePath={tab.filePath}
             fileName={tab.fileName}
@@ -499,7 +502,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
               />
             ) : null}
           </TabEditorErrorBoundary>
-        </JotaiProvider>
+        </AnnotationEditorProvider>
       );
       tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });
       return;
@@ -557,7 +560,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
     }
 
     root.render(
-      <JotaiProvider store={store}>
+      <AnnotationEditorProvider target={annotationTarget}>
         <TabEditorErrorBoundary
           filePath={tab.filePath}
           fileName={tab.fileName}
@@ -601,7 +604,7 @@ const TabContentComponent: React.FC<TabContentProps> = ({
             />
           )}
         </TabEditorErrorBoundary>
-      </JotaiProvider>
+      </AnnotationEditorProvider>
     );
 
     tabInstancesRef.current.set(tab.id, { root, element, tabData: tab, content });

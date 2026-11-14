@@ -8,6 +8,7 @@
 import { atom } from 'jotai';
 import { formatResetTime } from './claudeUsageAtoms';
 import type { UsageWeekRecord } from '../../../shared/usageHistory';
+import type { CodexWorkspaceStatus } from '../../../shared/codexWorkspace';
 
 export { formatResetTime };
 
@@ -68,6 +69,7 @@ export interface CodexUsageWindowEntry {
 
 export const codexUsageAtom = atom<CodexUsageData | null>(null);
 export const codexWorkspaceRevisionAtom = atom(0);
+export const codexWorkspaceAtom = atom<CodexWorkspaceStatus | null>(null);
 
 // Rail visibility of the usage indicator is governed by the NavigationGutter
 // customization set (the single source of truth). Read it with

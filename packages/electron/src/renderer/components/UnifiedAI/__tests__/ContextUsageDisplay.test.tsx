@@ -92,6 +92,17 @@ describe('ContextUsageDisplay - cumulative rows are labeled as session totals (#
 });
 
 describe('ContextUsageDisplay - measured provider support (#914)', () => {
+  it('never presents cumulative Codex spend as a measured context fill', () => {
+    render(<ContextUsageDisplay {...props} provider="openai-codex" currentContext={undefined} />);
+    expect(screen.getByTestId('context-indicator').textContent).toBe('--');
+  });
+  it('updates to the reduced or genuinely zero reading without keeping the old percent', () => {
+    const view = render(<ContextUsageDisplay {...props} provider="openai-codex" />);
+    view.rerender(<ContextUsageDisplay {...props} provider="openai-codex" currentContext={{ tokens: 4555, contextWindow: 258400 }} />);
+    expect(screen.getByTestId('context-indicator').textContent).toBe('5k/258k (2%)');
+    view.rerender(<ContextUsageDisplay {...props} provider="openai-codex" currentContext={{ tokens: 0, contextWindow: 258400 }} />);
+    expect(screen.getByTestId('context-indicator').textContent).toBe('0/258k (0%)');
+  });
   it('does not render an indicator for a provider that reports no usage', () => {
     render(
       <ContextUsageDisplay

@@ -224,6 +224,9 @@ export interface ProtocolEvent {
   /** Maximum context window for the active model */
   contextWindow?: number;
 
+  /** The last context snapshot was invalidated; a later measured fill clears this. */
+  contextCompacted?: boolean;
+
   /** Additional metadata */
   metadata?: Record<string, unknown>;
 }

@@ -25,6 +25,7 @@ import {
 } from '../../../utils/appActionLinks';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { MaterialSymbol } from '../../icons/MaterialSymbol';
+import { splitMarkdownLinkTarget } from '../../../utils/markdownLink';
 
 // Inject MarkdownRenderer styles once (for syntax highlighting, scrollbar, and overflow wrapper)
 const injectMarkdownRendererStyles = () => {
@@ -402,6 +403,7 @@ export interface TranscriptFileLocation {
   line: number;
   /** 1-based column. Honored by Monaco; the rich markdown view is block-granular. */
   column?: number;
+  fragment?: string;
 }
 
 /** A file reference from the transcript, with the location suffix parsed out. */
@@ -409,12 +411,14 @@ export interface TranscriptFileTarget {
   path: string;
   line?: number;
   column?: number;
+  fragment?: string;
 }
 
 /** Narrow a target to its location, or undefined when the link carried no line. */
 export function transcriptFileLocation(
   target: TranscriptFileTarget | null | undefined,
 ): TranscriptFileLocation | undefined {
+  if (target?.fragment) return { line: target.line ?? 1, ...(target.column !== undefined ? { column: target.column } : {}), fragment: target.fragment };
   if (!target || target.line === undefined) return undefined;
   return target.column === undefined
     ? { line: target.line }
@@ -527,6 +531,8 @@ export function resolveTranscriptFileTargetFromHref(href?: string): TranscriptFi
     return null;
   }
 
+  const { fragment } = splitMarkdownLinkTarget(trimmedHref);
+
   let candidate = trimmedHref;
 
   if (/^file:\/\//i.test(trimmedHref)) {
@@ -579,6 +585,7 @@ export function resolveTranscriptFileTargetFromHref(href?: string): TranscriptFi
 
   return {
     path: cleanedPath,
+    ...(fragment ? { fragment } : {}),
     ...(parsed.line !== undefined ? { line: parsed.line } : {}),
     ...(parsed.column !== undefined ? { column: parsed.column } : {}),
   };

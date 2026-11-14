@@ -75,6 +75,9 @@ function createNativeImageMock() {
   };
 }
 
+vi.mock('../windowsTrayIcon', () => ({ createWindowsTrayIcon: vi.fn(() => createNativeImageMock()) }));
+import { createWindowsTrayIcon } from '../windowsTrayIcon';
+
 vi.mock('electron', () => ({
   Tray: vi.fn(function () {
     return trayInstance;
@@ -331,31 +334,17 @@ describe('TrayManager - cross-platform initialisation (#39)', () => {
     expect(systemPrefsSubscribe).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['running', [0, 0, 0, 0]],
-    ['attention', [246, 130, 59, 255]],
-    ['error', [246, 130, 59, 255]],
-  ] as const)('draws a contrasting Windows glyph and the expected %s badge', (state, badge) => {
+  it.each(['idle', 'running', 'attention', 'error'])('uses Windows application artwork for %s without monochrome outlining', (state) => {
     restorePlatform = stubPlatform('win32');
-    const baseImage = createNativeImageMock();
-    const bitmap = Buffer.alloc(32 * 32 * 4);
-    const offset = (x: number, y: number) => (y * 32 + x) * 4;
-    bitmap[offset(8, 8) + 3] = 255;
-    baseImage.toBitmap.mockReturnValue(bitmap);
-    vi.mocked(nativeImage.createFromPath).mockReturnValueOnce(baseImage as unknown as Electron.NativeImage);
-
     const tray = TrayManager.getInstance() as unknown as {
       getIconForState: (state: string) => Electron.NativeImage;
     };
     const renderedImage = tray.getIconForState(state);
-    const rendered = vi.mocked(nativeImage.createFromBuffer).mock.calls.at(-1)![0];
-    const pixel = (x: number, y: number) => Array.from(rendered.subarray(offset(x, y), offset(x, y) + 4));
-
-    expect(pixel(8, 8)).toEqual([255, 255, 255, 255]);
-    expect(pixel(8, 9)).toEqual([55, 40, 28, 255]);
-    expect(pixel(8, 10)).toEqual([0, 0, 0, 0]);
-    expect(pixel(24, 24)).toEqual(badge);
-    expect(renderedImage.setTemplateImage).toHaveBeenCalledWith(false);
+    expect(createWindowsTrayIcon).toHaveBeenCalledWith(expect.stringMatching(/root[/\\]icon\.png$/), state === 'attention' || state === 'error');
+    expect(renderedImage).toBeTruthy();
+    const calls = vi.mocked(createWindowsTrayIcon).mock.calls.length;
+    expect(tray.getIconForState(state)).toBe(renderedImage);
+    expect(createWindowsTrayIcon).toHaveBeenCalledTimes(calls);
   });
 
   it('still subscribes the macOS appearance notification on darwin', async () => {

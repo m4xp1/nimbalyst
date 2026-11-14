@@ -20,6 +20,8 @@ export interface EditorRevealPosition {
   line: number;
   /** 1-based column. Honored by Monaco; the rich markdown view is block-granular. */
   column?: number;
+  /** Decoded Markdown heading text or GFM slug; takes precedence over line. */
+  fragment?: string;
 }
 
 type EditorRevealHandler = (position: EditorRevealPosition) => void;

@@ -9,6 +9,7 @@ export interface PendingFileOpen {
     requestId: number;
     path: string;
     workspacePath?: string;
+    fragment?: string;
 }
 
 // First paint is not editor readiness (#1864). Retain requests across renderer

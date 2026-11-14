@@ -6,6 +6,7 @@ vi.mock('../CodexAuthService', () => ({ codexAuthService: {
   getRateLimits: f.getRateLimits,
   onRateLimitsUpdated: (fn: () => void) => { f.rate = fn; return () => { f.rate = null; }; },
   onAccountUpdated: (fn: () => void) => { f.account = fn; return () => { f.account = null; }; },
+  workspaceAuth: () => ({ revision: 1 }),
 } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: f.send } }] } }));
 vi.mock('../../utils/logger', () => ({ logger: { main: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } } }));
@@ -14,7 +15,40 @@ import { codexUsageService as service } from '../CodexUsageService';
 function snapshot(scope: string, percent: number) { return { accountScope: scope, rateLimits: { limitId: 'codex', primary: { usedPercent: percent, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: null, credits: null, individualLimit: null, planType: 'pro', rateLimitReachedType: null }, rateLimitsByLimitId: null, rateLimitResetCredits: null }; }
 function reply(scope: string, percent: number) { f.getRateLimits.mockImplementation(async (identified?: (s: string | null) => void) => { identified?.(scope); return snapshot(scope, percent); }); }
 beforeEach(() => { vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.getRateLimits.mockReset(); f.history.mockReset().mockReturnValue([]); f.send.mockClear(); service.initialize(); });
-afterEach(() => { service.stop(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+afterEach(() => { service.stop(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+it('updates during a long backend turn without an open popover, then stops idle polling', async () => {
+  vi.useFakeTimers();
+  reply('A', 10);
+  const finish = (service as any).beginTurn();
+  await service.refresh();
+  reply('A', 20);
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  expect(service.getCachedUsage()?.limits[0].windows[0].usedPercent).toBe(20);
+  finish();
+  await service.refresh();
+  const reads = f.getRateLimits.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(60 * 60_000);
+  expect(f.getRateLimits).toHaveBeenCalledTimes(reads);
+});
+
+it('coalesces native limit events and ignores events from a previous workspace revision', async () => {
+  vi.useFakeTimers();
+  reply('A', 10);
+  await service.refresh();
+  f.getRateLimits.mockClear();
+  (service as any).nativeLimitsUpdated(0);
+  expect(f.getRateLimits).not.toHaveBeenCalled();
+  reply('A', 12);
+  for (let i = 0; i < 20; i++) (service as any).nativeLimitsUpdated(1);
+  await service.refresh();
+  expect(f.getRateLimits).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  reply('A', 15);
+  (service as any).nativeLimitsUpdated(1);
+  await service.refresh();
+  expect(service.getCachedUsage()?.limits[0].windows[0].usedPercent).toBe(15);
+});
 describe('account-bound Codex usage refresh', () => {
   it('clears the old workspace before new limits arrive, including the same-email switch', async () => {
     reply('same-user/work', 100); await service.refresh();

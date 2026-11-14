@@ -18,7 +18,7 @@ import { RemoteSessionTranscript } from './RemoteSessionTranscript';
 import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect, useState, useMemo } from 'react';
 import { appendChatAnnotations, type ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import type { CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
-import { chatAnnotationDraftAtom, updateChatAnnotationDraft } from './chatAnnotationDraft';
+import { chatAnnotationDraftAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
 import { DraftAnnotationList, TranscriptAnnotationControls } from './ChatAnnotationControls';
 import { selectionPathsMatch } from './TextSelectionIndicator';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
@@ -47,7 +47,6 @@ import { customEditorRegistry } from '../CustomEditors/registry';
 import { useDialog } from '../../contexts/DialogContext';
 import { FileGutter } from '../AIChat/FileGutter';
 import { recordClaudeActivity } from '../../store/listeners/claudeUsageListeners';
-import { recordCodexActivity } from '../../store/listeners/codexUsageListeners';
 import { PendingReviewBanner } from '../AIChat/PendingReviewBanner';
 import { WakeupBanner } from '../AIChat/WakeupBanner';
 import { McpLockdownBanner } from '../AIChat/McpLockdownBanner';
@@ -65,6 +64,8 @@ import { expandSessionMentions } from './sessionMentions';
 import { diffTreeGroupByDirectoryAtom, setDiffTreeGroupByDirectoryAtom } from '../../store/atoms/projectState';
 import { openSettingsCommandAtom } from '../../store/atoms/settingsNavigation';
 import {
+  markSessionReadAtom,
+  sessionUnreadAtom,
   sessionDraftInputAtom,
   sessionDraftAttachmentsAtom,
   sessionStoreAtom,
@@ -1068,7 +1069,11 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   }, [setDraftAttachments]);
 
   const consumeAnnotations = useCallback((sent: readonly ChatAnnotation[]) => {
-    if (sent.length) updateChatAnnotationDraft(sessionId, draft => draft.filter(annotation => !sent.includes(annotation)));
+    if (sent.length) void consumeChatAnnotationDraft(sessionId, sent).catch(() => {});
+  }, [sessionId]);
+
+  useEffect(() => () => {
+    void flushChatAnnotationDraft(sessionId).catch(() => {});
   }, [sessionId]);
 
   useEffect(() => {
@@ -1439,14 +1444,18 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
         chatAnnotations: annotations,
       };
 
-      await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
+      await flushChatAnnotationDraft(sessionId);
+      const releaseSubmission = trackChatAnnotationSubmission(sessionId, annotations);
+      try {
+        await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
+      } finally {
+        releaseSubmission();
+      }
       consumeAnnotations(annotations);
 
       // Record activity for usage tracking (wake up polling if sleeping)
       if (provider?.startsWith('claude')) {
         recordClaudeActivity();
-      } else if (provider === 'openai-codex') {
-        recordCodexActivity();
       }
     } catch (error) {
       console.error('[SessionTranscript] Failed to send message:', error);
@@ -2374,6 +2383,12 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   const activeTipId = useAtomValue(activeTipIdAtom);
   const hideEmptyHelp = activeTipId !== null && messages.length === 0;
 
+  // Interaction with this visible transcript is stronger evidence of reading
+  // than restoring a project or merely focusing its window. Shared by every layout.
+  const markViewedSessionRead = useCallback(() => {
+    if (store.get(sessionUnreadAtom(sessionId))) store.set(markSessionReadAtom, sessionId);
+  }, [sessionId]);
+
   // Scroll-to-teammate: when the atom fires for this session, find the spawn
   // message and scroll the transcript to it.
   const scrollToTeammate = useAtomValue(scrollToTeammateAtom);
@@ -2643,6 +2658,10 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     <div
       style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minHeight: 0 }}
       data-session-id={sessionId}
+      onPointerDownCapture={markViewedSessionRead}
+      onFocusCapture={markViewedSessionRead}
+      onWheelCapture={markViewedSessionRead}
+      onTouchStartCapture={markViewedSessionRead}
     >
       {/* NIM-852: install notice at the top of the transcript when the genuine
           `claude` CLI isn't installed. Shown in every layout (outside the

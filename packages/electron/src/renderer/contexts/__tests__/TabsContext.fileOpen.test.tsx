@@ -9,6 +9,7 @@ import { handleWorkspaceFileSelect } from '../../utils/workspaceFileOperations';
 import { usePendingFileOpen } from '../../hooks/usePendingFileOpen';
 import { initFileOpenListeners, pendingFileOpensAtom } from '../../store/listeners/fileOpenListeners';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { registerEditorRevealHandler, resetEditorRevealCommand } from '../../components/TabEditor/editorRevealCommand';
 
 vi.mock('../../services/ErrorNotificationService', () => ({ errorNotificationService: { showError: vi.fn(), showWarning: vi.fn() } }));
 
@@ -27,6 +28,7 @@ afterEach(() => {
   cleanup();
   disposeListener?.();
   disposeListener = undefined;
+  resetEditorRevealCommand();
   pruneTabsSlot('/ws');
   pruneTabsSlot('/other');
   vi.useRealTimers();
@@ -61,6 +63,17 @@ function mockTransport(pending: Array<{ requestId: number; path: string; workspa
 }
 
 describe('file opens during tab initialization', () => {
+  it('preserves the heading through a delayed file open and waits for the correct editor', async () => {
+    const pending = [{ requestId: 81, path: '/ws/heading.md', workspacePath: '/ws', fragment: 'требование-языка' }];
+    mockTransport(pending);
+    disposeListener = initFileOpenListeners();
+    render(<Editor />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const reveal = vi.fn();
+    registerEditorRevealHandler('/ws/heading.md', reveal);
+    expect(reveal).toHaveBeenCalledWith({ line: 1, fragment: 'требование-языка' });
+    expect(pending).toEqual([]);
+  });
   it('recovers an early request and waits for the workspace, editor and saved tabs before draining multiple opens', async () => {
     const restore = deferred<any>();
     const pending = [{ requestId: 1, path: '/ws/first.md', workspacePath: '/ws' }];

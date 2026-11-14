@@ -687,6 +687,7 @@ describe('CodexAppServerProtocol', () => {
         },
       },
     });
+    await vi.waitFor(() => expect(events.some(event => event.type === 'usage' && event.contextFillTokens === 4555)).toBe(true));
     child.emitLine({ method: 'turn/completed', params: { threadId: 'thread-abc', turn: { id: 'turn-1', status: 'completed' } } });
 
     await collector;
@@ -706,6 +707,38 @@ describe('CodexAppServerProtocol', () => {
       },
     });
 
+    protocol.cleanupSession(session);
+  });
+
+  // #1251 follow-on: turn/completed carries no usage at all on this transport
+  it.each([undefined, 4555, 0])('invalidates pre-compaction context until a new measurement (%s)', async after => {
+    const protocol = new CodexAppServerProtocol();
+    const start = protocol.createSession({ workspacePath: '/tmp/ws' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const thread = await nextWrittenMatching(child, 'thread/start');
+    child.emitLine({ id: thread.id, result: { thread: { id: 'compact-thread' } } });
+    const session = await start;
+    const events: ProtocolEvent[] = [];
+    const collect = (async () => { for await (const event of protocol.sendMessage(session, { content: 'test' })) events.push(event); })();
+    const turn = await nextWrittenMatching(child, 'turn/start');
+    child.emitLine({ id: turn.id, result: { turn: { id: 'compact-turn' } } });
+    const usage = (tokens: number, threadId = 'compact-thread') => child.emitLine({ method: 'thread/tokenUsage/updated', params: {
+      threadId, turnId: 'compact-turn', tokenUsage: { total: { inputTokens: 500000, outputTokens: 1000, totalTokens: 501000 }, last: { totalTokens: tokens }, modelContextWindow: 258400 },
+    } });
+    usage(236000);
+    child.emitLine({ method: 'item/completed', params: { threadId: 'compact-thread', turnId: 'compact-turn', item: { id: 'compaction', type: 'contextCompaction' } } });
+    if (after !== undefined) usage(after);
+    usage(999999, 'unrelated-thread');
+    child.emitLine({ method: 'turn/completed', params: { threadId: 'compact-thread', turn: { id: 'compact-turn', status: 'completed' } } });
+    await collect;
+    const last = events.at(-1)!;
+    expect(last.type).toBe('complete');
+    expect(last.contextFillTokens).toBe(after);
+    expect(last.contextCompacted === true).toBe(after === undefined);
+    expect(last.usage?.total_tokens).toBe(501000);
+    expect(events.some(event => event.type === 'usage' && event.contextCompacted)).toBe(true);
+    expect(events.some(event => event.contextFillTokens === 999999)).toBe(false);
     protocol.cleanupSession(session);
   });
 
