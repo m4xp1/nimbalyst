@@ -18,7 +18,7 @@ import { RemoteSessionTranscript } from './RemoteSessionTranscript';
 import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect, useState, useMemo } from 'react';
 import { appendChatAnnotations, type ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import type { CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
-import { chatAnnotationDraftAtom, updateChatAnnotationDraft } from './chatAnnotationDraft';
+import { chatAnnotationDraftAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
 import { DraftAnnotationList, TranscriptAnnotationControls } from './ChatAnnotationControls';
 import { selectionPathsMatch } from './TextSelectionIndicator';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
@@ -1068,7 +1068,11 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   }, [setDraftAttachments]);
 
   const consumeAnnotations = useCallback((sent: readonly ChatAnnotation[]) => {
-    if (sent.length) updateChatAnnotationDraft(sessionId, draft => draft.filter(annotation => !sent.includes(annotation)));
+    if (sent.length) void consumeChatAnnotationDraft(sessionId, sent).catch(() => {});
+  }, [sessionId]);
+
+  useEffect(() => () => {
+    void flushChatAnnotationDraft(sessionId).catch(() => {});
   }, [sessionId]);
 
   useEffect(() => {
@@ -1439,7 +1443,13 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
         chatAnnotations: annotations,
       };
 
-      await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
+      await flushChatAnnotationDraft(sessionId);
+      const releaseSubmission = trackChatAnnotationSubmission(sessionId, annotations);
+      try {
+        await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
+      } finally {
+        releaseSubmission();
+      }
       consumeAnnotations(annotations);
 
       // Record activity for usage tracking (wake up polling if sleeping)

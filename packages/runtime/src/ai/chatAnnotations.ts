@@ -11,6 +11,22 @@ export interface ChatAnnotation {
   comment: string;
 }
 
+export function sameChatAnnotation(first: ChatAnnotation | undefined, second: ChatAnnotation | undefined): boolean {
+  return first === second || JSON.stringify(first) === JSON.stringify(second);
+}
+
+/** Apply only edits made since the caller's baseline, retaining other windows' notes. */
+export function mergeChatAnnotationChanges(current: ChatAnnotation[], base: ChatAnnotation[], updated: ChatAnnotation[]): ChatAnnotation[] {
+  const original = new Map(base.map(annotation => [annotation.id, annotation]));
+  const local = new Map(updated.map(annotation => [annotation.id, annotation]));
+  const changed = new Set([...original.keys(), ...local.keys()].filter(id => !sameChatAnnotation(original.get(id), local.get(id))));
+  const currentIds = new Set(current.map(annotation => annotation.id));
+  return [
+    ...current.flatMap(annotation => changed.has(annotation.id) ? local.get(annotation.id) ?? [] : annotation),
+    ...updated.filter(annotation => changed.has(annotation.id) && !currentIds.has(annotation.id)),
+  ];
+}
+
 export function readChatAnnotations(value: unknown): ChatAnnotation[] {
   if (!Array.isArray(value)) return [];
   return value.filter((annotation): annotation is ChatAnnotation => {

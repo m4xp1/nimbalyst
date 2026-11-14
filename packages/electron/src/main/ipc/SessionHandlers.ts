@@ -33,6 +33,7 @@ import { externalIdentityForSession } from '../services/externalSessions/Externa
 import { isLocalWikiItemId } from '../services/localWiki/localWikiItemIds';
 import { createTrailingSingleFlight } from '../utils/asyncCache';
 import { createUncommittedSessionLookup } from './uncommittedSessionLookup';
+import { saveSessionAnnotationDraft } from '../services/sessionAnnotationDrafts';
 
 // Several listeners refresh the list on one event; eight identical calls in the
 // same millisecond each materialized every session row before the OOM abort.
@@ -234,8 +235,14 @@ export async function registerSessionHandlers() {
     });
 
     // Update session metadata (including mode, isArchived, etc.)
-    safeHandle('sessions:update-metadata', async (event, sessionId: string, updates: UpdateSessionMetadataPayload) => {
+    safeHandle('sessions:update-metadata', async (event, sessionId: string, updates: UpdateSessionMetadataPayload & { annotationDraftBase?: unknown }) => {
         try {
+            if (updates.metadata && Object.keys(updates.metadata).length === 1 &&
+                Object.hasOwn(updates.metadata, 'draftAnnotations') &&
+                Object.keys(updates).every(key => key === 'metadata' || key === 'annotationDraftBase')) {
+                const draftAnnotations = await saveSessionAnnotationDraft(sessionId, updates.metadata.draftAnnotations, updates.annotationDraftBase);
+                return { success: true, draftAnnotations };
+            }
             const currentSession = await AISessionsRepository.get(sessionId);
             if (!currentSession) {
                 throw new Error('Session not found');
@@ -309,6 +316,9 @@ export async function registerSessionHandlers() {
             if (updates.createdBySessionId !== undefined) rendererUpdate.createdBySessionId = updates.createdBySessionId;
             if ((updates as any).isPinned !== undefined) rendererUpdate.isPinned = (updates as any).isPinned;
             if (updates.isArchived !== undefined) rendererUpdate.isArchived = updates.isArchived;
+            if (updates.metadata && Object.hasOwn(updates.metadata, 'draftAnnotations')) {
+                rendererUpdate.metadata = { draftAnnotations: updates.metadata.draftAnnotations };
+            }
 
             if (Object.keys(rendererUpdate).length > 0) {
                 for (const window of BrowserWindow.getAllWindows()) {

@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
-import React from 'react';
+import React, { useContext } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Provider, type PrimitiveAtom } from 'jotai';
+import { Provider, type Atom, type PrimitiveAtom } from 'jotai';
 import type { LexicalEditor } from 'lexical';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { store } from '@nimbalyst/runtime/store';
 import { sessionStoreAtom } from '../../../store/atoms/sessions';
 import { DraftAnnotationList, FileAnnotationMarkers, TranscriptAnnotationControls, useFileAnnotationAction } from '../ChatAnnotationControls';
-import { AnnotationSessionContext, chatAnnotationDraftAtom, updateChatAnnotationDraft } from '../chatAnnotationDraft';
+import {
+  AnnotationSessionContext, AnnotationSessionProvider, acceptChatAnnotationSubmission, applyChatAnnotationSnapshot, chatAnnotationDraftAtom,
+  consumeChatAnnotationDraft, flushAllChatAnnotationDrafts, flushChatAnnotationDraft, trackChatAnnotationSubmission, updateChatAnnotationDraft,
+} from '../chatAnnotationDraft';
+import { getTextSelection, setTextSelection } from '../TextSelectionIndicator';
+import { AnnotationEditorProvider } from '../AnnotationEditorProvider';
 
 vi.mock('../../../store/atoms/sessions', async () => {
   const { atom } = await import('jotai');
@@ -32,7 +37,7 @@ vi.mock('../../../store/atoms/sessions', async () => {
 
 vi.mock('@floating-ui/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@floating-ui/react')>();
-  const refs = { setFloating: () => {}, setPositionReference: () => {} };
+  const refs = { setFloating: () => {}, setPositionReference: () => {}, floating: { current: null } };
   return {
     ...actual,
     FloatingPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -71,13 +76,81 @@ beforeEach(() => {
   vi.stubGlobal('electronAPI', { invoke });
 });
 
-afterEach(() => {
+afterEach(async () => {
   window.getSelection()?.removeAllRanges();
   cleanup();
+  await flushAllChatAnnotationDrafts();
   vi.unstubAllGlobals();
 });
 
 describe('chat annotation draft persistence', () => {
+  it('clears annotations when the user message is persisted while the agent is still running', async () => {
+    const sessionId = 'annotation-accepted-message';
+    const sent = makeAnnotation('Sent note');
+    hydrate(sessionId, [sent]);
+    const release = trackChatAnnotationSubmission(sessionId, [sent]);
+    acceptChatAnnotationSubmission(sessionId);
+    expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([]);
+    await flushChatAnnotationDraft(sessionId);
+    release();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+  it('flushes the last keystroke once and does not write it again after the timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = 'annotation-flush';
+      hydrate(sessionId, [makeAnnotation('Saved')]);
+      updateChatAnnotationDraft(sessionId, draft => draft.map(annotation => ({ ...annotation, comment: 'Last keystroke' })));
+      await flushChatAnnotationDraft(sessionId);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][2]).toEqual({ metadata: { draftAnnotations: [makeAnnotation('Last keystroke')] }, annotationDraftBase: [makeAnnotation('Saved')] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('merges another window snapshot while preserving an unsaved local comment', async () => {
+    const sessionId = 'annotation-concurrent-window';
+    hydrate(sessionId, [makeAnnotation('Saved')]);
+    updateChatAnnotationDraft(sessionId, draft => draft.map(annotation => ({ ...annotation, comment: 'Local edit' })));
+    const other = { ...makeAnnotation('Other window'), id: 'annotation-2' };
+    applyChatAnnotationSnapshot(sessionId, [makeAnnotation('Saved'), other]);
+    expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([makeAnnotation('Local edit'), other]);
+    await flushChatAnnotationDraft(sessionId);
+    expect(invoke.mock.calls[0][2]).toMatchObject({ metadata: { draftAnnotations: [makeAnnotation('Local edit'), other] } });
+  });
+
+  it('clears the sent snapshot but keeps comments changed while sending', async () => {
+    const sessionId = 'annotation-sent-snapshot';
+    const sent = makeAnnotation('Sent version');
+    hydrate(sessionId, [sent]);
+    updateChatAnnotationDraft(sessionId, draft => draft.map(annotation => ({ ...annotation, comment: 'Next draft' })));
+    await consumeChatAnnotationDraft(sessionId, [sent]);
+    expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([makeAnnotation('Next draft')]);
+    await consumeChatAnnotationDraft(sessionId, [makeAnnotation('Next draft')]);
+    expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([]);
+  });
+  it('updates all views immediately and saves one snapshot after typing stops', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = 'annotation-debounced-input';
+      hydrate(sessionId, [makeAnnotation('Initial')]);
+      for (const comment of ['O', 'On', 'One final note']) {
+        updateChatAnnotationDraft(sessionId, draft => draft.map(annotation => ({ ...annotation, comment })));
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      expect(store.get(chatAnnotationDraftAtom(sessionId))[0].comment).toBe('One final note');
+      expect(invoke).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('sessions:update-metadata', sessionId, {
+        metadata: { draftAnnotations: [makeAnnotation('One final note')] },
+        annotationDraftBase: [makeAnnotation('Initial')],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('loads annotations for the selected session, then persists rapid edits in order', async () => {
     const firstSession = 'annotation-draft-a';
     const secondSession = 'annotation-draft-b';
@@ -100,10 +173,12 @@ describe('chat annotation draft persistence', () => {
 
     await act(async () => { resolveFirst({ success: true }); });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
-    expect(invoke.mock.calls).toEqual([
-      ['sessions:update-metadata', firstSession, { metadata: { draftAnnotations: [makeAnnotation('First edit')] } }],
-      ['sessions:update-metadata', secondSession, { metadata: { draftAnnotations: [makeAnnotation('Separate draft')] } }],
-      ['sessions:update-metadata', firstSession, { metadata: { draftAnnotations: [makeAnnotation('Latest edit')] } }],
+    expect(invoke.mock.calls.filter(([, id]) => id === firstSession)).toEqual([
+      ['sessions:update-metadata', firstSession, { metadata: { draftAnnotations: [makeAnnotation('First edit')] }, annotationDraftBase: expect.any(Array) }],
+      ['sessions:update-metadata', firstSession, { metadata: { draftAnnotations: [makeAnnotation('Latest edit')] }, annotationDraftBase: expect.any(Array) }],
+    ]);
+    expect(invoke.mock.calls.filter(([, id]) => id === secondSession)).toEqual([
+      ['sessions:update-metadata', secondSession, { metadata: { draftAnnotations: [makeAnnotation('Separate draft')] }, annotationDraftBase: [] }],
     ]);
     hydrate(firstSession, [makeAnnotation('Reloaded draft')]);
     expect(store.get(chatAnnotationDraftAtom(firstSession))[0].comment).toBe('Reloaded draft');
@@ -111,6 +186,78 @@ describe('chat annotation draft persistence', () => {
 });
 
 describe('adding and editing chat annotations', () => {
+  it('receives the active session across a separate editor root and switches without remounting', () => {
+    let target: Atom<string | null> | null = null;
+    function CaptureScope() { target = useContext(AnnotationSessionContext); return null; }
+    const parent = render(<Provider store={store}><AnnotationSessionProvider value="root-session-a">
+      <CaptureScope />
+    </AnnotationSessionProvider></Provider>);
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'Before the selected words after.';
+    document.body.append(paragraph);
+    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => {
+      listener(paragraph);
+      return () => {};
+    } } as LexicalEditor;
+    render(<AnnotationEditorProvider target={target}><FileAnnotationHarness editor={editor} filePath="/workspace/root.md" /></AnnotationEditorProvider>);
+    const add = () => {
+      const range = document.createRange();
+      range.setStart(paragraph.firstChild!, 7);
+      range.setEnd(paragraph.firstChild!, 25);
+      window.getSelection()!.addRange(range);
+      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+    };
+    try {
+      add();
+      parent.rerender(<Provider store={store}><AnnotationSessionProvider value="root-session-b"><CaptureScope /></AnnotationSessionProvider></Provider>);
+      add();
+      expect(store.get(chatAnnotationDraftAtom('root-session-a'))).toHaveLength(1);
+      expect(store.get(chatAnnotationDraftAtom('root-session-b'))).toHaveLength(1);
+    } finally {
+      paragraph.remove();
+    }
+  });
+  it('opens a draft editor without navigation and provides an explicit Find action', () => {
+    const sessionId = 'annotation-find-action';
+    const annotation = makeAnnotation('A note');
+    hydrate(sessionId, [annotation]);
+    const navigate = vi.fn();
+    render(<Provider store={store}><DraftAnnotationList sessionId={sessionId} navigate={navigate} /></Provider>);
+    fireEvent.click(screen.getByText('1 annotation'));
+    fireEvent.click(screen.getByRole('button', { name: '1. the selected words' }));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment in draft' }).value).toBe('A note');
+    fireEvent.click(screen.getByRole('button', { name: 'Find annotation source' }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(annotation);
+  });
+
+  it('replaces the matching Selection when adding a file annotation', () => {
+    const sessionId = 'annotation-replaces-selection';
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'Before the selected words after.';
+    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => {
+      listener(paragraph);
+      return () => {};
+    } } as LexicalEditor;
+    document.body.append(paragraph);
+    try {
+      render(<Provider store={store}><AnnotationSessionProvider value={sessionId}>
+        <FileAnnotationHarness editor={editor} filePath="/workspace/notes.md" />
+      </AnnotationSessionProvider></Provider>);
+      setTextSelection('the selected words', '/workspace/notes.md');
+      const range = document.createRange();
+      range.setStart(paragraph.firstChild!, 7);
+      range.setEnd(paragraph.firstChild!, 25);
+      window.getSelection()!.addRange(range);
+      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      expect(getTextSelection()).toBeNull();
+      expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([
+        expect.objectContaining({ quote: 'the selected words' }),
+      ]);
+    } finally {
+      paragraph.remove();
+    }
+  });
   it('switches the markers and their draft when the same file stays open', async () => {
     const firstSession = 'annotation-first-file-chat';
     const secondSession = 'annotation-second-file-chat';
@@ -128,9 +275,9 @@ describe('adding and editing chat annotations', () => {
     } as LexicalEditor;
     const view = (sessionId: string) => (
       <Provider store={store}>
-        <AnnotationSessionContext.Provider value={sessionId}>
+        <AnnotationSessionProvider value={sessionId}>
           <FileAnnotationHarness editor={editor} filePath={filePath} />
-        </AnnotationSessionContext.Provider>
+        </AnnotationSessionProvider>
       </Provider>
     );
     document.body.append(paragraph);
@@ -143,8 +290,9 @@ describe('adding and editing chat annotations', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
       const comment = screen.getByRole('textbox', { name: 'Annotation comment' });
       fireEvent.change(comment, { target: { value: 'First draft only' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Save annotation' }));
+      fireEvent.pointerDown(document.body);
       await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('sessions:update-metadata', firstSession, {
+        annotationDraftBase: expect.any(Array),
         metadata: { draftAnnotations: [expect.objectContaining({
           source: { type: 'file', filePath },
           quote: 'the selected words',
@@ -195,7 +343,12 @@ describe('adding and editing chat annotations', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }));
       const reopened = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment' });
       expect(reopened.value).toBe('Keep this note');
+      const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 60 });
+      fireEvent(root, wheel);
+      expect(wheel.defaultPrevented).toBe(false);
+      expect(screen.queryByRole('textbox', { name: 'Annotation comment' })).toBeNull();
       await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('sessions:update-metadata', sessionId, {
+        annotationDraftBase: expect.any(Array),
         metadata: { draftAnnotations: [expect.objectContaining({
           source: { type: 'message', sessionId, messageId: 'message-1' },
           quote: 'the selected words',
@@ -215,14 +368,15 @@ describe('adding and editing chat annotations', () => {
     render(<Provider store={store}><DraftAnnotationList sessionId={sessionId} navigate={navigate} /></Provider>);
     fireEvent.click(screen.getByText('1 annotation'));
     fireEvent.click(screen.getByRole('button', { name: '1. the selected words' }));
-    expect(navigate).toHaveBeenCalledExactlyOnceWith(annotation);
+    expect(navigate).not.toHaveBeenCalled();
     const editor = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment in draft' });
     expect(editor.value).toBe('Retained note');
     fireEvent.change(editor, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.blur(editor, { relatedTarget: document.body });
     expect(screen.queryByText('1 annotation')).toBeNull();
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('sessions:update-metadata', sessionId, {
       metadata: { draftAnnotations: [] },
+      annotationDraftBase: expect.any(Array),
     }));
   });
 });

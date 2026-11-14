@@ -84,6 +84,8 @@ export function getTextSelectionForFile(filePath: string | undefined): TextSelec
 
 export function setTextSelection(text: string, filePath: string, owner?: symbol): void {
   selectionOwner = owner;
+  const current = getTextSelection();
+  if (current?.text === text && selectionPathsMatch(current.filePath, filePath)) return;
   (window as any).__textSelectionText = text;
   (window as any).__textSelectionFilePath = filePath;
   (window as any).__textSelectionTimestamp = Date.now();

@@ -657,7 +657,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
       return undefined;
     }
 
-    // Debounce timer for selection updates
+    // Code editors still debounce cursor events; Markdown selection is local UI state.
     let debounceTimer: NodeJS.Timeout | null = null;
 
     // For Lexical editor (markdown in rich text mode)
@@ -668,6 +668,16 @@ export const TabEditor: React.FC<TabEditorProps> = ({
         // The Lexical SelectionAlwaysOnDisplay plugin may show a visual selection,
         // but we want a clean slate - user must re-select to use "+ selection" feature
         clearTextSelection(filePath, selectionOwner);
+
+        const publishNativeSelection = () => {
+          const root = editor.getRootElement();
+          const selection = window.getSelection();
+          if (!root || !selection?.rangeCount || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return;
+          const text = selection.toString();
+          if (text.trim()) setTextSelection(text, filePath, selectionOwner);
+          else clearTextSelection(filePath, selectionOwner);
+        };
+        document.addEventListener('selectionchange', publishNativeSelection);
 
         const unregister = editor.registerUpdateListener(() => {
           // Only update selection if the editor has focus
@@ -681,14 +691,7 @@ export const TabEditor: React.FC<TabEditorProps> = ({
             return;
           }
 
-          // Clear any pending debounce
-          if (debounceTimer) {
-            clearTimeout(debounceTimer);
-          }
-
-          // Debounce selection updates to reduce performance impact
-          debounceTimer = setTimeout(() => {
-            editor.getEditorState().read(() => {
+          editor.getEditorState().read(() => {
               const selection = $getSelection();
               if ($isRangeSelection(selection) && !selection.isCollapsed()) {
                 const selectedText = selection.getTextContent();
@@ -701,14 +704,14 @@ export const TabEditor: React.FC<TabEditorProps> = ({
                 // User clicked in editor without selection - clear it
                 clearTextSelection(filePath, selectionOwner);
               }
-            });
-          }, 150); // 150ms debounce
+          });
         });
         return () => {
           if (debounceTimer) {
             clearTimeout(debounceTimer);
           }
           unregister();
+          document.removeEventListener('selectionchange', publishNativeSelection);
           clearTextSelection(filePath, selectionOwner);
         };
       }

@@ -42,7 +42,7 @@ import { TrackerDocumentHeaderMeta } from './TrackerDocumentHeaderMeta';
 import type { TrackerContentMode } from './TrackerItemDetail';
 import { shouldExitDocumentViewOnEscape } from './trackerDocumentEscape';
 import { TrackerDocumentPanel } from './TrackerDocumentPanel';
-import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
+import { AnnotationSessionProvider } from '../UnifiedAI/chatAnnotationDraft';
 import { sessionRegistryAtom } from '../../store/atoms/sessions';
 import { resolveTrackerChatSessionId } from './trackerDocumentChat';
 import {
@@ -359,7 +359,7 @@ export const TrackerDocumentView: React.FC<TrackerDocumentViewProps> = ({
               providerIds={documentMode ? ['tracker-document-header'] : []}
             >
               <div className="min-h-0 flex-1 overflow-hidden">
-                <AnnotationSessionContext.Provider value={annotationSessionId}>{detail}</AnnotationSessionContext.Provider>
+                <AnnotationSessionProvider value={annotationSessionId}>{detail}</AnnotationSessionProvider>
               </div>
             </DocumentHeaderSuppressionProvider>
           </TrackerDetailPanelResizable>

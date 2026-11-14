@@ -24,6 +24,7 @@
 
 import { canvasWorkingSetRegistry } from '@nimbalyst/runtime/canvas/canvasPresence';
 import { store } from '@nimbalyst/runtime/store';
+import { acceptChatAnnotationSubmission } from '../components/UnifiedAI/chatAnnotationDraft';
 import {
   sessionProcessingAtom,
   pruneClosedSessionDataAtom,
@@ -599,6 +600,7 @@ export function initSessionStateListeners(): () => void {
     }
 
     const workspacePath = ownedWorkspacePath;
+    if (direction === 'input') acceptChatAnnotationSubmission(sessionId);
 
     // Throttle session data reload per session (leading + trailing edge).
     // During active streaming, message-logged fires on every chunk which would

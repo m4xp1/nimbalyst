@@ -110,7 +110,7 @@ import { ArchiveWorktreeDialog } from './ArchiveWorktreeDialog';
 import { useArchiveWorktreeDialog } from '../../hooks/useArchiveWorktreeDialog';
 import { detectFileType, type SerializableDocumentContext } from '../../hooks/useDocumentContext';
 import { getTextSelectionForFile } from '../UnifiedAI/TextSelectionIndicator';
-import { AnnotationSessionContext } from '../UnifiedAI/chatAnnotationDraft';
+import { AnnotationSessionProvider } from '../UnifiedAI/chatAnnotationDraft';
 import { terminalListAtom, terminalListWorkspaceAtom, terminalsForWorkspace, setActiveTerminal, loadTerminals } from '../../store/atoms/terminals';
 import {
   sessionKanbanTagsAtom,
@@ -1592,7 +1592,7 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
           />
         }
         editor={worktreePathReady ? (
-          <AnnotationSessionContext.Provider value={isActive && showEditorTabs
+          <AnnotationSessionProvider value={isActive && showEditorTabs
             ? (sidebarVisible && rightPanelMode === 'session-chat' ? chatSessionId : activeSessionId)
             : null}>
           <WorkstreamEditorTabs
@@ -1607,7 +1607,7 @@ export const AgentWorkstreamPanel = React.memo(React.forwardRef<AgentWorkstreamP
             onTabDoubleClick={toggleEditorMaximized}
             onBeforeMove={isEditorMaximized ? toggleEditorMaximized : undefined}
           />
-          </AnnotationSessionContext.Provider>
+          </AnnotationSessionProvider>
         ) : null}
         transcript={
           <WorkstreamSessionTabs

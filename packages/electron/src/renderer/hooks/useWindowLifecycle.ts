@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { logger } from '../utils/logger';
 import { store, editorDirtyAtom, makeEditorKey } from '@nimbalyst/runtime/store';
 import { isCollabUri } from '@nimbalyst/collab-protocol';
+import { flushAllChatAnnotationDrafts, hasPendingChatAnnotationDrafts } from '../components/UnifiedAI/chatAnnotationDraft';
 import {
   collabConnectionStatusAtom,
   hasCollabUnsyncedChanges,
@@ -27,6 +28,14 @@ export function useWindowLifecycle({
 
     // Save on window close/reload
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasPendingChatAnnotationDrafts()) {
+        e.preventDefault();
+        e.returnValue = '';
+        void flushAllChatAnnotationDrafts().then(() => window.close()).catch(error => {
+          logger.ui.error('Could not save annotation drafts before closing', error);
+        });
+        return;
+      }
       const snapshot = tabsRef.current?.getSnapshot?.();
       const tabs = snapshot
         ? snapshot.tabOrder
