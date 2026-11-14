@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { LinkNode } from '@lexical/link';
+import { HeadingNode } from '@lexical/rich-text';
 import { $convertFromMarkdownString } from '@lexical/markdown';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
@@ -28,7 +29,7 @@ function renderMarkdown(
     <LexicalComposer
       initialConfig={{
         namespace: 'document-link-action-markdown-test',
-        nodes: [LinkNode],
+        nodes: [LinkNode, HeadingNode],
         onError: (error) => {
           throw error;
         },
@@ -57,6 +58,26 @@ function renderMarkdown(
 describe('workspace file links imported from markdown', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('opens only the file path and carries the decoded heading through the document service', async () => {
+    vi.stubGlobal('__workspacePath', '/workspace');
+    const openDocument = vi.fn().mockResolvedValue(undefined);
+    const getDocumentByPath = vi.fn().mockResolvedValue(null);
+    renderMarkdown('[Section](docs/a%23b.md#Требование%20языка)\n', { openDocument, getDocumentByPath });
+    fireEvent.click(await screen.findByRole('link', { name: 'Section' }));
+    await waitFor(() => expect(openDocument).toHaveBeenCalledWith('', { path: 'docs/a#b.md', fragment: 'Требование языка', name: undefined }));
+    expect(getDocumentByPath).toHaveBeenCalledWith('docs/a#b.md');
+  });
+
+  it('scrolls an in-document heading without reopening the file', async () => {
+    const openDocument = vi.fn();
+    renderMarkdown('[Jump](#требование-языка)\n\n## Требование языка\n', { openDocument });
+    const heading = await screen.findByRole('heading', { name: 'Требование языка' });
+    heading.scrollIntoView = vi.fn();
+    fireEvent.click(await screen.findByRole('link', { name: 'Jump' }));
+    expect(heading.scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+    expect(openDocument).not.toHaveBeenCalled();
   });
 
   // Lexical's `formatUrl` rewrites a bare relative path (no leading `./`) to

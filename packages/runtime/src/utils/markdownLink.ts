@@ -21,7 +21,23 @@ export function encodeMarkdownLinkPath(path: string): string {
   return path
     // Encode existing percent signs first so decoding is lossless.
     .replace(/%/g, '%25')
+    .replace(/#/g, '%23')
+    .replace(/\?/g, '%3F')
     .replace(/ /g, '%20')
     .replace(/\(/g, '%28')
     .replace(/\)/g, '%29');
+}
+
+/** Split before decoding: an encoded %23 belongs to a filename, not its anchor. */
+export function splitMarkdownLinkTarget(href: string): { path: string; fragment?: string } {
+  const hash = href.indexOf('#');
+  const path = (hash < 0 ? href : href.slice(0, hash)).split('?', 1)[0];
+  if (hash < 0 || hash === href.length - 1) return { path };
+  const raw = href.slice(hash + 1);
+  try { return { path, fragment: decodeURIComponent(raw).normalize('NFC') }; }
+  catch { return { path, fragment: raw.normalize('NFC') }; }
+}
+
+export function decodeMarkdownLinkPath(path: string): string {
+  try { return decodeURIComponent(path); } catch { return path; }
 }

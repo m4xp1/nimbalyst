@@ -26,4 +26,7 @@ describe('encodeMarkdownLinkPath', () => {
     const encoded = encodeMarkdownLinkPath('/tmp/50% done/file.md');
     expect(decodeURIComponent(encoded)).toBe('/tmp/50% done/file.md');
   });
+  it('escapes filename hash and query characters instead of turning them into navigation', () => {
+    expect(encodeMarkdownLinkPath('/docs/a#b?.md')).toBe('/docs/a%23b%3F.md');
+  });
 });

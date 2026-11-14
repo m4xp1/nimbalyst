@@ -1123,7 +1123,8 @@ export class ElectronDocumentService implements DocumentService {
         : BrowserWindow.getFocusedWindow()?.webContents;
     if (target) {
       target.send('open-document', {
-        path: unindexedPath ?? path.join(this.workspacePath, doc!.path)
+        path: unindexedPath ?? path.join(this.workspacePath, doc!.path),
+        ...(fallback?.fragment ? { fragment: fallback.fragment } : {}),
       });
     }
   }

@@ -62,6 +62,7 @@ import { SearchReplaceStateManager, isLexicalSearchEditor } from '@nimbalyst/run
 import { hasEditorFind, registerEditorFindHandler } from './editorFindCommand';
 import { hasEditorReveal, registerEditorRevealHandler } from './editorRevealCommand';
 import { revealMarkdownLine } from '@nimbalyst/runtime/editor/markdown/revealMarkdownLine';
+import { markdownHeadingLine, revealHeading } from '@nimbalyst/runtime/editor/utils/headingNavigation';
 import { MarkdownSourceBudgetError, preserveMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSource';
 import { $readMarkdownSource } from '@nimbalyst/runtime/editor/markdown/MarkdownSourceSnapshot';
 import { useSuppressedDocumentHeaderProviderIds } from './DocumentHeaderSuppressionContext';
@@ -572,18 +573,23 @@ export const TabEditor: React.FC<TabEditorProps> = ({
   useEffect(() => {
     if (!isEditorReady) return;
 
-    return registerEditorRevealHandler(filePath, ({ line, column }) => {
+    return registerEditorRevealHandler(filePath, ({ line, column, fragment }) => {
       const editor = editorRef.current;
       if (!editor) return;
 
       // Monaco (code files, and markdown in source mode) reveals the exact line.
       if (hasEditorReveal(editor)) {
-        editor.revealPosition(line, column);
+        const targetLine = fragment && isMarkdown ? markdownHeadingLine(contentRef.current, fragment) : line;
+        if (targetLine !== undefined) editor.revealPosition(targetLine, column);
         return;
       }
 
       // The rich markdown view has no lines; map the line onto a block.
       if (isMarkdown && !sourceModeRef.current) {
+        if (fragment) {
+          revealHeading(editor.getRootElement(), fragment);
+          return;
+        }
         revealMarkdownLine({
           editor,
           transformers: getEditorTransformers(),

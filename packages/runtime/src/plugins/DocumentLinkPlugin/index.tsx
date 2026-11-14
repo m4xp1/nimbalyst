@@ -39,6 +39,8 @@ import {
   parseCollabReferenceDocumentId,
 } from './documentLinkPaths';
 import { isWorkspaceFileHref } from '../../editor/utils/workspaceLinkNavigation';
+import { decodeMarkdownLinkPath, splitMarkdownLinkTarget } from '../../utils/markdownLink';
+import { revealHeading } from '../../editor/utils/headingNavigation';
 import {
   dispatchAppActionHref,
   isAppActionHref,
@@ -311,7 +313,8 @@ function getWorkspaceFileAnchor(target: Node): HTMLAnchorElement | null {
   }
   // getAttribute keeps the authored href; anchor.href would be resolved
   // against the renderer origin and always look external.
-  return isWorkspaceFileHref(anchor.getAttribute('href')) ? anchor : null;
+  const href = anchor.getAttribute('href');
+  return isWorkspaceFileHref(href) || href?.startsWith('#') ? anchor : null;
 }
 
 function getAppActionHref(
@@ -520,10 +523,15 @@ export function DocumentLinkPlugin({
       }
 
       const workspacePath = (window as unknown as { __workspacePath?: string }).__workspacePath ?? null;
-      const candidatePaths = documentPath
-        ? resolveDocumentLinkLookupPaths(documentPath, currentDocumentPath, workspacePath)
+      const linkTarget = splitMarkdownLinkTarget(documentPath ?? '');
+      if (!linkTarget.path && linkTarget.fragment) {
+        revealHeading(editor.getRootElement(), linkTarget.fragment);
+        return;
+      }
+      const candidatePaths = linkTarget.path
+        ? resolveDocumentLinkLookupPaths(linkTarget.path, currentDocumentPath, workspacePath)
         : [];
-      const fallbackPath = candidatePaths[candidatePaths.length - 1];
+      const fallbackPath = candidatePaths[candidatePaths.length - 1] || (linkTarget.path ? decodeMarkdownLinkPath(linkTarget.path) : undefined);
 
       void (async () => {
         for (const candidate of candidatePaths) {
@@ -531,6 +539,7 @@ export function DocumentLinkPlugin({
           if (resolvedDoc) {
             await documentService.openDocument(resolvedDoc.id, {
               path: resolvedDoc.path,
+              ...(linkTarget.fragment ? { fragment: linkTarget.fragment } : {}),
             });
             return;
           }
@@ -539,6 +548,7 @@ export function DocumentLinkPlugin({
         await documentService.openDocument(fallbackPath ? '' : (documentId ?? ''), {
           path: fallbackPath ?? documentPath,
           name: fallbackPath ? undefined : documentName,
+          ...(linkTarget.fragment ? { fragment: linkTarget.fragment } : {}),
         });
       })().catch(error => {
           console.error('Failed to open document reference', error);

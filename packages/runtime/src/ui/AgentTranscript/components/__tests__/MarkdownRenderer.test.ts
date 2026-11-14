@@ -3,10 +3,17 @@ import {
   parseTrackerReferenceHref,
   resolveTranscriptFilePathFromHref,
   resolveTranscriptFileTargetFromHref,
+  transcriptFileLocation,
   transcriptUrlTransform,
 } from '../MarkdownRenderer';
 
 describe('resolveTranscriptFilePathFromHref', () => {
+  it('keeps a heading separate from encoded filename characters and the line suffix', () => {
+    const target = resolveTranscriptFileTargetFromHref('C:/docs/a%23b.md:42#Требование%20языка');
+    expect(target).toEqual({ path: 'C:/docs/a#b.md', line: 42, fragment: 'Требование языка' });
+    expect(transcriptFileLocation(target)).toEqual({ line: 42, fragment: 'Требование языка' });
+    expect(transcriptFileLocation(resolveTranscriptFileTargetFromHref('/docs/a.md#section'))).toEqual({ line: 1, fragment: 'section' });
+  });
   it('resolves unix absolute file paths', () => {
     expect(resolveTranscriptFilePathFromHref('/Users/test/project/src/file.ts')).toBe(
       '/Users/test/project/src/file.ts'

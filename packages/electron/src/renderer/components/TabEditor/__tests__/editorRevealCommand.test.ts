@@ -14,6 +14,14 @@ afterEach(() => {
 });
 
 describe('editorRevealCommand', () => {
+  it('keeps a heading until the requested file editor is ready without revealing another file', () => {
+    const other = vi.fn(), target = vi.fn();
+    registerEditorRevealHandler('/workspace/other.md', other);
+    revealEditorPosition('/workspace/target.md', { line: 1, fragment: 'требование-языка' });
+    expect(other).not.toHaveBeenCalled();
+    registerEditorRevealHandler('/workspace/target.md', target);
+    expect(target).toHaveBeenCalledWith({ line: 1, fragment: 'требование-языка' });
+  });
   it('routes a reveal to the handler registered for the file path', () => {
     const handler = vi.fn();
     const unregister = registerEditorRevealHandler('/workspace/a.ts', handler);

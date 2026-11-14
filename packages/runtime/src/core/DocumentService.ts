@@ -15,6 +15,7 @@ export interface Document {
 export interface DocumentOpenOptions {
   path?: string;
   name?: string;
+  fragment?: string;
 }
 
 /**
