@@ -3,7 +3,7 @@
 
 // packages/cli/src/mcp/pluginBundledEntry.ts
 import { existsSync as existsSync8 } from "node:fs";
-import path27 from "node:path";
+import path31 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // packages/cli/src/cli/exitCodes.ts
@@ -7166,6 +7166,17 @@ function writeMigratedTo(root, migratedTo) {
   fs.mkdirSync(path9.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ ...readSettingFile(root), migratedTo }, null, 2) + "\n");
 }
+function readPublishTarget(root) {
+  const value = readSettingFile(root).publish;
+  if (typeof value?.orgId !== "string" || typeof value?.projectId !== "string") return void 0;
+  return { orgId: value.orgId, projectId: value.projectId, ...typeof value.publishedAt === "string" ? { publishedAt: value.publishedAt } : {} };
+}
+function writePublishTarget(root, publish) {
+  const file = settingPath(root);
+  if (fs.existsSync(file)) readLocationSetting(root);
+  fs.mkdirSync(path9.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...readSettingFile(root), publish }, null, 2) + "\n");
+}
 function resolveWikiLocation(startDir, location) {
   const root = projectRoot(startDir);
   if (location) return { projectRoot: root, dir: path9.resolve(location), source: "flag" };
@@ -7535,11 +7546,11 @@ var ORG_INVITE_ROLE = {
   enum: ["member", "admin", "viewer", "guest"],
   description: "Team role. Default 'member'."
 };
-var TEAM_PROJECT_ROLES = ["project-admin", "project-editor", "project-viewer"];
+var TEAM_PROJECT_ROLES = ["project-admin", "project-editor", "project-commenter", "project-viewer"];
 var INVITE_PROJECT_ROLE = {
   type: "string",
   enum: [...TEAM_PROJECT_ROLES],
-  description: "Role on `projectId`. Default 'project-editor' when projectId is given; 'editor' and 'viewer' are accepted for project-editor and project-viewer."
+  description: "Role on `projectId`. Default 'project-editor' when projectId is given; 'editor', 'commenter' and 'viewer' are accepted for project-editor, project-commenter and project-viewer. A commenter reads and comments on pages but never edits page bodies."
 };
 var PAGE_TOOL_CONTRACT = [
   {
@@ -11022,16 +11033,29 @@ function boundedExpiresMs(seconds) {
   const s = Number(seconds);
   return (Number.isFinite(s) && s > 0 ? Math.min(s, DEVICE_EXPIRES_MAX_S) : DEVICE_EXPIRES_DEFAULT_S) * 1e3;
 }
-async function runDeviceFlow(flow, onPrompt) {
-  const start = await postJson(flow.codeUrl, { client_id: flow.clientId, ...flow.scope ? { scope: flow.scope } : {} }, true);
-  const { device_code, user_code, verification_uri, verification_uri_complete, expires_in } = start.json ?? {};
-  if (start.status !== 200 || !device_code) {
-    throw connectionError(`${flow.label} refused the device code request: ${start.json?.error_description ?? start.json?.error ?? start.status}`);
+async function runDeviceFlow(flow, onPrompt, options = {}) {
+  let pending = options.resume;
+  if (!pending) {
+    const start = await postJson(flow.codeUrl, { client_id: flow.clientId, ...flow.scope ? { scope: flow.scope } : {} }, true);
+    const { device_code: device_code2, user_code, verification_uri, verification_uri_complete, expires_in } = start.json ?? {};
+    if (start.status !== 200 || !device_code2) {
+      throw connectionError(`${flow.label} refused the device code request: ${start.json?.error_description ?? start.json?.error ?? start.status}`);
+    }
+    pending = {
+      deviceCode: String(device_code2),
+      userCode: String(user_code),
+      verificationUri: String(verification_uri),
+      ...typeof verification_uri_complete === "string" ? { verificationUriComplete: verification_uri_complete } : {},
+      intervalMs: boundedIntervalMs(start.json.interval, DEVICE_INTERVAL_DEFAULT_S),
+      deadline: Date.now() + boundedExpiresMs(expires_in)
+    };
+    options.onStarted?.(pending);
   }
-  onPrompt(user_code, verification_uri, typeof verification_uri_complete === "string" ? verification_uri_complete : void 0);
+  onPrompt(pending.userCode, pending.verificationUri, pending.verificationUriComplete);
   const expired = () => new CliError(ExitCode.USAGE, `The ${flow.label} sign-in code expired before it was approved. Run nim login again.`);
-  let intervalMs = boundedIntervalMs(start.json.interval, DEVICE_INTERVAL_DEFAULT_S);
-  const deadline = Date.now() + boundedExpiresMs(expires_in);
+  const device_code = pending.deviceCode;
+  let intervalMs = Math.max(pending.intervalMs, pollFloorMs());
+  const deadline = pending.deadline;
   while (Date.now() < deadline) {
     await sleep2(intervalMs);
     const poll = await postJson(flow.tokenUrl, { grant_type: DEVICE_GRANT, device_code, client_id: flow.clientId }, true);
@@ -11054,10 +11078,11 @@ async function runDeviceFlow(flow, onPrompt) {
   }
   throw expired();
 }
-async function nimbalystDeviceLogin(server, onPrompt) {
+async function nimbalystDeviceLogin(server, onPrompt, options = {}) {
   const body = await runDeviceFlow(
     { label: "Nimbalyst", codeUrl: `${server}/oauth/device/code`, tokenUrl: `${server}/oauth/token`, clientId: NIM_CLI_CLIENT_ID },
-    onPrompt
+    onPrompt,
+    options
   );
   const creds = toStored(body);
   await saveCredentials(server, creds);
@@ -11134,8 +11159,55 @@ async function fetchUserInfo(server) {
   return body;
 }
 
+// packages/cli/src/cloud/pendingSignIn.ts
+import * as fs5 from "node:fs";
+import * as path20 from "node:path";
+function pendingPath() {
+  return path20.join(path20.dirname(credentialsPath()), "pending-sign-in.json");
+}
+function readAll() {
+  try {
+    const parsed = JSON.parse(fs5.readFileSync(pendingPath(), "utf8"));
+    return parsed && typeof parsed.servers === "object" && parsed.servers ? parsed.servers : {};
+  } catch {
+    return {};
+  }
+}
+function writeAll(servers) {
+  const file = pendingPath();
+  if (Object.keys(servers).length === 0) {
+    fs5.rmSync(file, { force: true });
+    return;
+  }
+  fs5.mkdirSync(path20.dirname(file), { recursive: true, mode: 448 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs5.writeFileSync(tmp, JSON.stringify({ servers }, null, 2) + "\n", { mode: 384 });
+  fs5.chmodSync(tmp, 384);
+  fs5.renameSync(tmp, file);
+}
+function loadPendingSignIn(server) {
+  const pending = readAll()[server];
+  if (!pending || typeof pending.deviceCode !== "string" || typeof pending.deadline !== "number") return void 0;
+  return pending.deadline > Date.now() ? pending : void 0;
+}
+function savePendingSignIn(server, pending) {
+  try {
+    writeAll({ ...readAll(), [server]: pending });
+  } catch {
+  }
+}
+function clearPendingSignIn(server) {
+  try {
+    const servers = readAll();
+    if (!(server in servers)) return;
+    delete servers[server];
+    writeAll(servers);
+  } catch {
+  }
+}
+
 // packages/cli/src/localWiki/moveToTeam.ts
-import * as path23 from "node:path";
+import * as path24 from "node:path";
 
 // packages/cli/src/cloud/pagesClient.ts
 var nextId = 1;
@@ -11241,8 +11313,8 @@ async function callTool(server, name, args) {
 
 // packages/cli/src/cloud/repo.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
-import * as fs5 from "node:fs";
-import * as path20 from "node:path";
+import * as fs6 from "node:fs";
+import * as path21 from "node:path";
 function git3(dir, args) {
   try {
     return execFileSync4("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || void 0;
@@ -11255,12 +11327,12 @@ function locateCheckout(startDir) {
   return { root, origin: git3(root, ["remote", "get-url", "origin"]) };
 }
 function wikiFilePath(root) {
-  return path20.join(root, ".nimbalyst", "wiki.json");
+  return path21.join(root, ".nimbalyst", "wiki.json");
 }
 function readProjectPin(root) {
   let raw;
   try {
-    raw = fs5.readFileSync(wikiFilePath(root), "utf8");
+    raw = fs6.readFileSync(wikiFilePath(root), "utf8");
   } catch {
     return void 0;
   }
@@ -11274,6 +11346,17 @@ function readProjectPin(root) {
     return { orgId: parsed.orgId, projectId: parsed.projectId };
   }
   return void 0;
+}
+function writeProjectPin(root, pin) {
+  const file = wikiFilePath(root);
+  let existing = {};
+  try {
+    existing = JSON.parse(fs6.readFileSync(file, "utf8"));
+  } catch {
+  }
+  const { wikiId: _w, joinSecret: _j, ...kept } = existing;
+  fs6.mkdirSync(path21.dirname(file), { recursive: true });
+  fs6.writeFileSync(file, JSON.stringify({ ...kept, orgId: pin.orgId, projectId: pin.projectId }, null, 2) + "\n");
 }
 function resolveTeamsTarget(startDir, opts = {}) {
   const { root, origin: repo } = locateCheckout(startDir);
@@ -11297,7 +11380,7 @@ function resolveTeamsTarget(startDir, opts = {}) {
 // packages/cli/src/cloud/teamContent.ts
 import { createHash as createHash3 } from "node:crypto";
 import { readFile as readFile10, stat as stat5 } from "node:fs/promises";
-import * as path21 from "node:path";
+import * as path22 from "node:path";
 var MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 var CONNECT_TIMEOUT_MS = 15e3;
 var FLUSH_TIMEOUT_MS = 15e3;
@@ -11322,6 +11405,9 @@ var MIME_TYPES = {
 function assetIdFor(bytes) {
   return createHash3("sha256").update(bytes).digest("hex").slice(0, 32);
 }
+function assetUriFor(documentId, bytes) {
+  return `collab-asset://doc/${encodeURIComponent(documentId)}/asset/${encodeURIComponent(assetIdFor(bytes))}`;
+}
 function syncUrlFor(server) {
   return server.replace(/^http(s?):\/\//, (_match, secure) => `ws${secure}://`);
 }
@@ -11338,44 +11424,57 @@ function createTeamContentWriter(options) {
     credential = issued;
     return credential;
   };
+  const withRoom = async (documentId, use) => {
+    const models = options.models;
+    if (!models) return { ok: false, code: "editor_code_unavailable", message: "The editors' document code is not installed." };
+    const issued = await currentCredential();
+    let resolveFirstSync;
+    const firstSync = new Promise((resolve8) => {
+      resolveFirstSync = resolve8;
+    });
+    const provider = new models.DocumentSyncProvider({
+      serverUrl: syncUrlFor(options.server),
+      getJwt: async (opts) => (await currentCredential(opts?.forceRefresh === true)).token,
+      orgId: issued.orgId,
+      teamMemberId: issued.memberId,
+      documentId,
+      onFirstSyncComplete: (isEmpty) => resolveFirstSync(isEmpty)
+    });
+    let timer;
+    try {
+      await provider.connect();
+      const serverEmpty = await Promise.race([
+        firstSync,
+        new Promise((resolve8) => {
+          timer = setTimeout(() => resolve8(null), options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+        })
+      ]);
+      if (serverEmpty === null) {
+        const status = provider.getLastAuthRejectionStatus();
+        return {
+          ok: false,
+          code: status === null ? "room_unavailable" : "room_refused",
+          message: status === null ? "Timed out opening the team document." : `The server refused the team document (status ${status}).`
+        };
+      }
+      if (provider.hasUndecodedContent()) {
+        return { ok: false, code: "room_unreadable", message: "Part of the team document could not be read, so nim did not act on it." };
+      }
+      return await use(provider, serverEmpty);
+    } catch (err) {
+      return { ok: false, code: "write_failed", message: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (timer) clearTimeout(timer);
+      try {
+        provider.destroy();
+      } catch {
+      }
+    }
+  };
   return {
     async writeEditorPage(page) {
-      const models = options.models;
-      if (!models) return { ok: false, code: "editor_code_unavailable", message: "The editors' document code is not installed." };
-      const issued = await currentCredential();
-      let resolveFirstSync;
-      const firstSync = new Promise((resolve8) => {
-        resolveFirstSync = resolve8;
-      });
-      const provider = new models.DocumentSyncProvider({
-        serverUrl: syncUrlFor(options.server),
-        getJwt: async (opts) => (await currentCredential(opts?.forceRefresh === true)).token,
-        orgId: issued.orgId,
-        teamMemberId: issued.memberId,
-        documentId: page.documentId,
-        onFirstSyncComplete: (isEmpty) => resolveFirstSync(isEmpty)
-      });
-      let timer;
-      try {
-        await provider.connect();
-        const serverEmpty = await Promise.race([
-          firstSync,
-          new Promise((resolve8) => {
-            timer = setTimeout(() => resolve8(null), options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
-          })
-        ]);
-        if (serverEmpty === null) {
-          const status = provider.getLastAuthRejectionStatus();
-          return {
-            ok: false,
-            code: status === null ? "room_unavailable" : "room_refused",
-            message: status === null ? "Timed out opening the team document." : `The server refused the team document (status ${status}).`
-          };
-        }
-        if (provider.hasUndecodedContent()) {
-          return { ok: false, code: "room_unreadable", message: "Part of the team document could not be read, so the move did not write it." };
-        }
-        const outcome = models.editorCodecs.writeDoc(page.documentType, provider.getYDoc(), page.text, { roomHadState: !serverEmpty });
+      return withRoom(page.documentId, async (provider, serverEmpty) => {
+        const outcome = options.models.editorCodecs.writeDoc(page.documentType, provider.getYDoc(), page.text, { roomHadState: !serverEmpty });
         if (outcome === "edited") {
           return { ok: false, code: "body_edited", message: "Someone has changed this page in the team since the move wrote it (or it already had other content), so it was not overwritten." };
         }
@@ -11383,15 +11482,10 @@ function createTeamContentWriter(options) {
           return { ok: false, code: "write_unconfirmed", message: "The server did not confirm the page content was saved; run the move again." };
         }
         return { ok: true, outcome };
-      } catch (err) {
-        return { ok: false, code: "write_failed", message: err instanceof Error ? err.message : String(err) };
-      } finally {
-        if (timer) clearTimeout(timer);
-        try {
-          provider.destroy();
-        } catch {
-        }
-      }
+      });
+    },
+    async readRoom(documentId, read) {
+      return withRoom(documentId, async (provider) => ({ ok: true, value: read(provider.getYDoc()) }));
     },
     async uploadFile(file) {
       const size = (await stat5(file.abs)).size;
@@ -11400,7 +11494,7 @@ function createTeamContentWriter(options) {
       }
       const bytes = await readFile10(file.abs);
       const assetId = assetIdFor(bytes);
-      const name = path21.basename(file.abs);
+      const name = path22.basename(file.abs);
       const url = `${options.server}/api/collab/docs/${encodeURIComponent(file.documentId)}/assets/${assetId}`;
       const put = async (token) => fetchImpl(url, {
         method: "PUT",
@@ -11409,7 +11503,7 @@ function createTeamContentWriter(options) {
           [ASSET_HEADER_WIRE_FORMAT]: ASSET_WIRE_FORMAT_PLAINTEXT,
           // Header values are latin-1 on the wire; percent-encoded so any file name survives.
           [ASSET_HEADER_FILE_NAME]: encodeURIComponent(name.slice(0, 200)),
-          [ASSET_HEADER_MIME]: MIME_TYPES[path21.extname(name).toLowerCase()] ?? "application/octet-stream",
+          [ASSET_HEADER_MIME]: MIME_TYPES[path22.extname(name).toLowerCase()] ?? "application/octet-stream",
           [ASSET_HEADER_PLAINTEXT_SIZE]: String(bytes.byteLength)
         },
         body: bytes
@@ -11421,7 +11515,7 @@ function createTeamContentWriter(options) {
           const detail = await res.text().catch(() => "");
           return { ok: false, code: `upload_http_${res.status}`, message: `The upload was refused (HTTP ${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}.` };
         }
-        return { ok: true, uri: `collab-asset://doc/${encodeURIComponent(file.documentId)}/asset/${encodeURIComponent(assetId)}` };
+        return { ok: true, uri: assetUriFor(file.documentId, bytes) };
       } catch (err) {
         return { ok: false, code: "upload_failed", message: err instanceof Error ? err.message : String(err) };
       }
@@ -11430,8 +11524,32 @@ function createTeamContentWriter(options) {
 }
 
 // packages/cli/src/localWiki/teamExport.ts
-import * as fs6 from "node:fs";
-import * as path22 from "node:path";
+import * as fs7 from "node:fs";
+import * as path23 from "node:path";
+
+// packages/cli/src/staticExport/visibility.ts
+var IDENTITY_FIELD = /^(owners?|assignees?|authors?|reporters?|created_?by|updated_?by|emails?|contacts?|members?)$/i;
+var EMAIL = /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/i;
+function hasEmail(value) {
+  if (typeof value === "string") return EMAIL.test(value);
+  if (Array.isArray(value)) return value.some(hasEmail);
+  return false;
+}
+function isExportOptOut(fields) {
+  return fields.export === false || fields.export === "false";
+}
+function stripIdentity(fields, userFields, keep = false) {
+  if (keep) return { fields, removed: 0 };
+  const out = {};
+  let removed = 0;
+  for (const [name, value] of Object.entries(fields)) {
+    if (IDENTITY_FIELD.test(name) || userFields.has(name) || hasEmail(value)) removed++;
+    else out[name] = value;
+  }
+  return { fields: out, removed };
+}
+
+// packages/cli/src/localWiki/teamExport.ts
 var EDITOR_IDS = {
   excalidraw: "com.nimbalyst.excalidraw",
   mindmap: "com.nimbalyst.mindmap",
@@ -11460,6 +11578,8 @@ function splitRelations(fields, relationFields) {
   }
   return { fields: plain2, relations };
 }
+var TEAM_PAGE_FIELD_KEYS = /* @__PURE__ */ new Set(["owner", "status", "summary", "tags"]);
+var MAX_TEAM_EDITOR_PAGE_BYTES = 1024 * 1024;
 var MIGRATION_BANNER_PREFIX = "This wiki moved to the team project:";
 var migrationBanner = (link2) => `${MIGRATION_BANNER_PREFIX} ${link2}`;
 function stripMigrationBanner(body) {
@@ -11471,7 +11591,7 @@ function stripMigrationBanner(body) {
 }
 function readTypeDefinition(file) {
   try {
-    return yaml.load(fs6.readFileSync(file, "utf8"), { schema: yaml.CORE_SCHEMA }) ?? null;
+    return yaml.load(fs7.readFileSync(file, "utf8"), { schema: yaml.CORE_SCHEMA }) ?? null;
   } catch {
     return null;
   }
@@ -11489,10 +11609,43 @@ async function collectLocalWiki(wiki, options = {}) {
   const byId = new Map(live2.map((page) => [page.id, page]));
   const skipped = [];
   const skipReasons = new Map(live2.map((page) => [page.id, editorSkipReason(page, options.editorTypes)]));
+  const hidden = /* @__PURE__ */ new Set();
+  if (options.publish) {
+    const hiddenAbove = (page) => {
+      const seen = /* @__PURE__ */ new Set();
+      for (let at = page; at && !seen.has(at.id); at = at.parentId ? byId.get(at.parentId) : void 0) {
+        seen.add(at.id);
+        if (isExportOptOut(at.fields)) return true;
+      }
+      return false;
+    };
+    for (const page of live2) {
+      if (!hiddenAbove(page)) continue;
+      hidden.add(page.id);
+      skipReasons.set(page.id, isExportOptOut(page.fields) ? "export: false" : "under a page with export: false");
+    }
+  }
+  const malformedPaths = [];
+  const malformedTables = /* @__PURE__ */ new Set();
+  if (options.publish) {
+    for (const page of live2) {
+      if (!page.malformed || hidden.has(page.id)) continue;
+      skipReasons.set(page.id, "its frontmatter does not parse; fix the file and publish again");
+      if (page.path) malformedPaths.push(page.path);
+    }
+    for (const table of snapshot.tables ?? []) if (table.malformed) malformedTables.add(table.typeId);
+  }
+  for (const page of live2) {
+    if (page.documentType === "markdown" || skipReasons.get(page.id) !== null) continue;
+    const bytes = Buffer.byteLength((await wiki.readBody(page.id)).markdown);
+    if (bytes > MAX_TEAM_EDITOR_PAGE_BYTES) {
+      skipReasons.set(page.id, `${(bytes / (1024 * 1024)).toFixed(1)} MB, over the 1 MB a team page's content can hold; it stays local`);
+    }
+  }
   const included = (page) => skipReasons.get(page.id) === null;
   for (const page of live2) {
     const reason = skipReasons.get(page.id);
-    if (reason) skipped.push({ localId: page.id, title: page.title, reason });
+    if (reason) skipped.push({ localId: page.id, title: page.title, reason, ...hidden.has(page.id) ? { excluded: true } : {} });
   }
   const importedParent = (parentId) => {
     const seen = /* @__PURE__ */ new Set();
@@ -11512,20 +11665,48 @@ async function collectLocalWiki(wiki, options = {}) {
   const pagePaths2 = new Set(live2.flatMap((page) => page.path ? [page.path.toLowerCase()] : []));
   const locations = /* @__PURE__ */ new Map();
   const usedTypes = /* @__PURE__ */ new Set();
+  const definedTypes = new Set(wiki.typeDefs().map((def) => def.typeId));
   const relationFieldsByType = new Map(
     wiki.typeDefs().map((def) => [def.typeId, new Set(def.fields.filter((f) => f.type === "relationship").map((f) => f.name))])
   );
   const relations = /* @__PURE__ */ new Map();
   const tablePlacements = /* @__PURE__ */ new Map();
+  const userFieldsByType = new Map(
+    wiki.typeDefs().map((def) => [def.typeId, new Set(def.fields.filter((f) => f.type === "user").map((f) => f.name))])
+  );
+  let strippedFields = 0;
   const withFields = (localId, typeId, all) => {
-    const split = splitRelations(all, typeId ? relationFieldsByType.get(typeId) : void 0);
+    let fields = all;
+    if (options.publish) {
+      const { export: _optOut, ...rest } = all;
+      const stripped = stripIdentity(rest, (typeId ? userFieldsByType.get(typeId) : void 0) ?? /* @__PURE__ */ new Set());
+      strippedFields += stripped.removed;
+      fields = stripped.fields;
+    }
+    if (!typeId) {
+      fields = Object.fromEntries(Object.entries(fields).filter(([key]) => TEAM_PAGE_FIELD_KEYS.has(key)));
+    }
+    const split = splitRelations(fields, typeId ? relationFieldsByType.get(typeId) : void 0);
+    if (hidden.size) {
+      for (const [key, value] of Object.entries(split.relations)) {
+        const kept = Array.isArray(value) ? value.filter((id) => !hidden.has(id)) : hidden.has(value) ? void 0 : value;
+        if (kept === void 0 || Array.isArray(kept) && !kept.length) delete split.relations[key];
+        else split.relations[key] = kept;
+      }
+    }
     if (Object.keys(split.relations).length) relations.set(localId, split.relations);
     return Object.keys(split.fields).length ? { fields: split.fields } : {};
   };
   for (const node of buildTree(snapshot)) {
     if (node.kind === "type") {
+      const tableParent2 = node.parentNodeId ? node.parentNodeId.replace(/^(document|item):/, "") : null;
+      if (tableParent2 && hidden.has(tableParent2)) continue;
+      if (malformedTables.has(node.id)) {
+        skipped.push({ localId: `type:${node.id}`, title: node.id, reason: "its table file does not parse; fix the file and publish again" });
+        continue;
+      }
       const tracker = await wiki.trackerSnapshot(node.id);
-      const parentLocalId = importedParent(node.parentNodeId ? node.parentNodeId.replace(/^(document|item):/, "") : null);
+      const parentLocalId = importedParent(tableParent2);
       usedTypes.add(node.id);
       tablePlacements.set(node.id, { typeId: node.id, parentLocalId, ...node.sortOrder !== null ? { order: node.sortOrder } : {} });
       tracker.items.forEach((item, index) => {
@@ -11565,15 +11746,16 @@ async function collectLocalWiki(wiki, options = {}) {
     }
     const files = await linkedFilesOf(wiki, page.id, markdown, { path: page.path, dir: page.dir }, pagePaths2);
     if (files.length) linkedFiles.set(page.id, files);
-    if (page.type) usedTypes.add(page.type);
+    const typeId = page.type && (page.type !== "page" || definedTypes.has("page")) ? page.type : null;
+    if (typeId) usedTypes.add(typeId);
     pages.push({
       localId: page.id,
       parentLocalId: importedParent(page.parentId),
       title: page.title,
       ...page.order !== null ? { order: page.order } : {},
-      kind: page.type ? "typedPage" : "page",
-      ...page.type ? { typeId: page.type } : {},
-      ...withFields(page.id, page.type, page.fields),
+      kind: typeId ? "typedPage" : "page",
+      ...typeId ? { typeId } : {},
+      ...withFields(page.id, typeId, page.fields),
       body: stripMigrationBanner(markdown)
     });
   }
@@ -11598,7 +11780,9 @@ async function collectLocalWiki(wiki, options = {}) {
     homeLocalId: home?.localId ?? null,
     projectHomeLocalId: projectHome?.localId ?? null,
     locations,
-    relations
+    relations,
+    strippedFields,
+    malformed: { paths: malformedPaths, tableTypes: [...malformedTables] }
   };
 }
 async function linkedFilesOf(wiki, pageId, body, from, pagePaths2) {
@@ -11613,11 +11797,11 @@ async function linkedFilesOf(wiki, pageId, body, from, pagePaths2) {
   return files;
 }
 function linkBase(location) {
-  return location.path ? path22.posix.dirname(location.path).replace(/^\.$/, "") : location.dir;
+  return location.path ? path23.posix.dirname(location.path).replace(/^\.$/, "") : location.dir;
 }
 function resolveRelative(base, linkPath) {
-  const joined = path22.posix.normalize(path22.posix.join(base === "" ? "." : base, linkPath));
-  if (joined === ".." || joined.startsWith("../") || path22.posix.isAbsolute(joined)) return null;
+  const joined = path23.posix.normalize(path23.posix.join(base === "" ? "." : base, linkPath));
+  if (joined === ".." || joined.startsWith("../") || path23.posix.isAbsolute(joined)) return null;
   return (joined === "." ? "" : joined).replace(/\/$/, "").toLowerCase();
 }
 function pathIndex(locations) {
@@ -11734,14 +11918,14 @@ function canvasCardTarget(href, canvasPath, wikiPrefix, wikiDir) {
     return null;
   }
   if (!decoded) return null;
-  if (path22.isAbsolute(decoded)) {
+  if (path23.isAbsolute(decoded)) {
     if (!wikiDir) return null;
-    const rel = path22.relative(wikiDir, path22.normalize(decoded));
-    if (!rel || rel.startsWith("..") || path22.isAbsolute(rel)) return null;
-    return rel.split(path22.sep).join("/").toLowerCase();
+    const rel = path23.relative(wikiDir, path23.normalize(decoded));
+    if (!rel || rel.startsWith("..") || path23.isAbsolute(rel)) return null;
+    return rel.split(path23.sep).join("/").toLowerCase();
   }
-  if (decoded.startsWith("./") || decoded.startsWith("../")) return resolveRelative(path22.posix.dirname(canvasPath).replace(/^\.$/, ""), decoded);
-  const fromRoot = path22.posix.normalize(decoded);
+  if (decoded.startsWith("./") || decoded.startsWith("../")) return resolveRelative(path23.posix.dirname(canvasPath).replace(/^\.$/, ""), decoded);
+  const fromRoot = path23.posix.normalize(decoded);
   if (!wikiPrefix) return resolveRelative("", fromRoot);
   return fromRoot.startsWith(`${wikiPrefix}/`) ? resolveRelative("", fromRoot.slice(wikiPrefix.length + 1)) : null;
 }
@@ -11849,6 +12033,34 @@ function pacedCaller(deps) {
     }
   };
 }
+function teamForm(exported, page, byPath, lookups) {
+  const location = exported.locations.get(page.localId);
+  const editorPage2 = (localId) => exported.pages.find((p) => p.localId === localId && p.kind === "editorPage");
+  const embedFor = (localId) => {
+    const fileExtension = editorPage2(localId)?.fileExtension;
+    const entry = lookups.entryFor(localId);
+    if (!fileExtension || !entry?.nodeId.startsWith("document:")) return void 0;
+    return { uri: `nimbalyst://doc/${encodeURIComponent(entry.id)}?orgId=${encodeURIComponent(lookups.orgId)}`, fileExtension };
+  };
+  const embeds = location && page.body ? rewriteEmbedsForTeam(page.body, location, byPath, embedFor) : { body: page.body, rewritten: 0 };
+  const pageLinks = location && embeds.body ? rewriteWikiLinks(embeds.body, location, byPath, lookups.linkFor) : { body: embeds.body, rewritten: 0 };
+  const fileLinks = location && pageLinks.body ? rewriteFileLinksForTeam(pageLinks.body, location, byPath, lookups.linkFor, lookups.assetUri) : { body: pageLinks.body, rewritten: 0 };
+  const remapped = {};
+  const missing = [];
+  for (const [field, value] of Object.entries(exported.relations.get(page.localId) ?? {})) {
+    const ids = Array.isArray(value) ? value : [value];
+    const mapped = ids.map((id) => lookups.entryFor(id)?.id);
+    if (mapped.some((id) => !id)) missing.push(`${field} -> ${ids.filter((_, i) => !mapped[i]).join(", ")}`);
+    else remapped[field] = Array.isArray(value) ? mapped : mapped[0];
+  }
+  const fields = { ...page.fields ?? {}, ...remapped };
+  return {
+    body: fileLinks.body,
+    rewritten: embeds.rewritten + pageLinks.rewritten + fileLinks.rewritten,
+    fields: Object.keys(fields).length ? fields : null,
+    missing
+  };
+}
 function asResult(value) {
   return {
     idMap: value?.idMap && typeof value.idMap === "object" ? value.idMap : {},
@@ -11868,7 +12080,7 @@ async function importToTeam(exported, target, call, content) {
     // Every batch names it, so the server resolves Home as a parent or a re-sent body in any of them.
     ...exported.projectHomeLocalId ? { homeLocalId: exported.projectHomeLocalId } : {}
   };
-  const idMap = {};
+  const idMap = target.only ? { ...target.prior ?? {} } : {};
   const errors = [];
   const warnings = [];
   let created = 0;
@@ -11897,7 +12109,66 @@ async function importToTeam(exported, target, call, content) {
     });
   }
   for (const types2 of typePlan.batches) await send([], { types: types2 });
-  const firstPass = planBatches(exported.pages, { overhead });
+  let editorPagesWritten = 0;
+  let filesUploaded = 0;
+  const assetUris = /* @__PURE__ */ new Map();
+  if ((exported.editorFiles.size || exported.linkedFiles.size) && !content) {
+    throw new Error("importToTeam: editor pages and linked files need a TeamContentWriter");
+  }
+  const uploaded = /* @__PURE__ */ new Set();
+  const uploadFor = async (localId, entry) => {
+    uploaded.add(localId);
+    const uris = /* @__PURE__ */ new Map();
+    for (const file of exported.linkedFiles.get(localId) ?? []) {
+      if (!file.abs) {
+        warnings.push({ localId, code: "linked_file_missing", message: `${file.linkPath} is not a file in the wiki, so the link is left as written.` });
+        continue;
+      }
+      const result = await content.uploadFile({ documentId: bodyDocumentId(entry), abs: file.abs });
+      if (result.ok) {
+        uris.set(file.linkPath, result.uri);
+        filesUploaded++;
+      } else if (result.code === "file_too_large") {
+        warnings.push({ localId, code: result.code, message: `${file.linkPath}: ${result.message}` });
+      } else {
+        errors.push({ localId, code: result.code, message: `${file.linkPath}: ${result.message}` });
+      }
+    }
+    if (uris.size) assetUris.set(localId, uris);
+  };
+  const prior = target.prior ?? {};
+  const byPath = pathIndex(exported.locations);
+  const sendSet = target.only ? new Set(target.only) : null;
+  if (sendSet) {
+    const exportedIds = new Set(exported.pages.map((page) => page.localId));
+    const isNew = (localId) => exportedIds.has(localId) && !prior[localId];
+    for (const page of exported.pages) {
+      if (sendSet.has(page.localId)) continue;
+      let dependsOnNew = false;
+      const probe = (localId) => {
+        if (isNew(localId)) dependsOnNew = true;
+        return prior[localId];
+      };
+      teamForm(exported, page, byPath, { entryFor: probe, linkFor: (localId) => probe(localId)?.link, orgId: target.project.orgId, assetUri: () => void 0 });
+      if (dependsOnNew) sendSet.add(page.localId);
+    }
+  }
+  const toSend = (localId) => !sendSet || sendSet.has(localId);
+  for (const localId of exported.linkedFiles.keys()) if (prior[localId] && toSend(localId)) await uploadFor(localId, prior[localId]);
+  const finalForm = (page, entryFor, typeMismatch2) => teamForm(exported, page, byPath, {
+    entryFor: (localId) => typeMismatch2.has(localId) ? void 0 : entryFor(localId),
+    linkFor: (localId) => entryFor(localId)?.link,
+    orgId: target.project.orgId,
+    assetUri: (linkPath) => assetUris.get(page.localId)?.get(linkPath)
+  });
+  const sent = /* @__PURE__ */ new Map();
+  const sentKey = (page) => JSON.stringify([page.body, page.fields ?? null]);
+  const firstPages = exported.pages.filter((page) => toSend(page.localId)).map((page) => {
+    if (!Object.keys(prior).length) return page;
+    const form = finalForm(page, (localId) => prior[localId], /* @__PURE__ */ new Set());
+    return { ...page, body: form.body, ...form.fields ? { fields: form.fields } : {} };
+  });
+  const firstPass = planBatches(firstPages, { overhead });
   errors.push(...firstPass.tooLarge.map(tooLargeError));
   const notImported = new Set(firstPass.tooLarge.map((page) => page.localId));
   for (const planned of firstPass.batches) {
@@ -11912,7 +12183,10 @@ async function importToTeam(exported, target, call, content) {
     const result = await send(batch);
     created += result.created;
     updated += result.updated;
-    for (const page of batch) if (!result.idMap[page.localId]) notImported.add(page.localId);
+    for (const page of batch) {
+      if (!result.idMap[page.localId]) notImported.add(page.localId);
+      else sent.set(page.localId, sentKey(page));
+    }
   }
   const placeable = [];
   for (const placement2 of exported.typePlacements) {
@@ -11921,13 +12195,6 @@ async function importToTeam(exported, target, call, content) {
     } else placeable.push(placement2);
   }
   for (let at = 0; at < placeable.length; at += TYPE_BATCH_MAX) await send([], { typePlacements: placeable.slice(at, at + TYPE_BATCH_MAX) });
-  let editorPagesWritten = 0;
-  let filesUploaded = 0;
-  const assetUris = /* @__PURE__ */ new Map();
-  if ((exported.editorFiles.size || exported.linkedFiles.size) && !content) {
-    throw new Error("importToTeam: editor pages and linked files need a TeamContentWriter");
-  }
-  const byPath = pathIndex(exported.locations);
   const teamDocument = (localId) => {
     const entry = idMap[localId];
     return entry?.nodeId.startsWith("document:") ? { orgId: target.project.orgId, documentId: entry.id } : void 0;
@@ -11936,6 +12203,7 @@ async function importToTeam(exported, target, call, content) {
   const linkFor = (localId) => idMap[localId]?.link;
   let linksRewritten = 0;
   for (const [localId, file] of exported.editorFiles) {
+    if (!toSend(localId)) continue;
     const entry = idMap[localId];
     if (!entry || typeMismatch.has(localId)) continue;
     const location = exported.locations.get(localId);
@@ -11951,70 +12219,31 @@ async function importToTeam(exported, target, call, content) {
     if (written.ok) editorPagesWritten++;
     else errors.push({ localId, code: written.code, message: written.message });
   }
-  for (const [localId, files] of exported.linkedFiles) {
+  for (const localId of exported.linkedFiles.keys()) {
     const entry = idMap[localId];
-    if (!entry) continue;
-    const uris = /* @__PURE__ */ new Map();
-    for (const file of files) {
-      if (!file.abs) {
-        warnings.push({ localId, code: "linked_file_missing", message: `${file.linkPath} is not a file in the wiki, so the link is left as written.` });
-        continue;
-      }
-      const uploaded = await content.uploadFile({ documentId: bodyDocumentId(entry), abs: file.abs });
-      if (uploaded.ok) {
-        uris.set(file.linkPath, uploaded.uri);
-        filesUploaded++;
-      } else if (uploaded.code === "file_too_large") {
-        warnings.push({ localId, code: uploaded.code, message: `${file.linkPath}: ${uploaded.message}` });
-      } else {
-        errors.push({ localId, code: uploaded.code, message: `${file.linkPath}: ${uploaded.message}` });
-      }
-    }
-    if (uris.size) assetUris.set(localId, uris);
+    if (entry && toSend(localId) && !uploaded.has(localId)) await uploadFor(localId, entry);
   }
-  const teamId = (localId) => idMap[localId]?.id;
-  const editorPages = new Map(exported.pages.filter((page) => page.kind === "editorPage").map((page) => [page.localId, page]));
-  const embedFor = (localId) => {
-    const fileExtension = editorPages.get(localId)?.fileExtension;
-    const doc = typeMismatch.has(localId) ? void 0 : teamDocument(localId);
-    if (!fileExtension || !doc) return void 0;
-    return { uri: `nimbalyst://doc/${encodeURIComponent(doc.documentId)}?orgId=${encodeURIComponent(doc.orgId)}`, fileExtension };
-  };
   const changed = [];
   for (const page of exported.pages) {
-    if (!idMap[page.localId]) continue;
-    const location = exported.locations.get(page.localId);
-    const embeds = location && page.body ? rewriteEmbedsForTeam(page.body, location, byPath, embedFor) : { body: page.body, rewritten: 0 };
-    const pageLinks = location && embeds.body ? rewriteWikiLinks(embeds.body, location, byPath, linkFor) : { body: embeds.body, rewritten: 0 };
-    const uris = assetUris.get(page.localId);
-    const fileLinks = location && pageLinks.body ? rewriteFileLinksForTeam(pageLinks.body, location, byPath, linkFor, (linkPath) => uris?.get(linkPath)) : { body: pageLinks.body, rewritten: 0 };
-    const next = { body: fileLinks.body, rewritten: embeds.rewritten + pageLinks.rewritten + fileLinks.rewritten };
-    const relations = exported.relations.get(page.localId);
-    const remapped = {};
-    const missing = [];
-    for (const [field, value] of Object.entries(relations ?? {})) {
-      const ids = Array.isArray(value) ? value : [value];
-      const mapped = ids.map(teamId);
-      if (mapped.some((id) => !id)) missing.push(`${field} -> ${ids.filter((_, i) => !mapped[i]).join(", ")}`);
-      else remapped[field] = Array.isArray(value) ? mapped : mapped[0];
-    }
-    if (missing.length) {
+    if (!idMap[page.localId] || !toSend(page.localId)) continue;
+    const form = finalForm(page, (localId) => idMap[localId], typeMismatch);
+    linksRewritten += form.rewritten;
+    if (form.missing.length) {
       errors.push({
         localId: page.localId,
         code: "relationship_target_not_imported",
-        message: `Left unset because the item it points at was not imported: ${missing.join("; ")}.`
+        message: `Left unset because the item it points at was not imported: ${form.missing.join("; ")}.`
       });
     }
-    if (!next.rewritten && !Object.keys(remapped).length) continue;
-    linksRewritten += next.rewritten;
-    const fields = { ...page.fields ?? {}, ...remapped };
-    changed.push({ ...page, body: next.body, ...Object.keys(fields).length ? { fields } : {} });
+    const next = { ...page, body: form.body, ...form.fields ? { fields: form.fields } : {} };
+    if (sent.get(page.localId) !== sentKey(next)) changed.push(next);
   }
   const secondPass = planBatches(changed, { overhead });
   errors.push(...secondPass.tooLarge.map(tooLargeError));
   for (const batch of secondPass.batches) await send(batch);
-  const complete = errors.length === 0 && created + updated === exported.pages.length && exported.pages.every((page) => idMap[page.localId]);
-  return { batches, created, updated, linksRewritten, editorPagesWritten, filesUploaded, idMap, errors, warnings, complete };
+  const sentIds = new Set(firstPages.map((page) => page.localId));
+  const complete = errors.length === 0 && created + updated === sentIds.size && exported.pages.every((page) => idMap[page.localId]);
+  return { batches, created, updated, linksRewritten, editorPagesWritten, filesUploaded, idMap, errors, warnings, complete, sentIds };
 }
 
 // packages/cli/src/localWiki/moveToTeam.ts
@@ -12035,8 +12264,14 @@ async function editorModels(opened, load2) {
   }
 }
 async function moveLocalWikiToTeam(opened, options, deps = {}) {
+  const publishing = readPublishTarget(opened.projectRoot);
+  if (publishing) {
+    throw new MoveRefusal(
+      `This local wiki publishes to team project ${publishing.orgId}/${publishing.projectId} (\`nim wiki publish\`), with the files as the source. Moving it would make the team copy the source instead. Remove \`publish\` from .nimbalyst/local-wiki.json first if that is what the user wants.`
+    );
+  }
   const { models, editorTypes } = await editorModels(opened, deps.loadEditorModels);
-  const wikiPrefix = path23.relative(opened.projectRoot, opened.dir).split(path23.sep).join("/");
+  const wikiPrefix = path24.relative(opened.projectRoot, opened.dir).split(path24.sep).join("/");
   const exported = await collectLocalWiki(opened.wiki, { editorTypes, wikiPrefix, wikiDir: opened.dir });
   const typedPages = exported.pages.filter((page) => page.kind === "typedPage").length;
   const editorPages = exported.editorFiles.size;
@@ -12122,10 +12357,755 @@ ${markdown}`, version);
   return result.ok;
 }
 
+// packages/cli/src/localWiki/publishToTeam.ts
+import { statSync as statSync5 } from "node:fs";
+import * as path26 from "node:path";
+
+// packages/runtime/src/editor/commenting/commentValidation.ts
+var COMMENT_BOUNDS = Object.freeze({
+  maxAnchorContextBytes: 512,
+  maxAnchorExactBytes: 4 * 1024,
+  maxBodyBytes: 32 * 1024,
+  maxEntityKeyBytes: 512,
+  maxMentions: 50,
+  maxMutationIdCharacters: 200,
+  maxPageSize: 100
+});
+var CollabCommentControllerError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "CollabCommentControllerError";
+    this.code = code;
+  }
+};
+var textEncoder = new TextEncoder();
+function utf8ByteLength(value) {
+  return textEncoder.encode(value).byteLength;
+}
+function normalizeVisibleCommentText(value) {
+  return value.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
+}
+function validateTextQuoteSelector(selector) {
+  const exact = normalizeVisibleCommentText(selector.exact);
+  const prefix = normalizeVisibleCommentText(selector.prefix ?? "");
+  const suffix = normalizeVisibleCommentText(selector.suffix ?? "");
+  if (!exact || utf8ByteLength(exact) > COMMENT_BOUNDS.maxAnchorExactBytes) {
+    throw new CollabCommentControllerError(
+      "ANCHOR_NOT_FOUND",
+      `Anchor exact text must be between 1 and ${COMMENT_BOUNDS.maxAnchorExactBytes} bytes.`
+    );
+  }
+  if (utf8ByteLength(prefix) > COMMENT_BOUNDS.maxAnchorContextBytes || utf8ByteLength(suffix) > COMMENT_BOUNDS.maxAnchorContextBytes) {
+    throw new CollabCommentControllerError(
+      "ANCHOR_NOT_FOUND",
+      `Anchor prefix and suffix must not exceed ${COMMENT_BOUNDS.maxAnchorContextBytes} bytes each.`
+    );
+  }
+  return { exact, prefix, suffix };
+}
+
+// packages/runtime/src/editor/commenting/quoteMatch.ts
+function joinCommentTextBlocks(blocks) {
+  return blocks.map((block) => normalizeVisibleCommentText(block)).join("\n");
+}
+function findQuoteMatches(text2, selector) {
+  let normalized;
+  try {
+    normalized = validateTextQuoteSelector(selector);
+  } catch (error) {
+    if (error instanceof CollabCommentControllerError) return [];
+    throw error;
+  }
+  const { exact, prefix, suffix } = normalized;
+  const matches = [];
+  let searchFrom = 0;
+  while (searchFrom <= text2.length - exact.length) {
+    const index = text2.indexOf(exact, searchFrom);
+    if (index === -1) break;
+    const prefixMatches = !prefix || text2.slice(Math.max(0, index - prefix.length), index) === prefix;
+    const endOffset = index + exact.length;
+    const suffixMatches = !suffix || text2.slice(endOffset, endOffset + suffix.length) === suffix;
+    if (prefixMatches && suffixMatches) matches.push(index);
+    searchFrom = index + 1;
+  }
+  return matches;
+}
+function findThreadQuoteOffset(text2, selector) {
+  const matches = findQuoteMatches(text2, selector);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1 || !selector.prefix && !selector.suffix) return null;
+  const exactOnly = findQuoteMatches(text2, { exact: selector.exact });
+  return exactOnly.length === 1 ? exactOnly[0] : null;
+}
+
+// packages/cli/src/cloud/teamComments.ts
+function* contents(type2) {
+  for (let item = type2?._start ?? null; item; item = item.right) {
+    if (!item.deleted) yield item.content;
+  }
+}
+function arrayValues(type2) {
+  if (!type2) return [];
+  const out = [];
+  for (const content of contents(type2)) {
+    if (typeof content?.getContent === "function") out.push(...content.getContent());
+  }
+  return out;
+}
+function textUnder(element) {
+  let text2 = "";
+  for (const content of contents(element)) {
+    if (typeof content?.str === "string") text2 += content.str;
+    else if (typeof content?.type?.getAttribute === "function") text2 += textUnder(content.type);
+  }
+  return text2;
+}
+function collectMarkIds(element, into) {
+  for (const content of contents(element)) {
+    const child = content?.type;
+    if (!child || typeof child.getAttribute !== "function") continue;
+    if (child.getAttribute("__type") === "mark") {
+      const ids = child.getAttribute("__ids");
+      if (Array.isArray(ids)) {
+        for (const id of ids) if (typeof id === "string") into.add(id);
+      }
+    }
+    collectMarkIds(child, into);
+  }
+}
+function readLexicalBody(root) {
+  const blocks = [];
+  for (const content of contents(root)) {
+    const child = content?.type;
+    if (child && typeof child.getAttribute === "function") blocks.push(textUnder(child));
+  }
+  const markIds = /* @__PURE__ */ new Set();
+  collectMarkIds(root, markIds);
+  return { text: joinCommentTextBlocks(blocks), markIds };
+}
+function quoteFound(text2, selector) {
+  if (!selector.exact) return false;
+  try {
+    return findThreadQuoteOffset(text2, selector) !== null;
+  } catch {
+    return false;
+  }
+}
+var get = (map2, key) => typeof map2?.get === "function" ? map2.get(key) : void 0;
+function anchorOf(thread) {
+  const anchor = get(thread, "anchor");
+  if (anchor === void 0 || anchor === null) return { kind: "mark" };
+  if (anchor.kind === "text-quote" && typeof anchor.exact === "string") {
+    return {
+      kind: "text-quote",
+      exact: anchor.exact,
+      ...typeof anchor.prefix === "string" ? { prefix: anchor.prefix } : {},
+      ...typeof anchor.suffix === "string" ? { suffix: anchor.suffix } : {}
+    };
+  }
+  if (anchor.kind === "entity") return { kind: "entity" };
+  return { kind: "unknown" };
+}
+function commentOf(map2) {
+  if (get(map2, "deleted") === true) return null;
+  const id = get(map2, "id");
+  const content = get(map2, "content");
+  const at = get(map2, "timeStamp");
+  if (typeof id !== "string" || typeof content !== "string") return null;
+  const actor2 = get(map2, "actor");
+  const author = typeof actor2?.displayName === "string" && actor2.displayName.trim() ? actor2.displayName.trim() : typeof get(map2, "author") === "string" ? String(get(map2, "author")) : "unknown";
+  return { id, author, at: typeof at === "number" ? at : 0, content, byAgent: actor2?.kind === "agent" };
+}
+function readPageComments(doc) {
+  const share = doc?.share;
+  const { text: text2, markIds } = readLexicalBody(share?.get("root"));
+  const threads = [];
+  for (const entry of arrayValues(share?.get("comments"))) {
+    if (get(entry, "type") !== "thread") continue;
+    const id = get(entry, "id");
+    if (typeof id !== "string") continue;
+    const quote = typeof get(entry, "quote") === "string" ? String(get(entry, "quote")) : "";
+    const anchor = anchorOf(entry);
+    let anchorState;
+    if (anchor.kind === "entity") anchorState = "entity";
+    else if (markIds.has(id)) anchorState = "marked";
+    else {
+      const selector = anchor.kind === "text-quote" ? { exact: anchor.exact, prefix: anchor.prefix, suffix: anchor.suffix } : { exact: quote };
+      anchorState = quoteFound(text2, selector) ? "quote" : "orphaned";
+    }
+    const comments = arrayValues(get(entry, "comments")).map(commentOf).filter((c) => c !== null);
+    threads.push({ id, quote: anchor.exact ?? quote, resolved: get(entry, "resolved") === true, anchorKind: anchor.kind, anchorState, comments });
+  }
+  return { threads, text: text2 };
+}
+function openThreads(page) {
+  return page.threads.filter((thread) => !thread.resolved && thread.comments.length > 0);
+}
+
+// packages/cli/src/localWiki/publishManifest.ts
+import { createHash as createHash4 } from "node:crypto";
+import * as fs8 from "node:fs";
+import * as path25 from "node:path";
+var PUBLISH_MANIFEST_VERSION = 1;
+function publishManifestPath(root) {
+  return path25.join(root, ".nimbalyst", "local-wiki-publish.json");
+}
+function hashText(text2) {
+  return createHash4("sha256").update(text2).digest("hex").slice(0, 32);
+}
+function readPublishManifest(root, expect) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs8.readFileSync(publishManifestPath(root), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || typeof parsed.pages !== "object" || parsed.pages === null) return null;
+  if (parsed.orgId !== expect.orgId || parsed.projectId !== expect.projectId || parsed.wikiId !== expect.wikiId) return null;
+  return parsed;
+}
+function writePublishManifest(root, manifest) {
+  const file = publishManifestPath(root);
+  fs8.mkdirSync(path25.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs8.writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n");
+  fs8.renameSync(tmp, file);
+}
+
+// packages/cli/src/localWiki/publishToTeam.ts
+var PUBLISH_NOTE_PREFIX = "Published from the local wiki in";
+function publishNote(where) {
+  return `${PUBLISH_NOTE_PREFIX} ${where}. Each publish replaces these pages, so edits made here are not kept; leave a comment instead.`;
+}
+function repoLabel(repo, fallback) {
+  if (!repo) return fallback;
+  return repo.replace(/^(https?:\/\/)[^@/]+@/i, "$1");
+}
+function homeNoteFor(projectRoot2) {
+  return publishNote(repoLabel(locateCheckout(projectRoot2).origin, path26.basename(projectRoot2)));
+}
+function removalLimit(recorded) {
+  return Math.max(3, Math.floor(recorded * 0.1));
+}
+var PublishRefusal = class extends CliError {
+  constructor(message, next) {
+    super(ExitCode.USAGE, message);
+    this.next = next;
+    this.name = "PublishRefusal";
+  }
+};
+async function editorModels2(opened, load2) {
+  if (!load2) return { models: null, editorTypes: { unavailable: "the editors' document code is not available here" }, unavailable: "the editors' document code is not available here" };
+  try {
+    const models = await load2(opened);
+    return { models, editorTypes: new Set(models.editorCodecs.documentTypes) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { models: null, editorTypes: { unavailable: message }, unavailable: message };
+  }
+}
+function signedInCaller(deps, dryRun) {
+  const server = resolveServer();
+  if (!deps.call && !loadCredentials(server)) {
+    if (dryRun) return null;
+    throw new PublishRefusal("Not signed in to Nimbalyst Teams on this machine. Call teamSignIn (or run `nim login`), then try again.", "teamSignIn");
+  }
+  return pacedCaller({ ...deps, call: deps.call ?? ((name, args) => callTool(server, name, args)) });
+}
+function sourceHash(page, exported) {
+  const files = (exported.linkedFiles.get(page.localId) ?? []).map((file) => {
+    if (!file.abs) return [file.linkPath, null];
+    try {
+      const stat6 = statSync5(file.abs);
+      return [file.linkPath, stat6.size, stat6.mtimeMs];
+    } catch {
+      return [file.linkPath, null];
+    }
+  });
+  return hashText(JSON.stringify([page, exported.editorFiles.get(page.localId)?.text ?? null, exported.relations.get(page.localId) ?? null, files]));
+}
+function teamBodyText(result) {
+  return typeof result?.markdown === "string" ? result.markdown : null;
+}
+async function pageFiles(opened) {
+  const snapshot = await opened.wiki.snapshot();
+  const files = /* @__PURE__ */ new Map();
+  for (const page of snapshot.pages) {
+    if (page.path) files.set(page.id, path26.relative(opened.projectRoot, path26.join(opened.dir, page.path)).split(path26.sep).join("/"));
+  }
+  return files;
+}
+function refOf(localId, title, files, link2) {
+  return { localId, title, file: files.get(localId) ?? null, ...link2 ? { link: link2 } : {} };
+}
+function depthFirst(ids, pages) {
+  const depth = (id) => {
+    let n = 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (let at = pages[id]?.parentLocalId ?? null; at && !seen.has(at); at = pages[at]?.parentLocalId ?? null) {
+      seen.add(at);
+      n++;
+    }
+    return n;
+  };
+  return [...ids].sort((a, b) => depth(b) - depth(a));
+}
+async function publishLocalWikiToTeam(opened, options = {}, deps = {}) {
+  const moved = readMigratedTo(opened.projectRoot);
+  if (moved) {
+    throw new PublishRefusal(
+      `This local wiki was moved to team project ${moved.orgId}/${moved.projectId}; the team copy is where it is edited now, so there is nothing to publish. Remove \`migratedTo\` from .nimbalyst/local-wiki.json first if the files are meant to be the source again.`
+    );
+  }
+  const target = readPublishTarget(opened.projectRoot);
+  if (!target) {
+    throw new PublishRefusal("This local wiki does not publish to a team project yet. Run `nim wiki publish --init` (or call publishLocalWikiToTeam with init: true) first.", "init");
+  }
+  return runPublish(opened, target, options, deps);
+}
+async function initPublish(opened, options, deps = {}) {
+  const moved = readMigratedTo(opened.projectRoot);
+  if (moved) throw new PublishRefusal(`This local wiki was moved to team project ${moved.orgId}/${moved.projectId}; it cannot also publish.`);
+  const call = signedInCaller(deps, false);
+  const checkout = locateCheckout(opened.projectRoot);
+  const repo = checkout.origin;
+  const existing = readPublishTarget(opened.projectRoot);
+  const pin = options.project ?? existing;
+  const status = await call("pages_status", { ...repo ? { repo } : {}, ...pin ? { project: { orgId: pin.orgId, projectId: pin.projectId } } : {} });
+  let project = null;
+  const sameAs = (p) => !pin || p?.orgId === pin.orgId && p?.projectId === pin.projectId;
+  const pinText = pin ? `${pin.orgId}/${pin.projectId}` : "";
+  const pinSource = options.project ? "requested" : "recorded (the publish block in .nimbalyst/local-wiki.json)";
+  const state = status?.state;
+  if (state === "bound" && status.project?.orgId && status.project?.projectId) {
+    if (!sameAs(status.project)) {
+      throw new PublishRefusal(`This repository is bound to team project ${status.project.orgId}/${status.project.projectId}, not the ${pinSource} project ${pinText}. Publish to the bound project, or have a team admin change the binding.`);
+    }
+    project = { orgId: String(status.project.orgId), projectId: String(status.project.projectId) };
+  } else if (state === "ambiguous") {
+    const found = (status.projects ?? []).find((p) => pin && sameAs(p));
+    if (!found) throw new PublishRefusal("This repository resolves to several team projects. Pass the one to publish to ({ orgId, projectId }, or --org and --project).", "project");
+    project = { orgId: String(found.orgId), projectId: String(found.projectId) };
+    writeProjectPin(checkout.root, project);
+  } else if (state !== "unbound") {
+    throw new PublishRefusal(`The server did not say this repository's team project (pages_status answered ${state === void 0 ? "nothing" : `"${String(state)}"`}), so nothing was created or bound. Check the sign-in with \`nim wiki status\`, then run --init again.`);
+  } else if (options.project) {
+    if (!repo) throw new PublishRefusal(`Team project ${pinText} is not reachable from this checkout as you, and with no origin remote there is nothing to bind. Check the project id and your access in the console.`);
+    if (options.dryRun) return { ...emptyReport(true), notes: [`Would bind ${repo} to ${options.project.orgId}/${options.project.projectId}, then publish.`] };
+    await call("pages_bind_repo", { repo, orgId: options.project.orgId, projectId: options.project.projectId });
+    project = options.project;
+  } else if (existing) {
+    throw new PublishRefusal(
+      `The ${pinSource} project ${pinText} is not reachable from this repository as you, so --init stops rather than create another project. Check the sign-in (\`nim wiki status\`) and your access to that project; to publish somewhere else on purpose, remove \`publish\` from .nimbalyst/local-wiki.json first.`
+    );
+  } else {
+    const teams = Array.isArray(status?.teams) ? status.teams : [];
+    const adminOf = teams.filter((team) => team?.role === "admin" || team?.role === "owner");
+    const orgId = options.orgId ?? (adminOf.length === 1 ? String(adminOf[0].orgId) : void 0);
+    if (!orgId) {
+      throw new PublishRefusal(
+        adminOf.length === 0 ? "This repository is not connected to a team project, and you are not an admin of a team that could create one. Ask a team admin to create the project and bind this repository, or to make you an admin." : `This repository is not connected to a team project. Pass the team to create it in (--org, one of: ${adminOf.map((team) => team.orgId).join(", ")}), or an existing project (--org and --project).`,
+        "team_create"
+      );
+    }
+    const name = options.name ?? path26.basename(checkout.root);
+    if (options.dryRun) {
+      return { ...emptyReport(true), notes: [`Would create team project "${name}" in ${orgId}${repo ? ` bound to ${repo}` : ""}, then publish.`] };
+    }
+    const created = await call("pages_create_project", { orgId, name, ...repo ? { repo } : {} });
+    const p = created?.project ?? created;
+    if (!p?.projectId) throw new PublishRefusal("The server did not return the new project.");
+    project = { orgId: String(p.orgId ?? orgId), projectId: String(p.projectId) };
+    if (!repo) writeProjectPin(checkout.root, project);
+  }
+  if (options.dryRun) return runPublish(opened, { ...project }, { dryRun: true }, { ...deps, call });
+  const publish = existing && existing.orgId === project.orgId && existing.projectId === project.projectId ? existing : { ...project };
+  writePublishTarget(opened.projectRoot, publish);
+  return runPublish(opened, publish, { confirmRemovals: options.confirmRemovals }, { ...deps, call });
+}
+function emptyReport(dryRun) {
+  return { dryRun, project: null, counts: { pages: 0, editorPages: 0, typedPages: 0, types: 0, files: 0, strippedFields: 0 }, skipped: [], notes: [] };
+}
+async function runPublish(opened, target, options, deps) {
+  const { models, editorTypes, unavailable } = await editorModels2(opened, deps.loadEditorModels);
+  const wikiPrefix = path26.relative(opened.projectRoot, opened.dir).split(path26.sep).join("/");
+  const exported = await collectLocalWiki(opened.wiki, { editorTypes, wikiPrefix, wikiDir: opened.dir, publish: true });
+  if (exported.pages.length === 0) {
+    throw new PublishRefusal(`No pages to publish in ${opened.dir} (every page is left out, or the folder is empty), so nothing was sent and nothing was removed from the team project.`);
+  }
+  const typedPages = exported.pages.filter((page) => page.kind === "typedPage").length;
+  const editorPages = exported.editorFiles.size;
+  const report = {
+    dryRun: options.dryRun === true,
+    project: null,
+    counts: {
+      pages: exported.pages.length - typedPages - editorPages,
+      editorPages,
+      typedPages,
+      types: exported.types.length,
+      files: [...exported.linkedFiles.values()].reduce((n, list) => n + list.filter((file) => file.abs).length, 0),
+      strippedFields: exported.strippedFields
+    },
+    skipped: exported.skipped.map(({ title, reason }) => ({ title, reason })),
+    notes: []
+  };
+  const call = signedInCaller(deps, report.dryRun);
+  if (!call) return { ...report, notes: ["Not signed in to Nimbalyst Teams yet, so the target project was not checked. Call teamSignIn (or run nim login)."] };
+  const checkout = locateCheckout(opened.projectRoot);
+  const project = { orgId: target.orgId, projectId: target.projectId };
+  const teams = resolveTeamsTarget(opened.projectRoot, { project, ...checkout.origin ? { repo: checkout.origin } : {} });
+  const base = { ...teams.repo ? { repo: teams.repo } : {}, project };
+  const status = await call("pages_status", base);
+  if (status?.state !== "bound" || status.project?.orgId !== project.orgId || status.project?.projectId !== project.projectId) {
+    throw new PublishRefusal(
+      `The publish target ${project.orgId}/${project.projectId} (the publish block in .nimbalyst/local-wiki.json) is not reachable from this repository as you. Check the sign-in (nim wiki status), or run \`nim wiki publish --init\` to choose the project again.`
+    );
+  }
+  report.project = { ...project, ...status.project.projectName ? { projectName: String(status.project.projectName) } : {} };
+  const wikiId = await opened.wiki.wikiId();
+  const previous = readPublishManifest(opened.projectRoot, { ...project, wikiId });
+  const files = await pageFiles(opened);
+  const titles = new Map(exported.pages.map((page) => [page.localId, page.title]));
+  const present = new Set(exported.pages.map((page) => page.localId));
+  const heldBack = new Set(exported.skipped.filter((page) => !page.excluded).map((page) => page.localId));
+  const malformedPaths = new Set(exported.malformed.paths.map((p) => p.toLowerCase()));
+  const malformedTables = new Set(exported.malformed.tableTypes);
+  const isHeldBack = (id, entry) => heldBack.has(id) || malformedPaths.size > 0 && (entry.path === void 0 ? entry.kind !== "typedPage" || entry.underType !== true : malformedPaths.has(entry.path.toLowerCase())) || malformedTables.size > 0 && entry.kind === "typedPage" && (entry.typeId === void 0 || malformedTables.has(entry.typeId));
+  const previousIds = Object.keys(previous?.pages ?? {}).filter((id) => !present.has(id));
+  const carried = previousIds.filter((id) => isHeldBack(id, previous.pages[id]));
+  const removedIds = previousIds.filter((id) => !carried.includes(id));
+  const limit = removalLimit(Object.keys(previous?.pages ?? {}).length);
+  const removalsHeld = removedIds.length > limit && options.confirmRemovals !== true;
+  const confirmHint = `${removedIds.length} team pages would be removed, over the limit of ${limit} for one publish. If those local pages really were deleted, publish again with --confirm-removals (MCP: confirmRemovals: true).`;
+  if (report.dryRun) {
+    report.removals = removedIds.map((id) => ({
+      ...refOf(id, previous.pages[id].title, files, previous.pages[id].link),
+      action: removalsHeld ? "pending" : "kept",
+      reason: removalsHeld ? "over the removal limit" : "dry run: would go to team Trash unless edited there"
+    }));
+    if (removalsHeld) report.notes.push(confirmHint);
+    return { ...report, homeLink: typeof status.homeLink === "string" ? status.homeLink : void 0 };
+  }
+  const homeId = exported.projectHomeLocalId;
+  const home = homeId ? exported.pages.find((page) => page.localId === homeId) : void 0;
+  if (home) home.body = `${homeNoteFor(opened.projectRoot)}
+
+${home.body}`;
+  const needsContent = exported.editorFiles.size > 0 || exported.linkedFiles.size > 0;
+  const server = resolveServer();
+  const content = deps.content ?? (needsContent || models ? createTeamContentWriter({ server, call, base, models }) : void 0);
+  const prior = Object.fromEntries(
+    Object.entries(previous?.pages ?? {}).map(([id, entry]) => [id, { nodeId: entry.nodeId, id: entry.id, link: entry.link, ...entry.uri ? { uri: entry.uri } : {} }])
+  );
+  const hashes = new Map(exported.pages.map((page) => [page.localId, sourceHash(page, exported)]));
+  const only = previous ? new Set(exported.pages.filter((page) => {
+    const before = previous.pages[page.localId];
+    return !before || before.removedLocally || before.sourceHash !== hashes.get(page.localId);
+  }).map((page) => page.localId)) : void 0;
+  const outcome = await importToTeam(exported, { repo: teams.repo, project, wikiId, prior, ...only ? { only } : {} }, call, content);
+  const bodyEditedIds = new Set(outcome.errors.filter((error) => error.code === "body_edited").map((error) => error.localId));
+  const unchanged = exported.pages.filter((page) => {
+    if (only) return !outcome.sentIds.has(page.localId) && Boolean(outcome.idMap[page.localId]);
+    const before = previous?.pages[page.localId];
+    return before && !before.removedLocally && before.sourceHash === hashes.get(page.localId) && !bodyEditedIds.has(page.localId) && outcome.idMap[page.localId];
+  }).length;
+  const otherErrors = outcome.errors.filter((error) => error.code !== "body_edited");
+  Object.assign(report, {
+    created: outcome.created,
+    updated: only ? outcome.updated : Math.max(0, outcome.updated - unchanged),
+    unchanged,
+    bodyEdited: [...bodyEditedIds].map((id) => refOf(id, titles.get(id) ?? id, files, outcome.idMap[id]?.link)),
+    errors: otherErrors.map((error) => ({ ...error, title: titles.get(error.localId) })),
+    warnings: outcome.warnings.map((warning) => ({ ...warning, title: titles.get(warning.localId) }))
+  });
+  const homeEntry = homeId ? outcome.idMap[homeId] : void 0;
+  report.homeLink = homeEntry?.link ?? (typeof status.homeLink === "string" ? status.homeLink : void 0);
+  let verified = otherErrors.length === 0 && exported.pages.every((page) => outcome.idMap[page.localId]);
+  const readBody = async (uri) => {
+    try {
+      return teamBodyText(await call("readCollabDoc", { ...base, filePath: uri }));
+    } catch {
+      return null;
+    }
+  };
+  if (verified) {
+    if (homeEntry) {
+      verified = await readBody(homeEntry.uri ?? homeEntry.link) !== null;
+      if (!verified) report.notes.push("The team project's Home did not read back after the publish.");
+    } else {
+      report.notes.push("This publish has no Home page (the local Home is left out or its file does not parse), so the team Home was not written or checked; another published page was read back instead.");
+      const probe = exported.pages.find((page) => page.kind !== "editorPage" && outcome.idMap[page.localId]);
+      const entry = probe ? outcome.idMap[probe.localId] : void 0;
+      verified = Boolean(entry) && await readBody(entry.uri ?? entry.link) !== null;
+      if (!verified) report.notes.push(`"${probe?.title ?? "A published page"}" did not read back after the publish.`);
+    }
+  }
+  report.verified = verified;
+  if (!verified) {
+    report.notes.push("The publish is not verified, so nothing was removed from the team project and the publish record was not updated. Fix the errors, then publish again; it resumes.");
+    return report;
+  }
+  const publishedAt = (deps.clock?.() ?? /* @__PURE__ */ new Date()).toISOString();
+  const pages = {};
+  for (const page of exported.pages) {
+    const entry = outcome.idMap[page.localId];
+    const before = previous?.pages[page.localId];
+    const hash = hashes.get(page.localId);
+    let teamBodyHash = before?.teamBodyHash;
+    if (page.kind === "editorPage") teamBodyHash = void 0;
+    else if (!bodyEditedIds.has(page.localId) && (outcome.sentIds.has(page.localId) || !teamBodyHash)) {
+      const text2 = await readBody(entry.uri ?? entry.link);
+      teamBodyHash = text2 === null ? void 0 : hashText(text2);
+    }
+    pages[page.localId] = {
+      nodeId: entry.nodeId,
+      id: entry.id,
+      documentId: bodyDocumentId(entry),
+      kind: page.kind,
+      title: page.title,
+      parentLocalId: page.parentLocalId,
+      ...exported.locations.get(page.localId)?.path ? { path: exported.locations.get(page.localId).path } : {},
+      ...page.typeId ? { typeId: page.typeId } : {},
+      ...page.underType ? { underType: true } : {},
+      link: entry.link,
+      ...entry.uri ? { uri: entry.uri } : {},
+      // A body the team refused (edited there) keeps the old hash, so the next publish sends it again and reports it.
+      sourceHash: bodyEditedIds.has(page.localId) ? before?.sourceHash ?? "" : hash,
+      ...teamBodyHash ? { teamBodyHash } : {}
+    };
+  }
+  for (const id of removedIds) pages[id] = { ...previous.pages[id], removedLocally: true };
+  for (const id of carried) pages[id] = previous.pages[id];
+  const manifest = { version: PUBLISH_MANIFEST_VERSION, ...project, wikiId, publishedAt, pages };
+  writePublishManifest(opened.projectRoot, manifest);
+  report.removals = [];
+  if (removalsHeld) {
+    for (const id of removedIds) report.removals.push({ ...refOf(id, pages[id].title, files, pages[id].link), action: "pending", reason: "over the removal limit; nothing was removed" });
+    report.notes.push(confirmHint);
+  }
+  for (const id of removalsHeld ? [] : depthFirst(removedIds, pages)) {
+    const entry = pages[id];
+    const ref2 = refOf(id, entry.title, files, entry.link);
+    const keep = (reason) => report.removals.push({ ...ref2, action: "kept", reason });
+    if (entry.id.startsWith("home:")) {
+      keep("it is the team project's Home, which is never removed");
+      continue;
+    }
+    if (!entry.teamBodyHash) {
+      keep("its team copy could not be checked for edits made there (an editor page, or its body was not readable at the last publish); remove it in the team project if it should go");
+      continue;
+    }
+    const now = await readBody(entry.uri ?? entry.link);
+    if (now === null) {
+      keep("its team copy could not be read, so it was not checked for edits");
+      continue;
+    }
+    if (hashText(now) !== entry.teamBodyHash) {
+      keep("someone edited it in the team project since the last publish");
+      continue;
+    }
+    try {
+      if (entry.nodeId.startsWith("item:")) {
+        await call("tracker_update", { ...base, id: entry.id, archived: true });
+        report.removals.push({ ...ref2, action: "archived" });
+      } else {
+        const result = await call("deleteSharedItem", { ...base, itemId: entry.id, kind: "doc" });
+        if (result?.trashed !== true) throw new Error("the server did not confirm the page went to Trash");
+        report.removals.push({ ...ref2, action: "trashed" });
+      }
+      delete pages[id];
+    } catch (err) {
+      keep(`the server refused it: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  writePublishManifest(opened.projectRoot, manifest);
+  writePublishTarget(opened.projectRoot, { ...target, publishedAt });
+  report.publishedAt = publishedAt;
+  const rewritten = exported.pages.filter(
+    (page) => page.kind !== "editorPage" && !bodyEditedIds.has(page.localId) && previous?.pages[page.localId]?.sourceHash !== hashes.get(page.localId) && previous?.pages[page.localId]
+  );
+  if (rewritten.length) {
+    if (!content?.readRoom || !models) {
+      report.notes.push(`Comment anchors on the ${rewritten.length} rewritten pages were not checked: ${unavailable ?? "the editors' document code is not available"}.`);
+    } else {
+      report.orphanedThreads = [];
+      for (const page of rewritten) {
+        const entry = pages[page.localId];
+        const read = await content.readRoom(entry.documentId, readPageComments);
+        if (!read.ok) {
+          report.notes.push(`The comments on "${page.title}" could not be read: ${read.message}`);
+          continue;
+        }
+        for (const thread of openThreads(read.value)) {
+          if (thread.anchorState !== "orphaned") continue;
+          report.orphanedThreads.push({
+            ...refOf(page.localId, page.title, files, entry.link),
+            threadId: thread.id,
+            quote: thread.quote,
+            firstComment: thread.comments[0].content,
+            author: thread.comments[0].author
+          });
+        }
+      }
+    }
+  }
+  return report;
+}
+
+// packages/cli/src/localWiki/publishedComments.ts
+import * as path27 from "node:path";
+import { readFile as readFile11 } from "node:fs/promises";
+async function publishedContext(opened, deps) {
+  const target = readPublishTarget(opened.projectRoot);
+  if (!target) throw new PublishRefusal("This local wiki does not publish to a team project. Run `nim wiki publish --init` first.", "init");
+  const wikiId = await opened.wiki.wikiId();
+  const manifest = readPublishManifest(opened.projectRoot, { orgId: target.orgId, projectId: target.projectId, wikiId });
+  if (!manifest) throw new PublishRefusal("There is no record of a verified publish to this project yet. Run `nim wiki publish` first.");
+  const server = resolveServer();
+  if (!deps.call && !loadCredentials(server)) {
+    throw new PublishRefusal("Not signed in to Nimbalyst Teams on this machine. Call teamSignIn (or run `nim login`), then try again.", "teamSignIn");
+  }
+  const call = pacedCaller({ ...deps, call: deps.call ?? ((name, args) => callTool(server, name, args)) });
+  const repo = locateCheckout(opened.projectRoot).origin;
+  return { manifest, call, server, base: { ...repo ? { repo } : {}, project: { orgId: target.orgId, projectId: target.projectId } } };
+}
+async function filesById(opened) {
+  const files = /* @__PURE__ */ new Map();
+  for (const page of (await opened.wiki.snapshot()).pages) {
+    if (page.path && page.trashedAt === null) files.set(page.id, path27.relative(opened.projectRoot, path27.join(opened.dir, page.path)).split(path27.sep).join("/"));
+  }
+  return files;
+}
+async function listPublishedComments(opened, options = {}, deps = {}) {
+  const ctx = await publishedContext(opened, deps);
+  let models;
+  try {
+    if (!deps.loadEditorModels) throw new Error("the editors' document code is not available here");
+    models = await deps.loadEditorModels(opened);
+  } catch (err) {
+    if (!deps.content?.readRoom) {
+      throw new PublishRefusal(`Comments are read from each page's team document with the editors' room client, which is not available: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const content = deps.content ?? createTeamContentWriter({ server: ctx.server, call: ctx.call, base: ctx.base, models: models ?? null });
+  const files = await filesById(opened);
+  let ids = Object.keys(ctx.manifest.pages).filter((id) => ctx.manifest.pages[id].kind !== "editorPage");
+  if (options.page) {
+    const page = findPage(await opened.wiki.snapshot(), options.page);
+    if (!ctx.manifest.pages[page.id]) throw new PublishRefusal(`"${page.title}" has not been published yet.`);
+    ids = [page.id];
+  }
+  const report = { project: { orgId: ctx.manifest.orgId, projectId: ctx.manifest.projectId }, pagesChecked: 0, threads: [], notes: [] };
+  for (const id of ids) {
+    const entry = ctx.manifest.pages[id];
+    const read = await content.readRoom(entry.documentId, readPageComments);
+    if (!read.ok) {
+      report.notes.push(`The comments on "${entry.title}" could not be read: ${read.message}`);
+      continue;
+    }
+    report.pagesChecked++;
+    for (const thread of openThreads(read.value)) {
+      report.threads.push({
+        localId: id,
+        title: entry.title,
+        file: files.get(id) ?? null,
+        link: entry.link,
+        threadId: thread.id,
+        quote: thread.quote,
+        anchorState: thread.anchorState,
+        comments: thread.comments.map((c) => ({ author: c.author, at: new Date(c.at).toISOString(), content: c.content, byAgent: c.byAgent }))
+      });
+    }
+  }
+  return report;
+}
+function unifiedDiff(a, b, labels, context = 3) {
+  const x = a.split("\n");
+  const y = b.split("\n");
+  const n = x.length;
+  const m = y.length;
+  if (n * m > 25e6) return `--- ${labels.from}
++++ ${labels.to}
+(too long to diff line by line: ${n} and ${m} lines)
+`;
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--) for (let j2 = m - 1; j2 >= 0; j2--) lcs[i2][j2] = x[i2] === y[j2] ? lcs[i2 + 1][j2 + 1] + 1 : Math.max(lcs[i2 + 1][j2], lcs[i2][j2 + 1]);
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && x[i] === y[j]) ops.push({ op: " ", line: x[i], ai: i++, bi: j++ });
+    else if (i < n && (j >= m || lcs[i + 1][j] >= lcs[i][j + 1])) ops.push({ op: "-", line: x[i], ai: i++, bi: j });
+    else ops.push({ op: "+", line: y[j], ai: i, bi: j++ });
+  }
+  const changed = ops.map((o, k2) => o.op !== " " ? k2 : -1).filter((k2) => k2 >= 0);
+  if (!changed.length) return "";
+  const out = [`--- ${labels.from}`, `+++ ${labels.to}`];
+  let k = 0;
+  while (k < changed.length) {
+    const start = Math.max(0, changed[k] - context);
+    let end = Math.min(ops.length - 1, changed[k] + context);
+    while (k + 1 < changed.length && changed[k + 1] - context <= end + 1) end = Math.min(ops.length - 1, changed[++k] + context);
+    k++;
+    const hunk = ops.slice(start, end + 1);
+    const aLen = hunk.filter((o) => o.op !== "+").length;
+    const bLen = hunk.filter((o) => o.op !== "-").length;
+    out.push(`@@ -${hunk[0].ai + 1},${aLen} +${hunk[0].bi + 1},${bLen} @@`);
+    for (const o of hunk) out.push(`${o.op}${o.line}`);
+  }
+  return out.join("\n") + "\n";
+}
+async function diffPublishedPage(opened, ref2, deps = {}) {
+  const ctx = await publishedContext(opened, deps);
+  const page = findPage(await opened.wiki.snapshot(), ref2);
+  const entry = ctx.manifest.pages[page.id];
+  if (!entry) throw new PublishRefusal(`"${page.title}" has not been published yet.`);
+  if (entry.kind === "editorPage") throw new PublishRefusal(`"${page.title}" is a ${page.documentType} page; only markdown pages can be compared as text.`);
+  const team = await ctx.call("readCollabDoc", { ...ctx.base, filePath: entry.uri ?? entry.link });
+  const teamText = typeof team?.markdown === "string" ? team.markdown : "";
+  const local = await localTeamForm(opened, page.id, ctx.manifest);
+  const file = (await filesById(opened)).get(page.id) ?? null;
+  const diff = unifiedDiff(local, teamText, { from: file ?? page.title, to: `team: ${entry.link}` });
+  return { localId: page.id, title: page.title, file, link: entry.link, diff, identical: diff === "" };
+}
+async function localTeamForm(opened, localId, manifest) {
+  const wikiPrefix = path27.relative(opened.projectRoot, opened.dir).split(path27.sep).join("/");
+  const editorTypes = new Set((await opened.wiki.snapshot()).pages.filter((page2) => manifest.pages[page2.id]?.kind === "editorPage").map((page2) => page2.documentType));
+  const exported = await collectLocalWiki(opened.wiki, { wikiPrefix, wikiDir: opened.dir, publish: true, editorTypes });
+  const page = exported.pages.find((p) => p.localId === localId);
+  if (!page) return (await opened.wiki.readBody(localId)).markdown;
+  const homeId = exported.projectHomeLocalId;
+  const body = homeId === localId ? `${homeNoteFor(opened.projectRoot)}
+
+${page.body}` : page.body;
+  const entryFor = (id) => {
+    const recorded = manifest.pages[id];
+    return recorded && !recorded.removedLocally ? { nodeId: recorded.nodeId, id: recorded.id, link: recorded.link, ...recorded.uri ? { uri: recorded.uri } : {} } : void 0;
+  };
+  const assets = /* @__PURE__ */ new Map();
+  for (const linked of exported.linkedFiles.get(localId) ?? []) {
+    if (!linked.abs) continue;
+    try {
+      assets.set(linked.linkPath, assetUriFor(manifest.pages[localId].documentId, await readFile11(linked.abs)));
+    } catch {
+    }
+  }
+  return teamForm(exported, { ...page, body }, pathIndex(exported.locations), {
+    entryFor,
+    linkFor: (id) => entryFor(id)?.link,
+    orgId: manifest.orgId,
+    assetUri: (linkPath) => assets.get(linkPath)
+  }).body;
+}
+
 // packages/cli/src/mcp/teamTools.ts
 var SIGN_IN_TOOL_NAME = "teamSignIn";
 var MOVE_TOOL_NAME = "moveLocalWikiToTeam";
 var OPEN_URL_TOOL_NAME = "openUrl";
+var PUBLISH_TOOL_NAME = "publishLocalWikiToTeam";
+var COMMENTS_TOOL_NAME = "listPublishedComments";
+var DIFF_TOOL_NAME = "diffPublishedPage";
 var CONSOLE_ORIGIN = "https://console.nimbalyst.com";
 function checkConsoleUrl(raw) {
   if (typeof raw !== "string" || !raw.trim()) throw usageError("`url` is required");
@@ -12162,19 +13142,26 @@ function signInTool(options) {
   const start = async (server) => {
     let resolvePrompt;
     const prompted = new Promise((resolve8) => resolvePrompt = resolve8);
-    const login = deviceLogin(server, (userCode, uri, completeUri) => {
-      const verificationUrl = String(completeUri ?? uri);
-      resolvePrompt({ userCode: String(userCode), verificationUrl });
-      if (/^https:\/\//i.test(verificationUrl)) open2(verificationUrl);
-    });
+    const resume = loadPendingSignIn(server);
+    const login = deviceLogin(
+      server,
+      (userCode, uri, completeUri) => {
+        const verificationUrl = String(completeUri ?? uri);
+        resolvePrompt({ userCode: String(userCode), verificationUrl });
+        if (!resume && /^https:\/\//i.test(verificationUrl)) open2(verificationUrl);
+      },
+      { resume, onStarted: (pending2) => savePendingSignIn(server, pending2) }
+    );
     const current = { server, prompt: { userCode: "", verificationUrl: "" }, finished: false };
     current.done = login.then(
       () => {
         current.finished = true;
+        clearPendingSignIn(server);
       },
       (err) => {
         current.finished = true;
         current.error = err;
+        clearPendingSignIn(server);
       }
     );
     flow = current;
@@ -12195,7 +13182,10 @@ function signInTool(options) {
     call: async (args) => {
       try {
         const server = resolveServer();
-        if (args.restart === true) flow = null;
+        if (args.restart === true) {
+          flow = null;
+          clearPendingSignIn(server);
+        }
         if (!flow && loadCredentials(server)) {
           const info = await userInfo2(server).catch((err) => err instanceof CliError ? null : Promise.reject(err));
           if (info !== null) return textResult({ state: "signedIn", server, ...info?.email ? { email: info.email } : {} });
@@ -12214,7 +13204,10 @@ function signInTool(options) {
         }
         if (!current.finished) return pending(current.prompt);
         flow = null;
-        if (current.error) return textResult(`${SIGN_IN_TOOL_NAME}: ${current.error.message} Call teamSignIn again for a new code.`, true);
+        if (current.error) {
+          if (loadCredentials(server) && await userInfo2(server).catch(() => null) !== null) return signedIn(server);
+          return textResult(`${SIGN_IN_TOOL_NAME}: ${current.error.message} Call teamSignIn again for a new code.`, true);
+        }
         return signedIn(server);
       } catch (err) {
         return textResult(`${SIGN_IN_TOOL_NAME}: ${err.message}`, true);
@@ -12256,6 +13249,99 @@ function moveTool(context, options) {
     }
   };
 }
+var PROJECT_ARG = {
+  type: "object",
+  description: "An existing team project, { orgId, projectId }.",
+  properties: { orgId: { type: "string" }, projectId: { type: "string" } },
+  required: ["orgId", "projectId"]
+};
+function pinOf(value) {
+  const project = value;
+  return project && typeof project.orgId === "string" && typeof project.projectId === "string" ? { orgId: project.orgId, projectId: project.projectId } : void 0;
+}
+function failure(name, err) {
+  if (err instanceof NoLocalWikiError) return noLocalWikiResult(err);
+  if (err instanceof PublishRefusal || err instanceof MoveRefusal) return textResult({ error: err.message, ...err.next ? { next: err.next } : {} }, true);
+  return textResult(`${name}: ${err.message}`, true);
+}
+function publishTool(context, options) {
+  return {
+    definition: {
+      name: PUBLISH_TOOL_NAME,
+      description: "Publish this project's local wiki one way into a team project, so invited reviewers can read and comment on it in the browser. The local files stay the source of truth; run it again after changing them. Pages with export: false (and pages under them) and person fields are left out. A page someone edited in the team is not overwritten and is listed in bodyEdited: make the file hold the team text (diffPublishedPage shows the difference; publish takes the page back once it shows none), then edit the file and publish as usual. A page deleted locally since the last publish goes to team Trash (a typed page is archived), unless it was edited in the team; removals lists each. More removals than 3 pages and 10% of the published pages are held as pending until confirmRemovals: true, which needs confirmation from the user. orphanedThreads lists open comments whose quoted text is gone after this publish: resolve or answer them. The first time, pass init: true: it uses the team project this repository is bound to, or binds `project`, or creates a project (team admins) in `orgId`, records it in .nimbalyst/local-wiki.json and publishes. Needs teamSignIn first. Refuses a wiki that was moved with moveLocalWikiToTeam. Page text goes from the files to the server and is not returned.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          init: { type: "boolean", description: "First publish: choose or create the team project, record it, publish." },
+          project: { ...PROJECT_ARG, description: "With init: an existing team project to publish to, { orgId, projectId }." },
+          orgId: { type: "string", description: "With init: the team to create the project in, when the repository has none." },
+          name: { type: "string", description: "With init: the new project's name. Default: the repository folder's name." },
+          dryRun: { type: "boolean", description: "Count what would be published and removed; send nothing." },
+          confirmRemovals: {
+            type: "boolean",
+            description: "Carry out removals over the per-publish limit (more than 3 pages and 10% of the published pages). Only after the user confirmed those local pages were deleted on purpose."
+          }
+        }
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+    },
+    call: async (args) => {
+      try {
+        const opened = await context.open();
+        const dryRun = args.dryRun === true;
+        const confirmRemovals = args.confirmRemovals === true;
+        const report = args.init === true ? await initPublish(opened, { project: pinOf(args.project), orgId: typeof args.orgId === "string" ? args.orgId : void 0, name: typeof args.name === "string" ? args.name : void 0, dryRun, confirmRemovals }, options.moveDeps) : await publishLocalWikiToTeam(opened, { dryRun, confirmRemovals }, options.moveDeps);
+        return textResult({ wikiFolder: opened.dir, ...report }, report.verified === false);
+      } catch (err) {
+        return failure(PUBLISH_TOOL_NAME, err);
+      }
+    }
+  };
+}
+function commentsTool(context, options) {
+  return {
+    definition: {
+      name: COMMENTS_TOOL_NAME,
+      description: "Open comment threads reviewers left on the pages publishLocalWikiToTeam published, each with the local file to edit, the quoted text, who wrote what, and anchorState: marked or quote (the quoted text is in the page) or orphaned (it is not; the comment may already be addressed). Act on a thread by editing the file, then publish again.",
+      inputSchema: {
+        type: "object",
+        properties: { page: { type: "string", description: "Only this page: its id, path in the wiki, or title. Default: every published page." } }
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
+    },
+    call: async (args) => {
+      try {
+        const opened = await context.open();
+        return textResult(await listPublishedComments(opened, { page: typeof args.page === "string" ? args.page : void 0 }, options.moveDeps));
+      } catch (err) {
+        return failure(COMMENTS_TOOL_NAME, err);
+      }
+    }
+  };
+}
+function diffTool(context, options) {
+  return {
+    definition: {
+      name: DIFF_TOOL_NAME,
+      description: "For a published page someone edited in the team (bodyEdited in the publish result): its team text as a unified diff against the local file (- local, + team). Merge what should stay into the file, then publish again. Links differ by design: the team text points them at team pages.",
+      inputSchema: {
+        type: "object",
+        properties: { page: { type: "string", description: "The page: its id, path in the wiki, or title." } },
+        required: ["page"]
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
+    },
+    call: async (args) => {
+      try {
+        if (typeof args.page !== "string" || !args.page) throw usageError("`page` is required");
+        const opened = await context.open();
+        return textResult(await diffPublishedPage(opened, args.page, options.moveDeps));
+      } catch (err) {
+        return failure(DIFF_TOOL_NAME, err);
+      }
+    }
+  };
+}
 function openUrlTool(options) {
   const open2 = options.openUrl ?? openBrowser;
   return {
@@ -12281,18 +13367,18 @@ function openUrlTool(options) {
   };
 }
 function teamTools(context, options = {}) {
-  return [signInTool(options), moveTool(context, options), openUrlTool(options)];
+  return [signInTool(options), moveTool(context, options), publishTool(context, options), commentsTool(context, options), diffTool(context, options), openUrlTool(options)];
 }
 
 // packages/cli/src/update/installs.ts
-import { existsSync as existsSync7, readdirSync, readFileSync as readFileSync9 } from "node:fs";
+import { existsSync as existsSync7, readdirSync, readFileSync as readFileSync11 } from "node:fs";
 import os4 from "node:os";
-import path25 from "node:path";
+import path29 from "node:path";
 
 // packages/cli/src/mcp/updateCheck.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync8, writeFileSync as writeFileSync5 } from "node:fs";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync10, writeFileSync as writeFileSync7 } from "node:fs";
 import os3 from "node:os";
-import path24 from "node:path";
+import path28 from "node:path";
 var UPDATE_CHECK_OPT_OUT = "NIMBALYST_WIKI_NO_UPDATE_CHECK";
 var CHECK_INTERVAL_MS = 24 * 60 * 60 * 1e3;
 var RETRY_AFTER_FAILURE_MS = 60 * 60 * 1e3;
@@ -12309,22 +13395,22 @@ var MANIFEST_URLS = {
   "nimbalyst-wiki": MIRROR_MANIFESTS
 };
 function detectPluginInstall(env, cwd, pluginRoot2, agentFlag) {
-  const parts = path24.resolve(pluginRoot2).split(path24.sep);
+  const parts = path28.resolve(pluginRoot2).split(path28.sep);
   const n = parts.length;
   if (n < 5 || parts[n - 5] !== "plugins" || parts[n - 4] !== "cache" || parts[n - 2] !== PLUGIN_NAME) return null;
   const marketplace = parts[n - 3];
   const urls = MANIFEST_URLS[marketplace];
   if (!urls) return null;
-  const agent = agentFlag ?? (!env.CLAUDE_PROJECT_DIR && path24.resolve(cwd) === path24.resolve(pluginRoot2) ? "codex" : "claude");
-  const manifest = path24.join(pluginRoot2, agent === "codex" ? ".codex-plugin" : ".claude-plugin", "plugin.json");
+  const agent = agentFlag ?? (!env.CLAUDE_PROJECT_DIR && path28.resolve(cwd) === path28.resolve(pluginRoot2) ? "codex" : "claude");
+  const manifest = path28.join(pluginRoot2, agent === "codex" ? ".codex-plugin" : ".claude-plugin", "plugin.json");
   let version;
   try {
-    version = JSON.parse(readFileSync8(manifest, "utf8")).version;
+    version = JSON.parse(readFileSync10(manifest, "utf8")).version;
   } catch {
     return null;
   }
   if (typeof version !== "string" || !parseVersion(version)) return null;
-  return { kind: "plugin", agent, marketplace, version, url: urls[agent], root: path24.resolve(pluginRoot2) };
+  return { kind: "plugin", agent, marketplace, version, url: urls[agent], root: path28.resolve(pluginRoot2) };
 }
 function parseVersion(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
@@ -12347,10 +13433,10 @@ function updateNotice(install2, latest) {
   const steps = install2.agent === "codex" ? `run \`codex plugin marketplace upgrade ${install2.marketplace}\`` : `run \`claude plugin marketplace update ${install2.marketplace}\` and then \`claude plugin update ${PLUGIN_NAME}@${install2.marketplace}\``;
   return `Nimbalyst Wiki ${latest} is available (installed: ${install2.version}). To update, ${steps}, then start a new session. ${AGENT_NOTE}`;
 }
-var defaultUpdateCacheFile = () => path24.join(os3.homedir(), ".nimbalyst-wiki", "update-check.json");
+var defaultUpdateCacheFile = () => path28.join(os3.homedir(), ".nimbalyst-wiki", "update-check.json");
 function readCacheFile(file) {
   try {
-    const parsed = JSON.parse(readFileSync8(file, "utf8"));
+    const parsed = JSON.parse(readFileSync10(file, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const entries2 = {};
     for (const [url, value] of Object.entries(parsed)) {
@@ -12369,8 +13455,8 @@ function readCachedLatest(url, cacheFile = defaultUpdateCacheFile()) {
 }
 function writeCacheEntry(file, url, entry) {
   const entries2 = { ...readCacheFile(file), [url]: entry };
-  mkdirSync5(path24.dirname(file), { recursive: true });
-  writeFileSync5(file, `${JSON.stringify(entries2, null, 2)}
+  mkdirSync7(path28.dirname(file), { recursive: true });
+  writeFileSync7(file, `${JSON.stringify(entries2, null, 2)}
 `);
 }
 function isCheckDue(entry, now) {
@@ -12437,11 +13523,11 @@ function startUpdateCheck(options) {
 var TEAM_PLUGIN_NAME = "nimbalyst-wiki-team";
 var PLUGIN_NAMES = [PLUGIN_NAME, TEAM_PLUGIN_NAME];
 var machineEnv = () => ({ env: process.env, home: os4.homedir() });
-var claudeConfigDir = ({ env, home }) => env.CLAUDE_CONFIG_DIR || path25.join(home, ".claude");
-var codexHome = ({ env, home }) => env.CODEX_HOME || path25.join(home, ".codex");
+var claudeConfigDir = ({ env, home }) => env.CLAUDE_CONFIG_DIR || path29.join(home, ".claude");
+var codexHome = ({ env, home }) => env.CODEX_HOME || path29.join(home, ".codex");
 function readJson2(file) {
   try {
-    return JSON.parse(readFileSync9(file, "utf8"));
+    return JSON.parse(readFileSync11(file, "utf8"));
   } catch {
     return null;
   }
@@ -12451,7 +13537,7 @@ function versionOf(value) {
   return typeof version === "string" && /^\d+\.\d+\.\d+/.test(version) ? version : null;
 }
 function findClaudePlugins(machine) {
-  const file = readJson2(path25.join(claudeConfigDir(machine), "plugins", "installed_plugins.json"));
+  const file = readJson2(path29.join(claudeConfigDir(machine), "plugins", "installed_plugins.json"));
   const byKey = file?.plugins ?? file ?? {};
   const records = [];
   for (const [key, value] of Object.entries(byKey)) {
@@ -12475,7 +13561,7 @@ function highestCachedVersion(pluginCacheDir, manifestDir) {
     return null;
   }
   for (const name of names) {
-    const version = versionOf(readJson2(path25.join(pluginCacheDir, name, manifestDir, "plugin.json")));
+    const version = versionOf(readJson2(path29.join(pluginCacheDir, name, manifestDir, "plugin.json")));
     if (version && (!best || isNewerVersion(version, best))) best = version;
   }
   return best;
@@ -12484,17 +13570,17 @@ function findCodexPlugins(machine) {
   const records = [];
   for (const marketplace of Object.keys(MANIFEST_URLS)) {
     for (const plugin of PLUGIN_NAMES) {
-      const version = highestCachedVersion(path25.join(codexHome(machine), "plugins", "cache", marketplace, plugin), ".codex-plugin");
+      const version = highestCachedVersion(path29.join(codexHome(machine), "plugins", "cache", marketplace, plugin), ".codex-plugin");
       if (version) records.push({ agent: "codex", plugin, marketplace, version, scope: "user" });
     }
   }
   return records;
 }
 function installedNpmVersion(install2) {
-  const parts = install2.packageDir.split(path25.sep);
+  const parts = install2.packageDir.split(path29.sep);
   const store = parts.indexOf(".pnpm");
-  const packageDir = store > 0 ? path25.join(parts.slice(0, store).join(path25.sep) || path25.sep, "@nimbalyst", "cli") : install2.packageDir;
-  return versionOf(readJson2(path25.join(packageDir, "package.json")));
+  const packageDir = store > 0 ? path29.join(parts.slice(0, store).join(path29.sep) || path29.sep, "@nimbalyst", "cli") : install2.packageDir;
+  return versionOf(readJson2(path29.join(packageDir, "package.json")));
 }
 var AGENT_LABEL = { claude: "Claude Code", codex: "Codex" };
 function describeInstall(install2) {
@@ -12515,7 +13601,7 @@ function describeInstall(install2) {
 function onDiskVersion(install2) {
   if (install2.kind === "npm") return installedNpmVersion(install2);
   if (install2.kind === "plugin" && install2.root) {
-    return highestCachedVersion(path25.dirname(install2.root), install2.agent === "codex" ? ".codex-plugin" : ".claude-plugin");
+    return highestCachedVersion(path29.dirname(install2.root), install2.agent === "codex" ? ".codex-plugin" : ".claude-plugin");
   }
   return null;
 }
@@ -12574,21 +13660,21 @@ async function runMcp(version, args, options = {}) {
 }
 
 // packages/cli/src/mcp/pluginWorkspace.ts
-import path26 from "node:path";
+import path30 from "node:path";
 function resolvePluginWorkspace(env, cwd, pluginRoot2) {
   if (env.CLAUDE_PROJECT_DIR) return env.CLAUDE_PROJECT_DIR;
-  if (env.PWD && path26.resolve(cwd) === path26.resolve(pluginRoot2)) return env.PWD;
+  if (env.PWD && path30.resolve(cwd) === path30.resolve(pluginRoot2)) return env.PWD;
   return cwd;
 }
 
 // packages/cli/src/mcp/pluginBundledEntry.ts
-var pluginRoot = path27.dirname(path27.dirname(fileURLToPath2(import.meta.url)));
+var pluginRoot = path31.dirname(path31.dirname(fileURLToPath2(import.meta.url)));
 var workspace = resolvePluginWorkspace(process.env, process.cwd(), pluginRoot);
-var webDir = path27.join(pluginRoot, "web");
-var flags = existsSync8(path27.join(webDir, "index.html")) ? { workspace, assets: webDir } : { workspace };
+var webDir = path31.join(pluginRoot, "web");
+var flags = existsSync8(path31.join(webDir, "index.html")) ? { workspace, assets: webDir } : { workspace };
 var install = detectPluginInstall(process.env, process.cwd(), pluginRoot);
 var check = install ? startUpdateCheck({ install }) : null;
-runMcp("0.12.4", { noun: "mcp", positionals: [], flags }, {
+runMcp("0.12.6", { noun: "mcp", positionals: [], flags }, {
   takeNotice: check?.takeNotice,
   install: install ?? { kind: "unmanaged", reason: "checkout" },
   executable: fileURLToPath2(import.meta.url)

@@ -6,6 +6,30 @@ import { render, screen, waitFor, cleanup, act } from '@testing-library/react';
 import { ShellTrackingNotice } from '../ShellTrackingNotice';
 import { initFileStateListeners } from '../../../store/listeners/fileStateListeners';
 
+it('shows the time, turn and capture failure for a missed shell batch', async () => {
+  const original = window.electronAPI;
+  const invoke = vi.fn(async () => [{
+    sessionId: 'bulk-session', state: 'degraded', observation: 'watching',
+    reasons: { checkoutBaseline: 1 }, turns: [],
+    events: [{
+      at: 1794510000000, reason: 'checkoutBaseline', turnId: 'bulk-turn',
+      tool: 'Bash', error: 'capture timeout: preparation budget exceeded',
+    }],
+  }]);
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { invoke } });
+  try {
+    render(<Provider store={store}><ShellTrackingNotice sessionIds={['bulk-session']} /></Provider>);
+    const failures = await screen.findByRole('list', { name: 'Recent tracking failures' });
+    expect(failures.textContent).toContain('bulk-turn');
+    expect(failures.textContent).toContain('Bash');
+    expect(failures.textContent).toContain('capture timeout: preparation budget exceeded');
+    expect(failures.querySelector('time')?.getAttribute('datetime')).toBe(new Date(1794510000000).toISOString());
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: original });
+  }
+});
+
 it('refreshes coverage through the central listener, isolates scopes, and rejects stale responses', async () => {
   const original = window.electronAPI;
   let finishOld!: (value: any) => void;

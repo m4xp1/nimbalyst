@@ -199,6 +199,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Configured Push/Pull targets with directional commit counts, bounded background remote checks on activation/focus, shared snapshots and explicit freshness/unavailable states
 - Commit proposals can target another registered worktree of the session's repository; the widget names its branch and path, and these commits always need approval on desktop, even with auto-commit on
 - Commit history view with ahead/behind tracking and links to the AI sessions that produced commits
+- Session edit history retains accepted bulk shell changes through asynchronous cleanup and compares captured content when file dates are preserved, with tracking diagnostics showing recent failure times, affected turns and tools
 - Per-repository status, branches, file lists, and commit controls for multi-folder projects; Commit with AI proposes separate commits per repository; the title-bar branch, Git panel and new-worktree dialog follow the file open in the editor
 - Auto-commit mode (toggle)
 - Merge/rebase conflict dialogs

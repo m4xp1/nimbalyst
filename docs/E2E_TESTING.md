@@ -16,6 +16,8 @@ The fork release gate uses `playwright.search.config.ts`, one spec per process, 
 
 ## AI Agent Guidelines for E2E Tests
 
+The fork release gates also run `ai/sidebar-document-context.spec.ts` and `ai/session-edit-batch.spec.ts` against both built and packaged Electron. The first verifies that visible document and selection context agrees with the intercepted outgoing prompt. The second checks 33 persisted session-file links, all three sidebar scopes, committing and restart on SQLite and PGLite. Shell attribution itself is exercised separately with real Git snapshots and injected filesystem events in `ShellCheckoutBaseline.test.ts`, plus timeout, lifecycle and ownership regressions in `ShellFileAttribution.test.ts`. These scenarios use isolated profiles and disabled paid providers.
+
 **IMPORTANT**: These guidelines are for AI agents running E2E tests in this codebase.
 
 ### When to Run in Dev Containers

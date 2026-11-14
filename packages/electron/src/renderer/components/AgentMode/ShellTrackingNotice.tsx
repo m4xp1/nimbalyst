@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { atom, useAtomValue } from 'jotai';
-import { shellCoverageDetails, type ShellCoverageSummary } from '@nimbalyst/runtime/ai/shellTrackingCoverage';
+import { shellCoverageDetails, shellCoverageReasons, isShellCoverageFault, type ShellCoverageSummary } from '@nimbalyst/runtime/ai/shellTrackingCoverage';
 import { shellTrackingRevisionAtom } from '../../store/atoms/shellTracking';
 
 /** Requeries on persisted link/coverage updates; old requests cannot replace a new scope. */
@@ -39,6 +39,9 @@ export function ShellTrackingNotice({ sessionIds }: { sessionIds: string[] }) {
     };
   }, [key, revision]);
   const details = shellCoverageDetails(coverage);
+  const events = coverage.flatMap(item => (item.events ?? [])
+    .filter(event => Number.isFinite(event.at) && isShellCoverageFault(event.reason))
+    .map(event => ({ ...event, sessionId: item.sessionId }))).slice(-8);
   const recovering = coverage.some(item => item.observation === 'recovering');
   const historical = coverage.length > 0 && coverage.every(item => item.observation === 'watching');
   if (!failed && !details.length) return null;
@@ -55,6 +58,19 @@ export function ShellTrackingNotice({ sessionIds }: { sessionIds: string[] }) {
         <ul className="mt-1 list-disc pl-4">
           {details.map((detail) => (
             <li key={detail}>{detail}.</li>
+          ))}
+        </ul>
+      )}
+      {events.length > 0 && (
+        <ul className="mt-2 space-y-1" aria-label="Recent tracking failures">
+          {events.map((event, index) => (
+            <li key={`${event.sessionId}:${event.at}:${index}`}>
+              <time dateTime={new Date(event.at).toISOString()}>{new Date(event.at).toLocaleString()}</time>
+              {' · '}{shellCoverageReasons[event.reason]}
+              {event.turnId && <> · Turn <code>{event.turnId}</code></>}
+              {event.tool && <> · {event.tool}</>}
+              {event.error && <div className="break-words">{event.error}</div>}
+            </li>
           ))}
         </ul>
       )}

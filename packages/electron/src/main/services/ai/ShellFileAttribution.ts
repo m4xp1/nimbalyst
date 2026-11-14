@@ -65,6 +65,7 @@ export class ShellFileAttribution {
   private readonly terminal = new Map<string, Set<string>>();
   private readonly observed = new Map<string, Set<string>>();
   private readonly closing = new Map<string, Promise<void>>();
+  private readonly releasing = new Map<string, Promise<void>>();
   private readonly cache = new Map<string, string | null>();
   private readonly stats = { ambiguous: 0, suppressed: 0, overflow: 0 };
   private readonly disabled = new Set<string>();
@@ -331,26 +332,38 @@ export class ShellFileAttribution {
     this.observed.get(generation)?.clear();
     this.disabled.delete(generation);
   }
-  async release(generation: string): Promise<void> {
+  async release(generation: string, waitForCompletion = false): Promise<void> {
+    const pending = this.releasing.get(generation);
+    if (pending) {
+      if (waitForCompletion) await pending;
+      else await boundedDrain(pending, 1500);
+      return;
+    }
     const s = this.sessions.get(generation);
+    if (!s) return;
     // A completion still draining must persist its deferred links and clear its
     // durable tool marker before the owner disappears; otherwise a quit right
     // after a command finishes reports an interruption on the next launch.
     this.endTurn(generation);
-    // Bounded wait for turn-end reconciliation; a slow quit is not a coverage fault.
-    await this.drain(s ? [s.sessionId] : [], 1500, false);
-    this.sessions.delete(generation);
-    this.terminal.delete(generation);
-    this.observed.delete(generation);
-    this.disabled.delete(generation);
-    for (const [key, w] of this.windows) if (w.generation === generation) this.windows.delete(key);
-    await boundedDrain(this.flush(), 1500);
-    if (s && ![...this.sessions.values()].some((x) => x.workspace === s.workspace)) {
-      const release = await this.workspaces.get(s.workspace);
-      release?.();
-      this.workspaces.delete(s.workspace);
-      for (const file of this.cache.keys()) if (this.contains(s.workspace, file)) this.cache.delete(file);
-    }
+    const cleanup = (async () => {
+      // Dispose runs asynchronously in the host. Keep the owner and diagnostic
+      // store alive until every accepted candidate has been saved.
+      await this.flush();
+      await Promise.all([...this.closing].filter(([key]) => key.startsWith(generation + '|')).map(([, work]) => work));
+      this.sessions.delete(generation);
+      this.terminal.delete(generation);
+      this.observed.delete(generation);
+      this.disabled.delete(generation);
+      if (![...this.sessions.values()].some((x) => x.workspace === s.workspace)) {
+        const release = await this.workspaces.get(s.workspace);
+        release?.();
+        this.workspaces.delete(s.workspace);
+        for (const file of this.cache.keys()) if (this.contains(s.workspace, file)) this.cache.delete(file);
+      }
+    })().finally(() => this.releasing.delete(generation));
+    this.releasing.set(generation, cleanup);
+    if (waitForCompletion) await cleanup;
+    else await boundedDrain(cleanup, 1500);
   }
   getStats() {
     return {
@@ -480,7 +493,7 @@ export class ShellFileAttribution {
         if (!winner) return;
         // A metadata-only notification for an old file is not a new edit. An
         // uncached disappearance might be a directory; only known files qualify.
-        if (state && state.modifiedAt <= winner.start) return;
+        if (!winner.checkout && state && state.modifiedAt <= winner.start) return;
         if (winner.files.has(filePath)) return;
         const session = this.sessions.get(winner.generation);
         if (!session) return;

@@ -66,8 +66,8 @@ export class AutoUpdaterService {
     log.transports.file.level = 'info';
     autoUpdater.logger = log;
 
-    // Keep upstream release discovery, but the fork downloads and installs
-    // only after an explicit user action.
+    // Use upstream releases as notifications. Download and install require
+    // explicit user actions so an official build cannot silently replace the fork.
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
@@ -112,6 +112,7 @@ export class AutoUpdaterService {
       // Deliberately does NOT clear the error dedup key. Clearing it here is
       // what let a flapping network re-emit `update_error` on every hourly
       // poll (error -> success -> error -> ...), for 182,624 events in 30 days.
+      const wasManualCheck = this.isManualCheck;
       this.isManualCheck = false;
 
       let releaseNotes = info.releaseNotes as string | undefined;
@@ -127,7 +128,14 @@ export class AutoUpdaterService {
         releaseDate: info.releaseDate
       };
 
-      // Discovery still informs the renderer; it does not start a download.
+      this.sendToFrontmostWindow('update-toast:show-available', {
+        currentVersion: app.getVersion(),
+        newVersion: info.version,
+        releaseNotes: releaseNotes || '',
+        releaseDate: info.releaseDate,
+        releaseChannel: channel,
+        isManualCheck: wasManualCheck
+      });
       this.sendToAllWindows('update-available', info);
     });
 

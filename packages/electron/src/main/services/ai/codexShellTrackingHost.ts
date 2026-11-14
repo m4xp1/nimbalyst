@@ -217,7 +217,7 @@ export async function prepareShellTracking(sessionId: string, workspace: string)
       disposed = true;
       server.close();
       void shellFileAttribution
-        .release(generation)
+        .release(generation, true)
         .then(() => shellTrackingCoverage.close(generation))
         .catch((error) => logger.main.warn('[CodexShellTracking] Cleanup failed:', error));
     },

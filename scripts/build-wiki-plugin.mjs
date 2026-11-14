@@ -317,6 +317,7 @@ export function bundleLocalServer(entry = LOCAL_SERVER_ENTRY) {
       '@nimbalyst/collab-protocol': './packages/collab-protocol/src/index.ts',
       // The app's mark parser; see packages/cli/src/types/pageMarkSyntax.d.ts.
       '@nimbalyst/runtime/core/pageMarkSyntax': './packages/runtime/src/core/pageMarkSyntax.ts',
+      '@nimbalyst/runtime/editor/commenting/quoteMatch': './packages/runtime/src/editor/commenting/quoteMatch.ts',
     },
     banner: { js: `#!/usr/bin/env node\n// ${GENERATED_NOTE.replace(SOURCE_LABEL, 'packages/cli/src/mcp')}` },
     legalComments: 'none',

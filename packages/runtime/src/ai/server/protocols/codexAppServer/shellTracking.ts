@@ -87,7 +87,7 @@ export async function prepareCodexShellTracking(options: SessionOptions) {
   const matcher = '^(Bash|apply_patch|mcp__.*)$';
   const group = `[{ matcher = ${JSON.stringify(
     matcher
-  )}, hooks = [{ type = "command", command = ${JSON.stringify(registration.command)}, timeout = 5 }] }]`;
+  )}, hooks = [{ type = "command", command = ${JSON.stringify(registration.command)}, timeout = 35 }] }]`;
   return {
     registration,
     args: ['-c', `hooks.PreToolUse=${group}`, '-c', `hooks.PostToolUse=${group}`],
@@ -125,7 +125,7 @@ export async function prepareCodexShellTracking(options: SessionOptions) {
       const definition = [
         {
           matcher,
-          hooks: [{ type: 'command', command: registration.command, timeout: 5 }],
+          hooks: [{ type: 'command', command: registration.command, timeout: 35 }],
         },
       ];
       return {
