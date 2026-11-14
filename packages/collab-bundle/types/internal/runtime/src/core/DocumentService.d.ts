@@ -13,6 +13,7 @@ export interface Document {
 export interface DocumentOpenOptions {
     path?: string;
     name?: string;
+    fragment?: string;
 }
 /**
  * Metadata entry for a document's frontmatter and derived attributes
