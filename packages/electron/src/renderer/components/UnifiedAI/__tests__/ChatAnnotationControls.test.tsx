@@ -110,7 +110,7 @@ describe('chat annotation draft persistence', () => {
       click(ui.getByRole('button', { name: '1. the selected words' }));
       click(ui.getByRole('button', { name: 'Find annotation source' }));
       await waitFor(() => expect(paragraph.scrollIntoView).toHaveBeenCalled());
-      expect((await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment', exact: true })).value).toBe('Find this note');
+      expect((await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment' })).value).toBe('Find this note');
     } finally { paragraph.remove(); }
   });
   it('clears annotations when the user message is persisted while the agent is still running', async () => {
