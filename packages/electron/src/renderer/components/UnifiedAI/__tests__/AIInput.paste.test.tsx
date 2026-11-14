@@ -142,6 +142,19 @@ describe('sending follow-ups to an active turn', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Queue message' }));
     expect(handlers.onQueue).toHaveBeenCalledExactlyOnceWith('Clarify the requirements');
   });
+
+  it('uses Send now for Enter while running and leaves Shift+Enter as a newline', () => {
+    const handlers = renderFollowUp(false, true);
+    const input = screen.getByRole('textbox');
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(handlers.onSteer).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(handlers.onSteer).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(handlers.onSteer).toHaveBeenCalledOnce();
+    expect(handlers.onSend).not.toHaveBeenCalled();
+    expect(handlers.onQueue).not.toHaveBeenCalled();
+  });
 });
 
 describe('dictation in the agent input', () => {

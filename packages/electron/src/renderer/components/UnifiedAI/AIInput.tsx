@@ -16,6 +16,7 @@ import { PendingVoiceCommand } from './PendingVoiceCommand';
 import { pendingVoiceCommandAtom, voiceActiveSessionIdAtom, type PendingVoiceCommand as PendingVoiceCommandType } from '../../store/atoms/voiceModeState';
 import type { ActionPrompt, ActionPickerSettings } from '../../store/atoms/actionPrompts';
 import { SelectionChips } from './SelectionChips';
+import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import {
   MemoryPromptIndicator,
   MemorySaveButton,
@@ -1163,7 +1164,8 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
         e.preventDefault();
         if (value.trim() && !disabled && !isSteering && processingAttachments.length === 0) {
           endDictationForSubmit();
-          onSend(value);
+          if (isLoading) onSteer?.();
+          else onSend(value);
         }
       }
     };
@@ -1642,7 +1644,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
             />
           )}
           </div>
-          {!isMemoryMode && <DictationButton targetKey={dictationKey} disabled={disabled} />}
+          {!isMemoryMode && !isLoading && <DictationButton targetKey={dictationKey} disabled={disabled} />}
           {isMemoryMode ? (
             // Memory mode: show save button
             <MemorySaveButton
@@ -1651,21 +1653,10 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
               isSaving={isSaving}
             />
           ) : isLoading ? (
-            <>
-              {onQueue && (
-                <button type="button" className="ai-chat-queue-button h-9 rounded border border-nim px-2 text-xs disabled:opacity-40"
-                  aria-label="Queue message" title="Send after this turn" onClick={handleQueue}
-                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
-                  Queue
-                </button>
-              )}
-              {onSteer && (
-                <button type="button" className="ai-chat-steer-button h-9 rounded bg-nim-primary px-2 text-xs text-white disabled:opacity-40"
-                  title="Send to the active Codex turn" onClick={onSteer}
-                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
-                  Send now
-                </button>
-              )}
+            <div className="ai-chat-active-actions grid shrink-0 grid-cols-2 gap-2 self-end">
+              <div className="flex h-9 w-9 items-center justify-center">
+                <DictationButton targetKey={dictationKey} disabled={disabled} />
+              </div>
             {onCancel && (
               <button
                 className="ai-chat-cancel-button w-9 h-9 flex items-center justify-center bg-red-600 border-none rounded-md text-white cursor-pointer transition-all duration-200 animate-pulse hover:bg-red-700 hover:scale-105 hover:animate-none"
@@ -1681,7 +1672,21 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
                 </svg>
               </button>
             )}
-            </>
+              {onQueue && (
+                <button type="button" className="ai-chat-queue-button col-start-1 flex h-9 w-9 items-center justify-center rounded-md border border-nim bg-nim text-nim disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Queue message" title="Send after this turn" onClick={handleQueue}
+                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
+                  <MaterialSymbol icon="playlist_add" size={19} />
+                </button>
+              )}
+              {onSteer && (
+                <button type="button" className="ai-chat-steer-button col-start-2 row-start-2 flex h-9 w-9 items-center justify-center rounded-md bg-nim-primary text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Send now" title="Send to the active Codex turn (Enter)" onClick={onSteer}
+                  disabled={disabled || !value.trim() || processingAttachments.length > 0 || isSteering}>
+                  <MaterialSymbol icon="send" size={19} />
+                </button>
+              )}
+            </div>
           ) : (
             <button
               className="ai-chat-send-button w-9 h-9 flex items-center justify-center bg-[var(--nim-primary)] border-none rounded-md text-white cursor-pointer transition-all duration-200 shrink-0 hover:enabled:bg-[var(--nim-primary-hover)] hover:enabled:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
