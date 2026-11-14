@@ -15,7 +15,7 @@ for (const backend of ['sqlite', 'pglite']) test(`annotation drafts, heading lin
   await fs.writeFile(path.join(workspace, 'notes.md'), '# Notes\n\nSelected synthetic text.\n\n[Target section](./target.md#требование-языка)\n\n' + 'A long document paragraph for scrolling.\n\n'.repeat(50));
   await fs.writeFile(path.join(workspace, 'target.md'), '# Target\n\n' + 'Target document filler.\n\n'.repeat(50) + '## Требование языка\n\nCorrect section.\n');
   const app = await launchElectronApp({ workspace, preserveTestDatabase: true, recordVideo: false,
-    env: { PLAYWRIGHT_TEST: 'true', NIMBALYST_USER_DATA_DIR: path.join(temp, 'profile'), NIMBALYST_USER_DATA_PATH: db } });
+    env: { PLAYWRIGHT_TEST: 'true', NIMBALYST_CDP_PORT: '0', NIMBALYST_USER_DATA_DIR: path.join(temp, 'profile'), NIMBALYST_USER_DATA_PATH: db } });
   try {
     const page = await app.firstWindow();
     await waitForAppReady(page);
