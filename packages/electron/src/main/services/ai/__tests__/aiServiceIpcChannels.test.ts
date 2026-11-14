@@ -21,6 +21,11 @@ const { registered, handlers, pushChange, getProvider, createProvider, destroyPr
   registered: [] as string[], handlers: new Map<string, (...args: any[]) => any>(),
   pushChange: vi.fn(), getProvider: vi.fn(), createProvider: vi.fn(), destroyProvider: vi.fn(),
 }));
+const { beginUsage, finishUsage } = vi.hoisted(() => {
+  const finishUsage = vi.fn();
+  return { finishUsage, beginUsage: vi.fn(() => finishUsage) };
+});
+vi.mock('../../CodexUsageService', () => ({ codexUsageService: { beginTurn: beginUsage } }));
 vi.mock('electron', async () => ({
   app: (await import('../../../../../test-stubs/privateUserData')).testApp,
   BrowserWindow: { getAllWindows: () => [] },
@@ -215,6 +220,7 @@ it('steers the captured turn only for the session workspace', async () => {
 });
 
 it('uses a separate subscription provider for a temporary proposal and rejects another workspace', async () => {
+  beginUsage.mockClear(); finishUsage.mockClear();
   const initialize = vi.fn().mockResolvedValue(undefined);
   const generateTemporaryCommitMessage = vi.fn().mockResolvedValue('Fix widget');
   createProvider.mockReturnValueOnce({ initialize, generateTemporaryCommitMessage });
@@ -235,6 +241,26 @@ it('uses a separate subscription provider for a temporary proposal and rejects a
   expect(initialize).toHaveBeenCalledExactlyOnceWith({ model: 'gpt-6-luna', skipLogging: true });
   expect(generateTemporaryCommitMessage).toHaveBeenCalledExactlyOnceWith('/worktree', request.prompt, 'high');
   expect(destroyProvider).toHaveBeenCalledExactlyOnceWith(temporaryId, 'openai-codex');
+  expect(beginUsage).toHaveBeenCalledTimes(1);
+  expect(finishUsage).toHaveBeenCalledTimes(1);
+});
+
+it.each(['initialize', 'generate'])('finishes temporary commit usage activity when %s fails', async failureAt => {
+  beginUsage.mockClear(); finishUsage.mockClear();
+  const initialize = vi.fn().mockResolvedValue(undefined);
+  const generateTemporaryCommitMessage = vi.fn().mockResolvedValue('Unused synthetic proposal');
+  if (failureAt === 'initialize') initialize.mockRejectedValueOnce(new Error('Synthetic provider failure'));
+  else generateTemporaryCommitMessage.mockRejectedValueOnce(new Error('Synthetic provider failure'));
+  createProvider.mockReturnValueOnce({ initialize, generateTemporaryCommitMessage });
+  vi.mocked(AISessionsRepository.get).mockResolvedValueOnce({
+    id: 'temporary-error', provider: 'openai-codex', workspacePath: '/primary', messages: [], createdAt: 0, updatedAt: 0,
+  });
+  registerTurnControlHandlers({ ...stubContext, isProviderEnabledForWorkspace: () => true });
+  await expect(handlers.get('ai:generateTemporaryCommitMessage')!(null, {
+    sessionId: 'temporary-error', workspacePath: '/primary', model: 'openai-codex:gpt-6-luna', effort: 'low', prompt: 'One synthetic diff',
+  })).rejects.toThrow('Synthetic provider failure');
+  expect(beginUsage).toHaveBeenCalledTimes(1);
+  expect(finishUsage).toHaveBeenCalledTimes(1);
 });
 
 const REGISTRARS: Record<string, (ctx: AIServiceContext) => void> = {

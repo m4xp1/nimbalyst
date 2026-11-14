@@ -21,6 +21,7 @@ import type { CodexSteerRequest, CodexSteerResult, CodexSteerTarget } from '@nim
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { safeSend } from '../aiServiceUtils';
 import { broadcastSessionTokenUsage } from '../sessionTokenUsageUpdates';
+import { codexUsageService } from '../../CodexUsageService';
 import { cancelTurnSetup } from '../turnSetupStages';
 import type { AIServiceContext } from './AIServiceContext';
 
@@ -197,12 +198,14 @@ export function registerTurnControlHandlers(ctx: AIServiceContext): void {
     }
     const temporaryId = randomUUID();
     const provider = ProviderFactory.createProvider(model.provider, temporaryId) as OpenAICodexProvider;
+    const finishUsage = codexUsageService.beginTurn();
     try {
       await provider.initialize({ model: model.model, skipLogging: true });
       return await provider.generateTemporaryCommitMessage(
         session.worktreePath || session.workspacePath, request.prompt, parseEffortLevel(request.effort),
       );
     } finally {
+      finishUsage();
       ProviderFactory.destroyProvider(temporaryId, model.provider);
     }
   });
