@@ -3,8 +3,22 @@ import { describe, expect, it } from 'vitest';
 import {
   accumulateClaudeCodeTurnUsage,
   accumulateProviderTurnUsage,
+  applyProviderContextUsage,
   type ProviderTurnUsageInput,
 } from '../tokenUsageAccumulation';
+
+describe('live context snapshots', () => {
+  const current = { inputTokens: 500000, outputTokens: 1000, totalTokens: 501000, currentContext: { tokens: 236000, contextWindow: 200000 } };
+  it('uses the native window, accepts zero and never increments cumulative counters', () => {
+    expect(applyProviderContextUsage(current, { contextFillTokens: 0, contextWindow: 258400 }, 200000)).toEqual({
+      ...current, contextWindow: 258400, currentContext: { tokens: 0, contextWindow: 258400 },
+    });
+  });
+  it('invalidates an obsolete measurement after compaction and rejects missing or invalid data', () => {
+    expect(applyProviderContextUsage(current, { contextCompacted: true })).toMatchObject({ totalTokens: 501000, currentContext: undefined, contextWindow: undefined });
+    for (const contextFillTokens of [undefined, NaN, -1]) expect(applyProviderContextUsage(current, { contextFillTokens })).toBeUndefined();
+  });
+});
 
 const claudeTurn = (input: number, output: number, cacheRead: number, cacheCreation: number) => ({
   usage: {

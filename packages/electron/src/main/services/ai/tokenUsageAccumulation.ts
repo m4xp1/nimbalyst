@@ -45,6 +45,21 @@ type ModelUsage = NonNullable<StreamChunk['modelUsage']>;
 
 const EMPTY_USAGE: StoredTokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
+/** A live fill changes occupancy only. Never add it to cumulative spend. */
+export function applyProviderContextUsage(
+  current: StoredTokenUsage | undefined,
+  sample: Pick<StreamChunk, 'contextFillTokens' | 'contextWindow' | 'contextCompacted'>,
+  fallbackWindow?: number,
+): StoredTokenUsage | undefined {
+  const base = current ?? EMPTY_USAGE;
+  if (sample.contextCompacted) return { ...base, currentContext: undefined, contextWindow: undefined };
+  const tokens = sample.contextFillTokens;
+  const window = sample.contextWindow ?? base.currentContext?.contextWindow ?? fallbackWindow;
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens < 0 ||
+      typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return undefined;
+  return { ...base, contextWindow: window, currentContext: { tokens, contextWindow: window } };
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }

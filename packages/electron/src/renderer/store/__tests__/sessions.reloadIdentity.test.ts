@@ -31,6 +31,22 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
 }
 
 describe('preserveReloadIdentity', () => {
+  it.each(['load', 'reload'] as const)('preserves a newer context snapshot while %s awaits the database', async mode => {
+    const state = createStore();
+    const id = `context-race-${mode}`;
+    const before = { inputTokens: 100000, outputTokens: 2000, totalTokens: 102000, currentContext: { tokens: 99000, contextWindow: 200000 } };
+    const after = { ...before, currentContext: { tokens: 4555, contextWindow: 258400 } };
+    state.set(sessionStoreAtom(id), makeSession({ id, tokenUsage: before }));
+    let reply!: (value: SessionData) => void;
+    vi.stubGlobal('window', { electronAPI: { aiLoadSession: () => new Promise<SessionData>(resolve => { reply = resolve; }) } });
+    try {
+      const pending = state.set(mode === 'load' ? loadSessionDataAtom : reloadSessionDataAtom, { sessionId: id, workspacePath: '/ws/context' });
+      state.set(updateSessionStoreAtom, { sessionId: id, updates: { tokenUsage: after } });
+      reply(makeSession({ id, tokenUsage: before }));
+      await pending;
+      expect(state.get(sessionStoreAtom(id))?.tokenUsage?.currentContext).toEqual(after.currentContext);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('preserves surviving row identities through append, removal and reorder', () => {
     const messages = [makeMessage(1, 'one'), makeMessage(2, 'two')];
     const appended = preserveReloadIdentity(makeSession({ messages }), makeSession({

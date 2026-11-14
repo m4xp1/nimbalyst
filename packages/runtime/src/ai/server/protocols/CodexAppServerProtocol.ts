@@ -313,6 +313,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
     let usage: CodexUsage | undefined;
     let contextFillTokens: number | undefined;
     let contextWindow: number | undefined;
+    let contextCompacted = false;
     let fullText = '';
 
     const unsubscribers: Array<() => void> = [];
@@ -351,7 +352,14 @@ export class CodexAppServerProtocol implements AgentProtocol {
           (delta) => { fullText += delta; },
           (u) => { usage = u; },
           (c) => {
-            if (c.contextFillTokens !== undefined) contextFillTokens = c.contextFillTokens;
+            if (c.contextCompacted) {
+              contextFillTokens = undefined;
+              contextCompacted = true;
+            }
+            if (c.contextFillTokens !== undefined) {
+              contextFillTokens = c.contextFillTokens;
+              contextCompacted = false;
+            }
             if (c.contextWindow !== undefined) contextWindow = c.contextWindow;
           },
         );
@@ -463,6 +471,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
             // these come from thread/tokenUsage/updated earlier in the turn.
             ...(contextFillTokens !== undefined ? { contextFillTokens } : {}),
             ...(contextWindow !== undefined ? { contextWindow } : {}),
+            ...(contextCompacted ? { contextCompacted: true } : {}),
           };
           return;
         }
@@ -969,7 +978,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
     raw: AppServerSessionRaw,
     appendText: (delta: string) => void,
     setUsage: (u: CodexUsage) => void,
-    setContext: (c: { contextFillTokens?: number; contextWindow?: number }) => void,
+    setContext: (c: { contextFillTokens?: number; contextWindow?: number; contextCompacted?: boolean }) => void,
   ): void {
     const params = paramsUnknown as Record<string, unknown> | undefined;
     const summary = summarizeNotificationParams(method, paramsUnknown);
@@ -996,6 +1005,10 @@ export class CodexAppServerProtocol implements AgentProtocol {
       case 'item/completed': {
         const n = params as unknown as ItemCompletedNotification;
         this.handleItemCompleted(n, push, appendText);
+        if (n.item?.type === 'contextCompaction') {
+          setContext({ contextCompacted: true });
+          push({ kind: 'event', event: { type: 'usage', contextCompacted: true } });
+        }
         return;
       }
       case 'item/agentMessage/delta': {
@@ -1027,13 +1040,12 @@ export class CodexAppServerProtocol implements AgentProtocol {
         const normalized = normalizeUsage(breakdown.total ?? breakdown.last);
         if (normalized) setUsage(normalized);
 
-        // Settles on the `complete` event. A mid-turn snapshot would need a
-        // `usage` case in AgentProtocolTranscriptAdapter, which drops the type
-        // today -- emitting one here without that would be dead code.
         const fill = pickTokenTotal(breakdown.last);
-        const window = breakdown.modelContextWindow;
+        const window = typeof breakdown.modelContextWindow === 'number' && Number.isFinite(breakdown.modelContextWindow) && breakdown.modelContextWindow > 0
+          ? breakdown.modelContextWindow : undefined;
         if (fill !== undefined || window !== undefined) {
           setContext({ contextFillTokens: fill, contextWindow: window });
+          push({ kind: 'event', event: { type: 'usage', contextFillTokens: fill, contextWindow: window } });
         }
         return;
       }
@@ -1497,11 +1509,12 @@ function normalizeUsage(u: TokenUsage | undefined): CodexUsage | undefined {
 function pickTokenTotal(u: TokenUsage | undefined): number | undefined {
   if (!u) return undefined;
   const total = u.total_tokens ?? u.totalTokens;
-  if (typeof total === 'number') return total;
+  if (typeof total === 'number') return Number.isFinite(total) && total >= 0 ? total : undefined;
   const input = u.input_tokens ?? u.inputTokens;
   const output = u.output_tokens ?? u.outputTokens;
   if (typeof input === 'number' || typeof output === 'number') {
-    return (input ?? 0) + (output ?? 0);
+    const value = (input ?? 0) + (output ?? 0);
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
   }
   return undefined;
 }

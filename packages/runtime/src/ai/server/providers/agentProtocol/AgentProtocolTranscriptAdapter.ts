@@ -30,6 +30,7 @@ export type ParsedItem =
   | { kind: 'tool_call'; toolCall: NonNullable<ProtocolEvent['toolCall']> }
   | { kind: 'tool_result'; toolResult: NonNullable<ProtocolEvent['toolResult']> }
   | { kind: 'complete'; event: ProtocolEvent }
+  | { kind: 'context_usage'; event: ProtocolEvent }
   | { kind: 'error'; message: string }
   // Lifecycle (not transcript-relevant)
   | { kind: 'raw_event'; event: ProtocolEvent }
@@ -72,6 +73,8 @@ export class AgentProtocolTranscriptAdapter {
         return this.handleToolResult(event);
       case 'complete':
         return this.handleComplete(event);
+      case 'usage':
+        return [{ kind: 'context_usage', event }];
       case 'error':
         return this.handleError(event);
       case 'raw_event':
@@ -203,7 +206,7 @@ export class AgentProtocolTranscriptAdapter {
         costUSD: 0,
         webSearchRequests: 0,
       },
-      contextCompacted: false,
+      contextCompacted: event.contextCompacted === true,
     });
     return [{ kind: 'complete', event }];
   }

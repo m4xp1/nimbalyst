@@ -20,6 +20,7 @@ import { OpenAICodexProvider } from '@nimbalyst/runtime/ai/server/providers/Open
 import type { CodexSteerRequest, CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { safeSend } from '../aiServiceUtils';
+import { broadcastSessionTokenUsage } from '../sessionTokenUsageUpdates';
 import { cancelTurnSetup } from '../turnSetupStages';
 import type { AIServiceContext } from './AIServiceContext';
 
@@ -277,7 +278,7 @@ export function registerTurnControlHandlers(ctx: AIServiceContext): void {
       if (storedUsage?.currentContext || storedUsage?.contextWindow) {
         const clearedUsage = { ...storedUsage, currentContext: undefined, contextWindow: undefined };
         await ctx.sessionManager.updateSessionTokenUsage(sessionId, clearedUsage);
-        safeSend(event, 'ai:tokenUsageUpdated', { sessionId, tokenUsage: clearedUsage });
+        broadcastSessionTokenUsage(sessionId, clearedUsage);
       }
 
       return { success: true };

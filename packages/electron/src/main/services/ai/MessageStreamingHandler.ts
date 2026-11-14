@@ -52,7 +52,8 @@ import type { RawDocumentContext } from '@nimbalyst/runtime/ai/services/types';
 import type { DocumentContextService } from '@nimbalyst/runtime/ai/services/DocumentContextService';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { resolveClaudeCodeParentContextWindow } from '@nimbalyst/runtime/ai/modelConstants';
-import { accumulateClaudeCodeTurnUsage, accumulateProviderTurnUsage } from './tokenUsageAccumulation';
+import { accumulateClaudeCodeTurnUsage, accumulateProviderTurnUsage, applyProviderContextUsage } from './tokenUsageAccumulation';
+import { broadcastSessionTokenUsage } from './sessionTokenUsageUpdates';
 import { provisionalTitleForFirstMessage } from './provisionalSessionTitle';
 import { sessionNotFoundMessage } from './sessionNotFoundMessage';
 import {
@@ -1551,31 +1552,17 @@ export class MessageStreamingHandler {
             // currentContext so the indicator refreshes per assistant step
             // during a long agentic turn. Must not touch cumulative
             // input/output counters -- those settle on the 'complete' chunk.
-            const partialContextFill: number | undefined = chunk.contextFillTokens;
-            const partialContextWindow = selectedModelContextWindow || session.tokenUsage?.contextWindow;
-            if (partialContextFill !== undefined && partialContextWindow) {
-              const currentUsage = session.tokenUsage ?? {
-                inputTokens: 0,
-                outputTokens: 0,
-                totalTokens: 0,
-              };
-              const updatedUsage: NonNullable<SessionData['tokenUsage']> = {
-                ...currentUsage,
-                contextWindow: partialContextWindow,
-                currentContext: { tokens: partialContextFill, contextWindow: partialContextWindow },
-              };
+            const updatedUsage = applyProviderContextUsage(session.tokenUsage, chunk, selectedModelContextWindow);
+            if (updatedUsage) {
 
               await this.svc.sessionManager.updateSessionTokenUsage(session.id, updatedUsage);
-              safeSend(event, 'ai:tokenUsageUpdated', {
-                sessionId: session.id,
-                tokenUsage: updatedUsage,
-              });
+              broadcastSessionTokenUsage(session.id, updatedUsage);
 
               // Push live context usage to mobile sync
               const syncProvider = getSyncProvider();
-              if (syncProvider) {
+              if (syncProvider && updatedUsage.currentContext) {
                 // Streaming chunks must not wait for publication; the helper catches its own failures.
-                void publishContextUsage(syncProvider, session.id, { tokens: partialContextFill, contextWindow: partialContextWindow });
+                void publishContextUsage(syncProvider, session.id, updatedUsage.currentContext);
               }
 
               session.tokenUsage = updatedUsage;
@@ -2394,10 +2381,7 @@ export class MessageStreamingHandler {
               await this.svc.sessionManager.updateSessionTokenUsage(session.id, updatedUsage);
 
               // Send IPC event to update UI immediately
-              safeSend(event, 'ai:tokenUsageUpdated', {
-                sessionId: session.id,
-                tokenUsage: updatedUsage
-              });
+              broadcastSessionTokenUsage(session.id, updatedUsage);
 
               // Push context usage to mobile sync
               if (contextFillTokens !== undefined && contextWindowForDisplay) {
@@ -2438,10 +2422,7 @@ export class MessageStreamingHandler {
               await this.svc.sessionManager.updateSessionTokenUsage(session.id, updatedUsage);
 
               // Send IPC event to update UI immediately
-              safeSend(event, 'ai:tokenUsageUpdated', {
-                sessionId: session.id,
-                tokenUsage: updatedUsage
-              });
+              broadcastSessionTokenUsage(session.id, updatedUsage);
 
               // Push measured context usage to mobile sync.
               if (reportsCurrentContext && contextFillTokens !== undefined && reportedContextWindow) {

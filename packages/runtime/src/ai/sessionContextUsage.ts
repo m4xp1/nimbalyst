@@ -21,7 +21,8 @@ export function readSessionContextUsage(tokenUsage: unknown): SessionContextUsag
   if (!tokenUsage || typeof tokenUsage !== 'object') return undefined;
   const current = (tokenUsage as { currentContext?: unknown }).currentContext;
   if (!current || typeof current !== 'object') return undefined;
-  const tokens = positiveNumber((current as { tokens?: unknown }).tokens);
+  const rawTokens = (current as { tokens?: unknown }).tokens;
+  const tokens = typeof rawTokens === 'number' && Number.isFinite(rawTokens) && rawTokens >= 0 ? rawTokens : undefined;
   const contextWindow = positiveNumber((current as { contextWindow?: unknown }).contextWindow);
   if (tokens === undefined || contextWindow === undefined) return undefined;
   return { tokens, contextWindow };

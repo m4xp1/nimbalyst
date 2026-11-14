@@ -256,6 +256,7 @@ export interface TokenUsage {
 // ---- Item notifications ----
 
 export type CodexItemKind =
+  | 'contextCompaction'
   | 'userMessage'
   | 'agentMessage'
   | 'reasoning'

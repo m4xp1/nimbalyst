@@ -1563,6 +1563,9 @@ describe('OpenAICodexProvider', () => {
       createSession: vi.fn(async () => ({ id: 'usage-thread', platform: 'codex-app-server', raw: {} })),
       sendMessage: () => createAsyncEventStream([
         { type: 'raw_event', metadata: { transport: 'app-server', method: 'account/rateLimits/updated', params: { rateLimits: {} } } },
+        { type: 'usage', contextFillTokens: 4555, contextWindow: 258400 },
+        { type: 'usage', contextCompacted: true },
+        { type: 'usage', contextFillTokens: 0, contextWindow: 258400 },
         { type: 'complete', content: 'done', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
       ]),
       cleanupSession: vi.fn(),
@@ -1572,7 +1575,13 @@ describe('OpenAICodexProvider', () => {
     await provider.initialize({ apiKey, model: 'openai-codex:gpt-6.1-sol' });
     const update = vi.fn();
     provider.on('codex:rateLimitsUpdated', update);
-    for await (const _ of provider.sendMessage('test', undefined, 'usage-session', [], process.cwd())) { /* drain */ }
+    const chunks = [];
+    for await (const chunk of provider.sendMessage('test', undefined, 'usage-session', [], process.cwd())) chunks.push(chunk);
+    expect(chunks.filter(chunk => chunk.type === 'context_usage')).toEqual([
+      expect.objectContaining({ contextFillTokens: 4555, contextWindow: 258400 }),
+      expect.objectContaining({ contextCompacted: true }),
+      expect.objectContaining({ contextFillTokens: 0, contextWindow: 258400 }),
+    ]);
     expect(update).toHaveBeenCalledTimes(directApi ? 0 : 1);
     if (!directApi) expect(update).toHaveBeenCalledWith({ workspaceRevision: 7 });
     provider.cleanupSession('usage-session');

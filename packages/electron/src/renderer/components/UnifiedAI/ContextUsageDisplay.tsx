@@ -3,6 +3,7 @@ import { useSetAtom } from 'jotai';
 import type { TokenUsageCategory } from '@nimbalyst/runtime/ai/server/types';
 import { MaterialSymbol } from '@nimbalyst/runtime/ui/icons/MaterialSymbol';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
+import { readSessionContextUsage } from '@nimbalyst/runtime/ai/sessionContextUsage';
 import { getHelpContent } from '../../help';
 import { openSettingsCommandAtom } from '../../store';
 
@@ -61,16 +62,15 @@ export function ContextUsageDisplay({
   currentContext
 }: ContextUsageDisplayProps) {
   const contextReporting = agentCapabilitiesForProviderType(provider).contextReporting;
-  // For context window display, prefer currentContext (from /context command)
-  // Fall back to legacy fields for backward compatibility
+  const measuredContext = readSessionContextUsage({ currentContext });
   const displayTokens = contextReporting === 'context-window'
-    ? currentContext?.tokens ?? totalTokens
+    ? measuredContext?.tokens ?? 0
     : totalTokens;
-  const displayContextWindow = currentContext?.contextWindow ?? contextWindow;
+  const displayContextWindow = measuredContext?.contextWindow ?? 0;
   const displayCategories = currentContext?.categories ?? categories;
 
   // Check what data we have
-  const hasTokenData = displayTokens > 0 || totalTokens > 0;
+  const hasTokenData = contextReporting === 'context-window' ? measuredContext !== undefined : totalTokens > 0;
   const hasContextWindow = contextReporting === 'context-window' && displayContextWindow > 0;
   // `totalTokens` means different things per provider (Codex counts cached
   // input in it, Claude Code does not), so with a cache split the tooltip's
@@ -142,7 +142,7 @@ export function ContextUsageDisplay({
     return usedCategories.reduce((sum, cat) => sum + cat.width, 0);
   }, [usedCategories]);
 
-  const enableTooltip = hasTokenData && (formattedCategories.length > 0 || inputTokens > 0 || outputTokens > 0);
+  const enableTooltip = (hasTokenData || totalTokens > 0) && (formattedCategories.length > 0 || inputTokens > 0 || outputTokens > 0);
   const shouldShowTooltip = tooltipVisible && enableTooltip;
 
   // Click-to-open: the meter is shaped like a button (model/thinking/action
@@ -261,7 +261,7 @@ export function ContextUsageDisplay({
     <div
       ref={rootRef}
       className={`context-usage-display ${hasContextWindow ? 'usage-context-window' : 'usage-token-counts'} ${usageClass} relative inline-flex items-center py-0.5 px-2 rounded-md text-[11px] font-medium whitespace-nowrap bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] ml-auto ${enableTooltip ? 'cursor-pointer' : 'cursor-default'} gap-1 focus:outline-2 focus:outline-[var(--nim-primary)] focus:outline-offset-2 max-[400px]:hidden ${usageStyles[usageClass as keyof typeof usageStyles]}`}
-      tabIndex={hasTokenData ? 0 : -1}
+      tabIndex={enableTooltip ? 0 : -1}
       aria-label={label}
       aria-describedby={shouldShowTooltip ? tooltipId : undefined}
       aria-expanded={enableTooltip ? shouldShowTooltip : undefined}
@@ -316,7 +316,9 @@ export function ContextUsageDisplay({
               (#914 forbids manufacturing the denominator to fill the gap). */}
           {!hasContextWindow && (
             <div className="tooltip-no-window-note text-[11px] text-[var(--nim-text-muted)] leading-[1.4] whitespace-normal mb-2">
-              Cumulative spend for this session. This agent reports no context window size, so there is no fill percentage to show.
+              {contextReporting === 'context-window'
+                ? 'Cumulative spend for this session. Current context has not been measured yet.'
+                : 'Cumulative spend for this session. This agent reports no context window size, so there is no fill percentage to show.'}
             </div>
           )}
 
