@@ -9,4 +9,8 @@ export interface CodexWorkspaceStatus {
   choices: CodexWorkspaceChoice[];
   signingIn: boolean;
   error?: string;
+  authenticated?: boolean;
+  email?: string | null;
+  canSwitch?: boolean;
+  selectedName?: string | null;
 }

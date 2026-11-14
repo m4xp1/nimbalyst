@@ -35,7 +35,8 @@ vi.mock('@nimbalyst/runtime', () => ({
 }));
 
 import { claudeUsageAtom } from '../../../store/atoms/claudeUsageAtoms';
-import { codexUsageAtom } from '../../../store/atoms/codexUsageAtoms';
+import { codexUsageAtom, codexWorkspaceAtom } from '../../../store/atoms/codexUsageAtoms';
+vi.mock('../../../store/listeners/codexUsageListeners', () => ({ refreshCodexWorkspace: vi.fn(async () => null) }));
 import { geminiUsageAtom } from '../../../store/atoms/geminiUsageAtoms';
 import { ClaudeUsagePopover } from '../../ClaudeUsageIndicator/ClaudeUsagePopover';
 import { CodexUsagePopover } from '../../CodexUsageIndicator/CodexUsagePopover';
@@ -113,30 +114,53 @@ describe('usage popover "Disable" hides via the gutter customization atom', () =
     expect(store.get(hiddenGutterItemsAtom)).toContain('codex-usage');
   });
 
-  it('chooses a workspace through the Codex broker and can return to following Desktop', async () => {
-    const invoke = vi.fn(async (channel: string) => channel === 'codex-workspace:get' ? {
+  it('shows the cached account immediately and chooses a workspace through the Codex broker', async () => {
+    const invoke = vi.fn(async () => undefined);
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, invoke });
+    const store = createStore();
+    store.set(codexWorkspaceAtom, {
       independent: true,
+      authenticated: true, email: 'account@example.test', canSwitch: true,
       selectedId: 'test-personal',
       choices: [{ id: 'test-personal', name: 'Personal' }, { id: 'test-team', name: 'Team' }],
       signingIn: false,
-    } : undefined);
-    vi.stubGlobal('electronAPI', { ...window.electronAPI, invoke });
-    const store = createStore();
+    });
     store.set(codexUsageAtom, { limits: [], lastUpdated: Date.now() });
     const { findByRole, getByRole } = render(
       <Provider store={store}>
         <CodexUsagePopover anchorRef={noopRef()} onClose={() => {}} onRefresh={async () => {}} />
       </Provider>,
     );
-    const picker = await findByRole('combobox', { name: 'ChatGPT workspace' }) as HTMLSelectElement;
+    const picker = await findByRole('combobox', { name: 'Workspace' }) as HTMLSelectElement;
     expect(picker.value).toBe('test-personal');
+    expect(invoke).not.toHaveBeenCalled();
     fireEvent.change(picker, { target: { value: 'test-team' } });
     expect(invoke).toHaveBeenCalledWith('codex-workspace:select', 'test-team');
-    const followDesktop = getByRole('button', { name: 'Follow ChatGPT Desktop' }) as HTMLButtonElement;
-    await waitFor(() => expect(followDesktop.disabled).toBe(false));
-    fireEvent.click(followDesktop);
-    expect(invoke).toHaveBeenCalledWith('codex-workspace:follow-desktop', undefined);
-    await waitFor(() => expect(followDesktop.disabled).toBe(false));
+    const account = getByRole('link', { name: 'account@example.test' }) as HTMLButtonElement;
+    await waitFor(() => expect(account.disabled).toBe(false));
+    fireEvent.click(account);
+    expect(invoke).toHaveBeenCalledWith('codex-workspace:sign-in', undefined);
+    await waitFor(() => expect(account.disabled).toBe(false));
+  });
+
+  it('keeps Sign in available without authentication and hides an unknown or single workspace', () => {
+    const store = createStore();
+    store.set(codexUsageAtom, { limits: [], limitsAvailable: false, lastUpdated: Date.now() });
+    const view = render(<Provider store={store}><CodexUsagePopover anchorRef={noopRef()} onClose={() => {}} onRefresh={async () => {}} /></Provider>);
+    view.getByRole('link', { name: 'Sign in' });
+    expect(view.queryByRole('combobox')).toBeNull();
+    React.act(() => store.set(codexWorkspaceAtom, {
+      independent: false, authenticated: true, email: null, canSwitch: false,
+      selectedId: 'only', choices: [{ id: 'only', name: 'Personal' }], signingIn: false,
+    }));
+    view.getByRole('link', { name: 'ChatGPT Desktop' });
+    expect(view.queryByRole('combobox')).toBeNull();
+    React.act(() => store.set(codexWorkspaceAtom, {
+      independent: false, authenticated: true, email: 'desktop@example.test', canSwitch: false,
+      selectedId: 'only', choices: [{ id: 'only', name: 'Personal' }, { id: 'team', name: 'Team' }], signingIn: false,
+    }));
+    expect((view.getByRole('combobox') as HTMLSelectElement).disabled).toBe(true);
+    view.getByRole('link', { name: 'desktop@example.test' });
   });
 
   it('GeminiUsagePopover Disable adds gemini-usage to hiddenGutterItemsAtom', () => {

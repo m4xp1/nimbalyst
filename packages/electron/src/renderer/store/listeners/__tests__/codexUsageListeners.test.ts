@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({ set: vi.fn() }));
-vi.mock('../../index', () => ({ store: { set: f.set } }));
+vi.mock('../../index', () => ({ store: { set: f.set, get: () => 0 } }));
 import { initCodexUsageListeners, refreshCodexUsage } from '../codexUsageListeners';
 afterEach(() => { vi.unstubAllGlobals(); f.set.mockClear(); });
 it('does not overwrite a new account broadcast with an older startup IPC reply', async () => {

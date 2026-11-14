@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({
   spawn: vi.fn(), clients: [] as any[], scope: 'work' as string | null, percent: 90, fail: false,
   subject: 'same-user' as unknown, selection: null as string | null, credentials: vi.fn(),
+  notifications: [] as Array<(method: string, params: unknown) => void>,
+  start: vi.fn(), browserSwitch: false,
 }));
 vi.mock('node:child_process', () => ({ spawn: f.spawn }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: f.credentials }));
@@ -18,12 +20,15 @@ vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', (
   request = vi.fn(async (method: string, params?: { accountId?: string }) => {
     if (method === 'initialize') return {};
     if (method === 'account/read') return { account: { type: 'chatgpt', email: 'same@example.test', planType: 'pro' }, requiresOpenaiAuth: true };
+    if (method === 'account/login/start') return f.start();
+    if (method === 'account/login/cancel') return {};
+    if (method === 'accountSession/switch' && f.browserSwitch) return { login_id: 'sso-login', auth_url: 'https://auth.example.test/sso' };
     if (method === 'accountSession/switch') f.scope = params?.accountId ?? null;
     if (method === 'accountSession/list' || method === 'accountSession/switch') {
       return {
         activeSessionId: 'login',
         sessions: f.scope ? [{
-          sessionId: 'login', userId: f.subject, isActive: true, selectedWorkspaceAccountId: f.scope,
+          sessionId: 'login', email: 'same@example.test', userId: f.subject, isActive: true, selectedWorkspaceAccountId: f.scope,
           workspaces: [{ accountId: 'personal', name: 'Personal' }, { accountId: 'work', name: 'GPT' }],
         }] : [],
       };
@@ -31,18 +36,86 @@ vi.mock('@nimbalyst/runtime/ai/server/protocols/codexAppServer/jsonRpcClient', (
     if (method === 'account/rateLimits/read') { if (f.fail) throw new Error('synthetic quota failure'); return { accountId: f.scope, rateLimits: { primary: { usedPercent: f.percent } } }; }
     throw new Error('Unexpected RPC: ' + method);
   });
-  notify = vi.fn(); close = vi.fn(); onNotification = vi.fn(() => () => {});
+  notify = vi.fn(); close = vi.fn(); onNotification = vi.fn((callback) => { f.notifications.push(callback); return () => {}; });
   constructor() { f.clients.push(this); }
 } }));
 import { codexAuthService as service } from '../CodexAuthService';
 beforeEach(() => {
   vi.stubEnv('NIMBALYST_ALLOW_CODEX_ACCESS', '1'); f.scope = 'work'; f.fail = false; f.subject = 'same-user'; f.clients.length = 0;
   f.selection = null;
+  f.notifications.length = 0; f.browserSwitch = false;
+  f.start.mockReset().mockResolvedValue({ type: 'chatgpt', loginId: 'browser-login', authUrl: 'https://auth.example.test/login' });
   f.spawn.mockClear();
   f.credentials.mockReset();
   f.spawn.mockImplementation(() => ({ killed: false, kill: vi.fn(), stdin: { end: vi.fn() }, stderr: { setEncoding: vi.fn(), on: vi.fn() }, on: vi.fn() }));
 });
 afterEach(() => { service.shutdown(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+it('shows the current Desktop account and known workspace metadata without changing its authorization', async () => {
+  const status = await service.getWorkspaceStatus(true);
+  expect(status).toMatchObject({
+    independent: false, authenticated: true, email: 'same@example.test',
+    selectedId: 'work', canSwitch: false,
+    choices: [{ id: 'personal', name: 'Personal' }, { id: 'work', name: 'GPT' }],
+  });
+  expect(f.clients.flatMap(client => client.request.mock.calls).some(([method]) => /login|logout|switch/.test(method))).toBe(false);
+});
+
+it('supports the native SSO switch response instead of treating it as an empty session list', async () => {
+  f.selection = 'work';
+  f.browserSwitch = true;
+  await expect(service.selectWorkspace('personal')).resolves.toMatchObject({
+    type: 'chatgpt', loginId: 'sso-login', authUrl: 'https://auth.example.test/sso',
+  });
+  expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: true });
+});
+
+it('accepts a completion notification that arrives before login/start resolves', async () => {
+  f.start.mockImplementation(async () => {
+    for (const notify of f.notifications) notify('account/login/completed', { loginId: 'browser-login', success: true });
+    return { type: 'chatgpt', loginId: 'browser-login', authUrl: 'https://auth.example.test/login' };
+  });
+  await service.signInIndependently();
+  await vi.waitFor(async () => expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: false, selectedId: 'work' }));
+  await expect(service.signInIndependently()).resolves.toMatchObject({ loginId: 'browser-login' });
+});
+
+it('restarts pending sign-in and ignores the superseded completion', async () => {
+  await service.signInIndependently();
+  f.start.mockResolvedValue({ type: 'chatgpt', loginId: 'second-login', authUrl: 'https://auth.example.test/second' });
+  await service.signInIndependently();
+  expect(f.clients[0].request).toHaveBeenCalledWith('account/login/cancel', { loginId: 'browser-login' }, 10_000);
+  for (const notify of f.notifications) notify('account/login/completed', { loginId: 'browser-login', success: true });
+  await Promise.resolve();
+  expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: true });
+  for (const notify of f.notifications) notify('account/login/completed', { loginId: 'second-login', success: true });
+  await vi.waitFor(async () => expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: false, email: 'same@example.test' }));
+});
+
+it('releases sign-in state after rejection and permits another browser attempt', async () => {
+  await service.signInIndependently();
+  for (const notify of f.notifications) notify('account/login/completed', { loginId: 'browser-login', success: false, error: 'synthetic rejection' });
+  await vi.waitFor(async () => expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: false, error: expect.stringContaining('did not complete') }));
+  await service.signInIndependently();
+  expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: true, error: undefined });
+});
+
+it('clears a pending browser attempt when its owned process exits', async () => {
+  await service.signInIndependently();
+  const child = f.spawn.mock.results[0].value;
+  for (const [event, callback] of child.on.mock.calls) if (event === 'exit') callback(1);
+  expect(await service.getWorkspaceStatus()).toMatchObject({ signingIn: false, error: expect.stringContaining('interrupted') });
+  await service.signInIndependently();
+  expect(f.spawn).toHaveBeenCalledTimes(2);
+});
+
+it('shares cached workspace reads and rate-limits metadata refreshes', async () => {
+  await Promise.all([service.getWorkspaceStatus(true), service.getWorkspaceStatus(true)]);
+  expect(f.spawn).toHaveBeenCalledTimes(1);
+  await service.getWorkspaceStatus();
+  await service.getWorkspaceStatus(true);
+  expect(f.spawn).toHaveBeenCalledTimes(1);
+  expect(f.clients[0].request.mock.calls.filter(([method]: [string]) => method === 'accountSession/list')).toHaveLength(1);
+});
 it('loads current native scope in a separate reader and leaves the existing auth process running', async () => {
   await service.getStatus(); const authChild = f.spawn.mock.results[0].value;
   const identified = vi.fn();
@@ -98,7 +171,7 @@ it('switches and reads quota in the app-owned home, invalidating the old turn au
   expect(f.selection).toBe('personal');
   expect(() => previous.assertCurrent()).toThrow('workspace changed');
   expect(f.clients[0].request).toHaveBeenCalledWith('accountSession/switch', {
-    sessionId: 'login', accountId: 'personal', allowBrowserLogin: false,
+    sessionId: 'login', accountId: 'personal', allowBrowserLogin: true,
   });
   await expect(service.getRateLimits()).resolves.toMatchObject({ accountScope: expect.stringContaining('personal') });
   expect(f.spawn.mock.calls.map(([, , options]) => options.env.CODEX_HOME)).toEqual([
