@@ -1161,6 +1161,19 @@ describe('unread: selected session in an unfocused window', () => {
     expect(store.get(globalSessionActivityAtom).get(WS)?.unread.has(sid) ?? false).toBe(true);
     expect(readSyncCalls(sid)).toHaveLength(0);
   });
+
+  it('clears an existing unread dot when new output is actually being viewed', () => {
+    const sid = uniqueSessionId('viewed-unread');
+    seedRegistry([{ id: sid }]);
+    selectSession(sid);
+    store.set(windowFocusedAtom, false);
+    handlers.get('ai:message-logged')!({ sessionId: sid, direction: 'output', workspacePath: WS });
+    expect(store.get(sessionUnreadAtom(sid))).toBe(true);
+    store.set(windowFocusedAtom, true);
+    handlers.get('ai:message-logged')!({ sessionId: sid, direction: 'output', workspacePath: WS });
+    expect(store.get(sessionUnreadAtom(sid))).toBe(false);
+    expect(store.get(globalSessionActivityAtom).get(WS)?.unread.has(sid) ?? false).toBe(false);
+  });
 });
 
 // With the multi-project rail one focused window hosts several projects, and

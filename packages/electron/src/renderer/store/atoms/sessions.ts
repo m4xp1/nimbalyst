@@ -2140,8 +2140,6 @@ export const anyPendingInteractivePromptAtom = atom((get) => {
  * Persists to database metadata for cross-device sync.
  */
 export const markSessionReadAtom = atom(null, (get, set, sessionId: string) => {
-  const wasUnread = get(sessionUnreadAtom(sessionId));
-
   const now = Date.now();
   set(sessionUnreadAtom(sessionId), false);
   set(sessionLastReadAtom(sessionId), now);
@@ -2296,7 +2294,9 @@ export const refreshSessionListAtom = atom(
           registry.set(s.id, sessionListMetadata(s, workspacePath));
 
           // Initialize unread state from database metadata (for cross-device sync)
-          if (s.hasUnread) {
+          // A list reply can predate a local read or its debounced persistence.
+          // Only newer activity may restore the dot cleared in the open chat.
+          if (s.hasUnread && s.updatedAt > get(sessionLastReadAtom(s.id))) {
             set(sessionUnreadAtom(s.id), true);
           }
           // Rehydrate the pending-interactive-prompt indicator from the

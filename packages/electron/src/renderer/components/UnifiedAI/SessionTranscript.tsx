@@ -64,6 +64,8 @@ import { expandSessionMentions } from './sessionMentions';
 import { diffTreeGroupByDirectoryAtom, setDiffTreeGroupByDirectoryAtom } from '../../store/atoms/projectState';
 import { openSettingsCommandAtom } from '../../store/atoms/settingsNavigation';
 import {
+  markSessionReadAtom,
+  sessionUnreadAtom,
   sessionDraftInputAtom,
   sessionDraftAttachmentsAtom,
   sessionStoreAtom,
@@ -2381,6 +2383,12 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   const activeTipId = useAtomValue(activeTipIdAtom);
   const hideEmptyHelp = activeTipId !== null && messages.length === 0;
 
+  // Interaction with this visible transcript is stronger evidence of reading
+  // than restoring a project or merely focusing its window. Shared by every layout.
+  const markViewedSessionRead = useCallback(() => {
+    if (store.get(sessionUnreadAtom(sessionId))) store.set(markSessionReadAtom, sessionId);
+  }, [sessionId]);
+
   // Scroll-to-teammate: when the atom fires for this session, find the spawn
   // message and scroll the transcript to it.
   const scrollToTeammate = useAtomValue(scrollToTeammateAtom);
@@ -2650,6 +2658,10 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     <div
       style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minHeight: 0 }}
       data-session-id={sessionId}
+      onPointerDownCapture={markViewedSessionRead}
+      onFocusCapture={markViewedSessionRead}
+      onWheelCapture={markViewedSessionRead}
+      onTouchStartCapture={markViewedSessionRead}
     >
       {/* NIM-852: install notice at the top of the transcript when the genuine
           `claude` CLI isn't installed. Shown in every layout (outside the

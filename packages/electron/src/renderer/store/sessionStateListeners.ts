@@ -673,6 +673,8 @@ export function initSessionStateListeners(): () => void {
         // devices (iOS) know the user is reading these messages in real time.
         // Without this, iOS would show the session as unread because it sees
         // lastMessageAt increasing but lastReadAt staying stale.
+        store.set(sessionUnreadAtom(sessionId), false);
+        store.set(sessionLastReadAtom(sessionId), Date.now());
         store.set(clearSessionUnreadAtom, { sessionId, workspacePath });
         const existingReadTimer = readStateSyncTimers.get(sessionId);
         if (existingReadTimer) {
@@ -1031,6 +1033,7 @@ export function initSessionStateListeners(): () => void {
     if (lastReadAt >= lastMessageAt) {
       store.set(sessionUnreadAtom(sessionId), false);
       store.set(sessionLastReadAtom(sessionId), lastReadAt);
+      store.set(clearSessionUnreadAtom, { sessionId });
     }
   };
 
