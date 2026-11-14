@@ -9,7 +9,7 @@ import {
 } from '@nimbalyst/runtime/ai/chatAnnotations';
 import type { FloatingTextToolbarAction } from '@nimbalyst/runtime/editor/plugins/FloatingTextFormatToolbarPlugin/types';
 import {
-  AnnotationSessionContext, chatAnnotationDraftAtom, editDraftAnnotationAtom, flushChatAnnotationDraft,
+  AnnotationSessionContext, chatAnnotationDraftAtom, flushChatAnnotationDraft,
   openChatAnnotationAtom, revealChatAnnotationAtom, updateChatAnnotationDraft,
 } from './chatAnnotationDraft';
 import { clearTextSelection, getTextSelectionForFile, selectionPathsMatch } from './TextSelectionIndicator';
@@ -291,7 +291,9 @@ export function DraftAnnotationList({ sessionId, navigate }: {
   navigate: (annotation: ChatAnnotation) => void;
 }) {
   const [draft] = useAtom(chatAnnotationDraftAtom(sessionId));
-  const [open, setOpen] = useAtom(editDraftAnnotationAtom(sessionId));
+  // Only the draft content is shared. A hidden session view must not dismiss
+  // another view's editor from its document-level outside-click listener.
+  const [open, setOpen] = useState<string | null>(null);
   const [, setReveal] = useAtom(revealChatAnnotationAtom(sessionId));
   const editorRef = useRef<HTMLDivElement>(null);
   const finish = useCallback(() => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React, { useContext } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Provider, type Atom, type PrimitiveAtom } from 'jotai';
 import type { LexicalEditor } from 'lexical';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -84,6 +84,35 @@ afterEach(async () => {
 });
 
 describe('chat annotation draft persistence', () => {
+  it('finds a file marker from the separate draft root and reopens its editor', async () => {
+    const click = (button: HTMLElement) => {
+      fireEvent.pointerDown(button);
+      act(() => button.focus());
+      fireEvent.pointerUp(button);
+      fireEvent.click(button);
+    };
+    const sessionId = 'annotation-find-separate-root';
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'Before the selected words after.';
+    paragraph.scrollIntoView = vi.fn();
+    const rect = new DOMRect(20, 200, 400, 25);
+    vi.spyOn(paragraph, 'getClientRects').mockReturnValue(Object.assign([rect], { item: () => rect }));
+    document.body.append(paragraph);
+    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => { listener(paragraph); return () => {}; } } as LexicalEditor;
+    hydrate(sessionId, [makeAnnotation('Find this note')]);
+    try {
+      render(<Provider store={store}><AnnotationSessionProvider value={sessionId}><FileAnnotationHarness editor={editor} filePath="/workspace/notes.md" /></AnnotationSessionProvider></Provider>);
+      const visibleDraft = render(<Provider store={store}><DraftAnnotationList sessionId={sessionId} navigate={() => {}} /></Provider>);
+      // Agent and Files are kept mounted; the hidden view must not handle the visible editor's clicks.
+      render(<Provider store={store}><div style={{ display: 'none' }}><DraftAnnotationList sessionId={sessionId} navigate={() => {}} /></div></Provider>);
+      const ui = within(visibleDraft.container);
+      click(ui.getByText('1 annotation'));
+      click(ui.getByRole('button', { name: '1. the selected words' }));
+      click(ui.getByRole('button', { name: 'Find annotation source' }));
+      await waitFor(() => expect(paragraph.scrollIntoView).toHaveBeenCalled());
+      expect((await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment', exact: true })).value).toBe('Find this note');
+    } finally { paragraph.remove(); }
+  });
   it('clears annotations when the user message is persisted while the agent is still running', async () => {
     const sessionId = 'annotation-accepted-message';
     const sent = makeAnnotation('Sent note');

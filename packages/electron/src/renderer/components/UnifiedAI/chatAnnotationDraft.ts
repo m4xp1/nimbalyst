@@ -39,7 +39,6 @@ export const chatAnnotationDraftAtom = atomFamily((sessionId: string) => atom(ge
   return pending ? mergeDraft(remote, pending) : remote;
 }));
 export const openChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
-export const editDraftAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
 export const revealChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
 
 const saves = new Map<string, Promise<void>>();
