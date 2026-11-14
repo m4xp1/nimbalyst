@@ -1556,6 +1556,28 @@ describe('OpenAICodexProvider', () => {
     expect(cleanupSession).toHaveBeenCalledWith(turn1Session);
   });
 
+  it.each([false, true])('forwards native quota notifications only for subscription turns (API key: %s)', async directApi => {
+    OpenAICodexProvider.setWorkspaceAuthResolver(() => ({ revision: 7, assertCurrent: () => {} }));
+    const protocol = {
+      platform: 'codex-app-server',
+      createSession: vi.fn(async () => ({ id: 'usage-thread', platform: 'codex-app-server', raw: {} })),
+      sendMessage: () => createAsyncEventStream([
+        { type: 'raw_event', metadata: { transport: 'app-server', method: 'account/rateLimits/updated', params: { rateLimits: {} } } },
+        { type: 'complete', content: 'done', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+      ]),
+      cleanupSession: vi.fn(),
+    } as any;
+    const apiKey = directApi ? 'synthetic-api-key' : '';
+    const provider = new OpenAICodexProvider({ apiKey }, { protocol });
+    await provider.initialize({ apiKey, model: 'openai-codex:gpt-6.1-sol' });
+    const update = vi.fn();
+    provider.on('codex:rateLimitsUpdated', update);
+    for await (const _ of provider.sendMessage('test', undefined, 'usage-session', [], process.cwd())) { /* drain */ }
+    expect(update).toHaveBeenCalledTimes(directApi ? 0 : 1);
+    if (!directApi) expect(update).toHaveBeenCalledWith({ workspaceRevision: 7 });
+    provider.cleanupSession('usage-session');
+  });
+
   it.each(['reviewer', 'roots', 'sandbox', 'workspace'])('reattaches a live Codex thread when %s changes', async change => {
     let classifierEnabled = false;
     let roots = ['/parent'];

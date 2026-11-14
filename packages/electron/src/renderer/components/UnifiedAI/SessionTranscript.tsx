@@ -47,7 +47,6 @@ import { customEditorRegistry } from '../CustomEditors/registry';
 import { useDialog } from '../../contexts/DialogContext';
 import { FileGutter } from '../AIChat/FileGutter';
 import { recordClaudeActivity } from '../../store/listeners/claudeUsageListeners';
-import { recordCodexActivity } from '../../store/listeners/codexUsageListeners';
 import { PendingReviewBanner } from '../AIChat/PendingReviewBanner';
 import { WakeupBanner } from '../AIChat/WakeupBanner';
 import { McpLockdownBanner } from '../AIChat/McpLockdownBanner';
@@ -1455,8 +1454,6 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       // Record activity for usage tracking (wake up polling if sleeping)
       if (provider?.startsWith('claude')) {
         recordClaudeActivity();
-      } else if (provider === 'openai-codex') {
-        recordCodexActivity();
       }
     } catch (error) {
       console.error('[SessionTranscript] Failed to send message:', error);

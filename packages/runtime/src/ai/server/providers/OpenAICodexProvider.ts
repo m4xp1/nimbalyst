@@ -1394,6 +1394,9 @@ export class OpenAICodexProvider extends BaseAgentProvider {
           && (event as { metadata?: { transport?: string } }).metadata?.transport === 'app-server';
 
         if (isAppServerEvent) {
+          if (!this.config?.apiKey && event.metadata?.method === 'account/rateLimits/updated') {
+            this.emit('codex:rateLimitsUpdated', { workspaceRevision: workspaceAuth?.revision });
+          }
           // NIM-2962: surface MCP server health instead of discarding it.
           this.handleAppServerMcpStatus(event, sessionId);
           try {

@@ -91,15 +91,15 @@ interface CodexRateLimits {
   } | null;
 }
 
-const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes before going to sleep
+const POLL_INTERVAL_MS = 5 * 60 * 1000;
+const EVENT_REFRESH_MIN_MS = 15_000;
 
 class CodexUsageServiceImpl {
   private cachedUsage: CodexUsageData | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
-  private lastActivityTime: number = 0;
   private isPolling: boolean = false;
-  private isSleeping: boolean = true;
+  private activeTurns = new Set<symbol>();
+  private lastEventRefresh = -Infinity;
   private unsubscribeRateLimits: (() => void) | null = null;
   private unsubscribeAccount: (() => void) | null = null;
   private refreshing: Promise<CodexUsageData> | null = null;
@@ -111,9 +111,7 @@ class CodexUsageServiceImpl {
   initialize(): void {
     if (!codexAccessAllowed()) return;
     this.unsubscribeRateLimits ??= codexAuthService.onRateLimitsUpdated(() => {
-      void this.refresh().catch((error) => {
-        logger.main.warn('[CodexUsageService] Failed to refresh after rate-limit update:', error);
-      });
+      this.refreshFromEvent();
     });
     this.unsubscribeAccount ??= codexAuthService.onAccountUpdated(() => {
       this.generation++;
@@ -126,17 +124,35 @@ class CodexUsageServiceImpl {
 
   async recordActivity(): Promise<void> {
     if (!codexAccessAllowed()) return;
-    this.lastActivityTime = Date.now();
-
-    if (this.isSleeping) {
-      // logger.main.info('[CodexUsageService] Waking up due to activity');
-      this.isSleeping = false;
-      this.startPolling();
-    }
-
-    // ai:sendMessage resolves after the turn finishes, so refresh the canonical
-    // account snapshot now rather than waiting for the background poll.
     await this.refresh();
+  }
+
+  /** Owned by the backend turn, including queued, hidden, and resumed sends. */
+  beginTurn(): () => void {
+    if (!codexAccessAllowed()) return () => {};
+    const turn = Symbol('codex-usage-turn');
+    this.activeTurns.add(turn);
+    this.startPolling();
+    if (!this.cachedUsage?.lastUpdated || Date.now() - this.cachedUsage.lastUpdated >= POLL_INTERVAL_MS) {
+      void this.refresh();
+    }
+    return () => {
+      if (!this.activeTurns.delete(turn)) return;
+      if (!this.activeTurns.size) this.stopPolling();
+      void this.refresh();
+    };
+  }
+
+  nativeLimitsUpdated(workspaceRevision: number | undefined): void {
+    if (workspaceRevision === undefined || workspaceRevision !== codexAuthService.workspaceAuth().revision) return;
+    this.refreshFromEvent();
+  }
+
+  private refreshFromEvent(): void {
+    if (Date.now() - this.lastEventRefresh < EVENT_REFRESH_MIN_MS) return;
+    this.lastEventRefresh = Date.now();
+    // Re-read the canonical current account; never publish an unverified child snapshot.
+    void this.refresh();
   }
 
   getCachedUsage(): CodexUsageData | null {
@@ -213,7 +229,8 @@ class CodexUsageServiceImpl {
     this.refreshing = null;
     this.accountScope = undefined;
     this.cachedUsage = null;
-    this.isSleeping = true;
+    this.activeTurns.clear();
+    this.lastEventRefresh = -Infinity;
     logger.main.info('[CodexUsageService] Stopped');
   }
 
@@ -225,7 +242,7 @@ class CodexUsageServiceImpl {
       this.pollTick();
     }, POLL_INTERVAL_MS);
 
-    // logger.main.info('[CodexUsageService] Started polling (every 5 minutes)');
+    this.pollTimer.unref?.();
   }
 
   private stopPolling(): void {
@@ -237,15 +254,11 @@ class CodexUsageServiceImpl {
   }
 
   private async pollTick(): Promise<void> {
-    const timeSinceActivity = Date.now() - this.lastActivityTime;
-    if (timeSinceActivity > IDLE_TIMEOUT_MS) {
-      logger.main.info('[CodexUsageService] Going to sleep due to inactivity');
-      this.isSleeping = true;
+    if (!this.activeTurns.size) {
       this.stopPolling();
       return;
     }
-
-    await this.refresh();
+    if (!this.cachedUsage?.lastUpdated || Date.now() - this.cachedUsage.lastUpdated >= POLL_INTERVAL_MS) await this.refresh();
   }
 
   private broadcastUpdate(): void {

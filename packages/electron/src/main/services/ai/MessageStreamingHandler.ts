@@ -82,6 +82,7 @@ function resolveOpenCodeAgentRole(session: { provider?: string; metadata?: unkno
 
 import { extractFilePath } from './tools/extractFilePath';
 import { geminiUsageService } from '../GeminiUsageService';
+import { codexUsageService } from '../CodexUsageService';
 import { SoundNotificationService } from '../SoundNotificationService';
 import { notificationService } from '../NotificationService';
 import { composeNotificationTitle } from '../../../shared/notificationTitle';
@@ -1282,6 +1283,10 @@ export class MessageStreamingHandler {
 
     let inboxTurn: ReturnType<typeof sessionInbox.current>;
     let questionTurn: ReturnType<typeof codexQuestionTurns.current>;
+    let finishCodexUsage = () => {};
+    this.installListener(provider, 'codex:rateLimitsUpdated', (data: { workspaceRevision?: number }) => {
+      codexUsageService.nativeLimitsUpdated(data.workspaceRevision);
+    });
     const setup = beginTurnSetup(session.id, { submissionId: (documentContext as any)?.submissionId });
     try {
       inboxTurn = ['claude-code', 'openai-codex'].includes(session.provider)
@@ -1520,6 +1525,7 @@ export class MessageStreamingHandler {
       setup.finish();
       // Awaited so it can never cancel the resume this same turn schedules on its own limit error.
       await cancelUsageLimitResume(session.id).catch(error => logger.main.error('[AIService] Failed to cancel usage-limit resume:', error));
+      if (session.provider === 'openai-codex') finishCodexUsage = codexUsageService.beginTurn();
       for await (const chunk of provider.sendMessage(messageToSend, contextWithSession, session.id, sessionMessages, effectiveWorkspacePath, attachments, toolLoopTools, toolLoopSystemPrompt)) {
         if (!chunk) continue;
         chunkCount++;
@@ -2971,6 +2977,7 @@ export class MessageStreamingHandler {
 
       throw error;
     } finally {
+      finishCodexUsage();
       const inboxRetirement = sessionInbox.end(inboxTurn, false).catch(err => logger.main.error('[AIService] Inbox retirement failed:', err));
       const questionRetirement = codexQuestionTurns.end(questionTurn);
       // First, and outside anything that can throw: a session that keeps
