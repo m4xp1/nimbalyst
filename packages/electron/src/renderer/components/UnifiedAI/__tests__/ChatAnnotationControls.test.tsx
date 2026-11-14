@@ -35,9 +35,10 @@ vi.mock('../../../store/atoms/sessions', async () => {
   };
 });
 
+const { positionReference } = vi.hoisted(() => ({ positionReference: vi.fn() }));
 vi.mock('@floating-ui/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@floating-ui/react')>();
-  const refs = { setFloating: () => {}, setPositionReference: () => {}, floating: { current: null } };
+  const refs = { setFloating: () => {}, setPositionReference: positionReference, floating: { current: null } };
   return {
     ...actual,
     FloatingPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -72,6 +73,7 @@ function FileAnnotationHarness({ editor, filePath }: { editor: LexicalEditor; fi
 
 const invoke = vi.fn();
 beforeEach(() => {
+  positionReference.mockClear();
   invoke.mockReset().mockResolvedValue({ success: true });
   vi.stubGlobal('electronAPI', { invoke });
 });
@@ -215,6 +217,36 @@ describe('chat annotation draft persistence', () => {
 });
 
 describe('adding and editing chat annotations', () => {
+  it.each([false, true])('anchors a multiline transcript selection at its focus and adds the exact quote (backward=%s)', backward => {
+    vi.stubGlobal('CSS', { escape: (value: string) => value });
+    const sessionId = `annotation-focus-${backward}`;
+    const root = document.createElement('section');
+    const paragraph = document.createElement('p');
+    paragraph.dataset.annotationMessageId = 'multiline-message';
+    paragraph.textContent = 'First line\nSecond line';
+    root.append(paragraph); document.body.append(root);
+    const savedRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect');
+    const savedRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+    const first = new DOMRect(10, 20, 200, 20), last = new DOMRect(10, 50, 80, 20);
+    Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: () => [first, last] });
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: function (this: Range) {
+      return this.collapsed ? new DOMRect(this.startOffset === 0 ? 10 : 90, this.startOffset === 0 ? 20 : 50, 0, 20) : new DOMRect(10, 20, 200, 50);
+    } });
+    try {
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /></Provider>);
+      window.getSelection()!.setBaseAndExtent(paragraph.firstChild!, backward ? paragraph.textContent.length : 0, paragraph.firstChild!, backward ? 0 : paragraph.textContent.length);
+      fireEvent(document, new Event('selectionchange'));
+      const reference = positionReference.mock.calls.at(-1)![0];
+      const rect = reference.getBoundingClientRect();
+      expect({ x: rect.x, y: rect.y, width: rect.width }).toEqual({ x: backward ? 10 : 90, y: backward ? 20 : 50, width: 0 });
+      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([expect.objectContaining({ quote: 'First line\nSecond line', source: { type: 'message', sessionId, messageId: 'multiline-message' } })]);
+    } finally {
+      if (savedRect) Object.defineProperty(Range.prototype, 'getBoundingClientRect', savedRect); else delete (Range.prototype as any).getBoundingClientRect;
+      if (savedRects) Object.defineProperty(Range.prototype, 'getClientRects', savedRects); else delete (Range.prototype as any).getClientRects;
+      root.remove();
+    }
+  });
   it('receives the active session across a separate editor root and switches without remounting', () => {
     let target: Atom<string | null> | null = null;
     function CaptureScope() { target = useContext(AnnotationSessionContext); return null; }

@@ -254,10 +254,16 @@ export function TranscriptAnnotationControls({ sessionId, root }: { sessionId: s
     if (!target) return;
     const selection = window.getSelection();
     const focusAtStart = selection?.focusNode === target.range.startContainer && selection?.focusOffset === target.range.startOffset;
+    const caret = target.range.cloneRange();
+    caret.collapse(focusAtStart);
     refs.setPositionReference({
       getBoundingClientRect: () => {
+        const focusRect = caret.getBoundingClientRect();
+        if (focusRect.height || focusRect.width) return focusRect;
         const rects = target.range.getClientRects();
-        return rects.length ? rects[focusAtStart ? 0 : rects.length - 1] : target.range.getBoundingClientRect();
+        if (!rects.length) return focusRect;
+        const line = rects[focusAtStart ? 0 : rects.length - 1];
+        return new DOMRect(focusAtStart ? line.left : line.right, line.top, 0, line.height);
       },
       contextElement: root,
     });

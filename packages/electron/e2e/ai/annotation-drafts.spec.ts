@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ACTIVE_EDITOR_SELECTOR, launchElectronApp, waitForAppReady } from '../helpers';
 import { openFileFromTree, switchToAgentMode, switchToFilesMode, PLAYWRIGHT_TEST_SELECTORS } from '../utils/testHelpers';
-import { createTestSession } from '../utils/interactivePromptTestHelpers';
+import { createTestSession, insertMessage } from '../utils/interactivePromptTestHelpers';
 
 for (const backend of ['sqlite', 'pglite']) test(`annotation drafts, heading links and live context (${backend})`, async () => {
   test.setTimeout(150_000);
@@ -38,6 +38,11 @@ for (const backend of ['sqlite', 'pglite']) test(`annotation drafts, heading lin
       ipcMain.handle('ai:steerCurrentTurn', (_event, request) => { steering.push(request); return { success: true, turnId: 'synthetic-turn' }; });
     });
     const sessionId = await createTestSession(page, workspace, { title: 'Annotation fixture', provider: 'openai-codex', model: 'openai-codex:gpt-6-sol' });
+    const transcriptQuote = 'A long synthetic transcript selection spans several visible lines and remains attached to this exact message when selected either forward or backward.';
+    await insertMessage(page, sessionId, 'input', JSON.stringify({ prompt: 'A synthetic prior turn' }), { source: 'openai-codex' });
+    await insertMessage(page, sessionId, 'output', JSON.stringify({ method: 'item/completed', params: {
+      threadId: 'fixture-thread', turnId: 'fixture-prior-turn', item: { id: 'fixture-final', type: 'agentMessage', phase: 'final_answer', text: transcriptQuote },
+    } }), { source: 'openai-codex', metadata: { transport: 'app-server' } });
     await page.evaluate(({ sessionId, workspace }) => window.dispatchEvent(new CustomEvent('open-ai-session', { detail: { sessionId, workspacePath: workspace } })), { sessionId, workspace });
     await expect(page.locator(`[data-session-id="${sessionId}"]`).filter({ visible: true }).first()).toBeVisible();
     await switchToFilesMode(page);
@@ -52,6 +57,34 @@ for (const backend of ['sqlite', 'pglite']) test(`annotation drafts, heading lin
     await sidebar.getByTitle('Session History', { exact: true }).click();
     await page.getByText('Annotation fixture', { exact: true }).filter({ visible: true }).click();
     await expect(sidebar).toHaveAttribute('data-session-id', sessionId);
+    const transcriptText = sidebar.getByText(transcriptQuote, { exact: true });
+    await expect(transcriptText).toBeVisible();
+    for (const backward of [false, true]) {
+      const caret = await transcriptText.evaluate((element, backward) => {
+        const node = element.firstChild!;
+        const size = node.textContent!.length;
+        const selection = window.getSelection()!;
+        selection.setBaseAndExtent(node, backward ? size : 0, node, backward ? 0 : size);
+        const range = selection.getRangeAt(0).cloneRange(); range.collapse(backward);
+        return range.getBoundingClientRect().toJSON();
+      }, backward);
+      const add = page.getByRole('button', { name: 'Add to chat', exact: true });
+      await expect(add).toBeVisible();
+      const button = await add.boundingBox();
+      expect(button!.x).toBeLessThanOrEqual(caret.x + 8);
+      expect(button!.x + button!.width).toBeGreaterThanOrEqual(caret.x - 8);
+      const background = await add.evaluate(element => getComputedStyle(element).backgroundColor);
+      expect(background).not.toBe('transparent'); expect(background).not.toBe('rgba(0, 0, 0, 0)');
+      await add.click();
+      const note = page.getByRole('textbox', { name: 'Annotation comment', exact: true });
+      await expect(note).toBeVisible(); await note.fill(backward ? 'Backward quote' : 'Forward quote');
+      await note.press('Escape');
+      const list = sidebar.locator('.draft-annotation-list'); await list.locator('summary').click();
+      await list.getByRole('button', { name: `1. ${transcriptQuote}` }).click();
+      const edit = list.getByRole('textbox', { name: 'Annotation comment in draft' });
+      await expect(edit).toHaveValue(backward ? 'Backward quote' : 'Forward quote');
+      await edit.fill(''); await edit.press('Escape'); await expect(list).toHaveCount(0);
+    }
     const editor = page.locator(ACTIVE_EDITOR_SELECTOR);
     await editor.getByText('Selected synthetic text.', { exact: true }).click();
     await page.keyboard.press('End'); await page.keyboard.press('Shift+Home');
