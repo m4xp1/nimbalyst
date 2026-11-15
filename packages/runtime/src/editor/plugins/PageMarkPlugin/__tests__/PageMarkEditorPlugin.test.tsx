@@ -80,7 +80,8 @@ describe('PageMarkEditorPlugin', () => {
     });
 
     const markOpen = getPageMarkToolbarActions(editor).find((action) => action.id === 'mark-open')!;
-    await act(async () => markOpen.onSelect());
+    const toolbar = render(<button onClick={markOpen.onSelect}>{markOpen.label}</button>);
+    fireEvent.click(toolbar.getByRole('button', { name: markOpen.label }));
 
     await waitFor(() => {
       const kinds = editor.read(() => $getRoot().getAllTextNodes()

@@ -1,4 +1,6 @@
-// @vitest-environment node
+// @vitest-environment jsdom
+import { fireEvent, render } from '@testing-library/react';
+import { createElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CommentsConfig } from '../../../commenting/types';
@@ -20,7 +22,8 @@ describe('getCommentToolbarActions', () => {
       { id: 'comment', label: 'Add comment', icon: 'add_comment' },
     ]);
 
-    actions[0].onSelect();
+    const toolbar = render(createElement('button', { onClick: actions[0].onSelect }, actions[0].label));
+    fireEvent.click(toolbar.getByRole('button', { name: 'Add comment' }));
     expect(editor.dispatchCommand).toHaveBeenCalledWith(
       OPEN_COMMENT_COMPOSER_COMMAND,
       undefined,
