@@ -166,7 +166,8 @@ export interface AIInputProps {
  * - Send/Cancel buttons
  */
 // Constants for prompt box resize
-const MIN_PROMPT_HEIGHT = 36;
+// Reserve both 36px action rows and their 8px gap before a turn starts.
+const MIN_PROMPT_HEIGHT = 80;
 const MAX_PROMPT_HEIGHT = 600;
 const DEFAULT_MAX_PROMPT_HEIGHT = 200;
 
@@ -611,12 +612,12 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       const textarea = textareaRef.current;
       const rafId = requestAnimationFrame(() => {
         if (userSetHeight !== null) {
-          // User has manually set the height - use it directly
-          textarea.style.height = `${userSetHeight}px`;
+          // Older saved heights must still leave space for the active-turn actions.
+          textarea.style.height = `${Math.max(MIN_PROMPT_HEIGHT, userSetHeight)}px`;
         } else {
           // Auto-size based on content
           textarea.style.height = 'auto';
-          textarea.style.height = `${Math.min(textarea.scrollHeight, DEFAULT_MAX_PROMPT_HEIGHT)}px`;
+          textarea.style.height = `${Math.max(MIN_PROMPT_HEIGHT, Math.min(textarea.scrollHeight, DEFAULT_MAX_PROMPT_HEIGHT))}px`;
         }
       });
 
@@ -1597,7 +1598,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
           <textarea
             ref={textareaRef}
             data-testid={testId}
-            className={`ai-chat-input-field nim-scrollbar-hidden flex-1 min-h-9 py-2 px-3 bg-[var(--nim-bg)] border border-[var(--nim-border)] rounded-md ${enableSlashCommands ? 'text-transparent caret-[var(--nim-text)]' : 'text-[var(--nim-text)]'} text-[13px] font-[inherit] resize-none outline-none transition-colors duration-200 focus:border-[var(--nim-primary)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--nim-text-faint)]`}
+            className={`ai-chat-input-field nim-scrollbar-hidden flex-1 py-2 px-3 bg-[var(--nim-bg)] border border-[var(--nim-border)] rounded-md ${enableSlashCommands ? 'text-transparent caret-[var(--nim-text)]' : 'text-[var(--nim-text)]'} text-[13px] font-[inherit] resize-none outline-none transition-colors duration-200 focus:border-[var(--nim-primary)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--nim-text-faint)]`}
             value={value}
             onChange={(e) => {
               // textarea onChange only fires from real user input events
@@ -1629,10 +1630,10 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
             onBlur={() => setIsFocused(false)}
             placeholder={promptSuggestion && !value && !isLoading ? promptSuggestion : placeholder}
             disabled={disabled}
-            rows={1}
+            rows={2}
             style={{
               minHeight: `${MIN_PROMPT_HEIGHT}px`,
-              maxHeight: `${userSetHeight ?? DEFAULT_MAX_PROMPT_HEIGHT}px`,
+              maxHeight: `${Math.max(MIN_PROMPT_HEIGHT, userSetHeight ?? DEFAULT_MAX_PROMPT_HEIGHT)}px`,
             }}
           />
           {enableSlashCommands && (
