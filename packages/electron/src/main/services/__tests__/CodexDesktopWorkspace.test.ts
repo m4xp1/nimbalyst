@@ -3,10 +3,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({ files: new Map<string, string>(), write: vi.fn(), read: vi.fn() }));
 vi.mock('node:fs/promises', () => ({ readFile: f.read }));
 vi.mock('../../utils/privateFile', () => ({ writePrivateFile: f.write }));
-import { CodexDesktopWorkspace } from '../CodexDesktopWorkspace';
+import { CodexDesktopWorkspace, type DesktopLoginIdentity } from '../CodexDesktopWorkspace';
 const sourcePath = '/desktop/auth.json';
 const ownedPath = '/nimbalyst/auth.json';
-const user = { userId: 'owner', email: 'owner@example.test' };
+const user = { userId: 'owner' as DesktopLoginIdentity['userId'], email: 'owner@example.test' };
 const token = (account: string, subject = 'owner', seconds = 3600) => `x.${Buffer.from(JSON.stringify({
   exp: Math.floor(Date.now() / 1000) + seconds, email: 'owner@example.test',
   'https://api.openai.com/auth': { chatgpt_user_id: subject, chatgpt_account_id: account },
