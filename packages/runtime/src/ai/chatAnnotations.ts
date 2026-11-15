@@ -1,6 +1,8 @@
 export type ChatAnnotationSource =
   | { type: 'file'; filePath: string }
-  | { type: 'message'; sessionId: string; messageId: string };
+  | { type: 'message'; sessionId: string; messageId: string; endMessageId?: string;
+      /** Session-local replay order; runtime event IDs are reallocated on reload. */
+      messageSequence?: number; endMessageSequence?: number };
 
 export interface ChatAnnotation {
   id: string;
@@ -35,7 +37,10 @@ export function readChatAnnotations(value: unknown): ChatAnnotation[] {
     if (![id, quote, before, after, comment].every(field => typeof field === 'string')) return false;
     return source?.type === 'file'
       ? typeof source.filePath === 'string'
-      : source?.type === 'message' && typeof source.sessionId === 'string' && typeof source.messageId === 'string';
+      : source?.type === 'message' && typeof source.sessionId === 'string' && typeof source.messageId === 'string' &&
+        (source.endMessageId === undefined || typeof source.endMessageId === 'string') &&
+        [source.messageSequence, source.endMessageSequence].every(value => value === undefined ||
+          (Number.isSafeInteger(value) && value >= 0));
   });
 }
 

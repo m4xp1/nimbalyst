@@ -38,8 +38,23 @@ export const chatAnnotationDraftAtom = atomFamily((sessionId: string) => atom(ge
   const pending = get(pendingDraft(sessionId));
   return pending ? mergeDraft(remote, pending) : remote;
 }));
-export const openChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
+/** Ephemeral editor location belongs to the surface that received the click. */
+export interface ChatAnnotationEditorRequest {
+  id: string;
+  root: HTMLElement;
+  x: number;
+  y: number;
+}
+export const openChatAnnotationAtom = atomFamily((_sessionId: string) => atom<ChatAnnotationEditorRequest | null>(null));
 export const revealChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
+/** Transient transcript selection uses the same session context as annotations,
+ * without persisting a draft annotation until the user chooses Add annotation. */
+export const chatTextSelectionAtom = atomFamily((_sessionId: string) => atom<ChatAnnotation | null>(null));
+export const chatAnnotationContextAtom = atomFamily((sessionId: string) => atom(get => {
+  const draft = get(chatAnnotationDraftAtom(sessionId));
+  const selection = get(chatTextSelectionAtom(sessionId));
+  return selection ? [...draft, selection] : draft;
+}));
 
 const saves = new Map<string, Promise<void>>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -105,6 +120,8 @@ export async function flushAllChatAnnotationDrafts(): Promise<void> {
 
 export function consumeChatAnnotationDraft(sessionId: string, sent: readonly ChatAnnotation[]): Promise<void> {
   const snapshot = new Map(sent.map(annotation => [annotation.id, annotation]));
+  const selection = store.get(chatTextSelectionAtom(sessionId));
+  if (selection && sameChatAnnotation(snapshot.get(selection.id), selection)) store.set(chatTextSelectionAtom(sessionId), null);
   updateChatAnnotationDraft(sessionId, draft => draft.filter(annotation => !sameChatAnnotation(snapshot.get(annotation.id), annotation)));
   return flushChatAnnotationDraft(sessionId);
 }

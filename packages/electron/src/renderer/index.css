@@ -20,9 +20,17 @@
    tool cards, settings, or other secondary panels. */
 :root {
   --nim-chat-user-bg: #e9f3fe;
+  --nim-annotation-highlight: #fdf9eb;
+  --nim-annotation-marker: #eec64e;
+  --nim-annotation-marker-text: #302604;
 }
 .dark-theme {
   --nim-chat-user-bg: color-mix(in srgb, var(--nim-primary) 14%, var(--nim-bg));
+  --nim-annotation-highlight: color-mix(in srgb, var(--nim-annotation-marker) 22%, var(--nim-bg));
+}
+
+::highlight(chat-annotations) {
+  background-color: var(--nim-annotation-highlight);
 }
 
 /* Shared component utilities are now imported via JS in index.tsx */

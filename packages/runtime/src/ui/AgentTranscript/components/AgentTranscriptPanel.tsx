@@ -137,7 +137,7 @@ interface AgentTranscriptPanelProps {
 const EMPTY_FILE_EDITS: FileEditSummary[] = [];
 
 const AgentTranscriptPanelComponent = React.forwardRef<
-  { scrollToMessage: (index: number) => void; scrollToTop: () => void },
+  { scrollToMessage: (index: number, endIndex?: number) => void; scrollToTop: () => void },
   AgentTranscriptPanelProps
 >(({
   sessionId,
@@ -199,7 +199,7 @@ const AgentTranscriptPanelComponent = React.forwardRef<
   // Removed activeTab state - sidebar now only shows Files tab
 
   const [prompts, setPrompts] = useState<PromptMarker[]>([]);
-  const transcriptRef = useRef<{ scrollToMessage: (index: number, toolCallId?: string) => void; scrollToTop: () => void }>(null);
+  const transcriptRef = useRef<{ scrollToMessage: (index: number, toolCallId?: string, endIndex?: number) => void; scrollToTop: () => void }>(null);
 
   // Resize logic
   const [isDragging, setIsDragging] = useState(false);
@@ -240,8 +240,8 @@ const AgentTranscriptPanelComponent = React.forwardRef<
 
   // Expose methods to parent via ref
   React.useImperativeHandle(ref, () => ({
-    scrollToMessage: (index: number) => {
-      transcriptRef.current?.scrollToMessage(index);
+    scrollToMessage: (index: number, endIndex?: number) => {
+      transcriptRef.current?.scrollToMessage(index, undefined, endIndex);
     },
     scrollToTop: () => {
       transcriptRef.current?.scrollToTop();

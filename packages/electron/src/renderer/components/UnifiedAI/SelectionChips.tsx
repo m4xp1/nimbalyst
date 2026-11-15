@@ -1,4 +1,6 @@
 import React, { useState, useSyncExternalStore } from 'react';
+import { useAtom } from 'jotai';
+import { chatTextSelectionAtom } from './chatAnnotationDraft';
 import {
   getEditorContextEntry,
   dismissEditorContextItem,
@@ -10,6 +12,7 @@ import { getTextSelectionForFile, clearTextSelection } from './TextSelectionIndi
 import { clearMockupAnnotationsForFile } from './MockupAnnotationIndicator';
 
 interface SelectionChipsProps {
+  sessionId?: string;
   /** Current document file path */
   currentFilePath?: string;
   /** Human-readable title for documents whose paths contain internal IDs. */
@@ -65,12 +68,19 @@ function getCombinedSnapshot(): number {
  * reversible "N hidden — restore" affordance; dropping resets when the editor
  * pushes a new selection.
  */
-export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath, currentFileName }) => {
+export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath, currentFileName, sessionId }) => {
   useSyncExternalStore(subscribeAll, getCombinedSnapshot);
+  const [chatSelection, setChatSelection] = useAtom(chatTextSelectionAtom(sessionId ?? ''));
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   const extensionChips: Chip[] = [];
   const otherChips: Chip[] = [];
+  if (sessionId && chatSelection) {
+    const text = chatSelection.quote.replace(/\s+/g, ' ').trim();
+    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+    otherChips.push({ key: 'chat-selection', icon: 'text_select_start', label: 'Selection', preview,
+      tooltip: `Selected chat text will be included: "${preview}"`, onRemove: () => setChatSelection(null) });
+  }
 
   // --- Extension-provided items (node-like editors, multi-selection) ---
   // Strictly scope to the panel's active document. Every mode that can hold a

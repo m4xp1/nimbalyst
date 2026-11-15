@@ -141,6 +141,7 @@ export interface AIInputProps {
   // Mockup annotation indicator support
   currentFilePath?: string;
   currentFileName?: string;
+  annotations?: React.ReactNode;
 
   // Test ID for E2E testing
   testId?: string;
@@ -221,6 +222,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
     queueCount = 0,
     currentFilePath,
     currentFileName,
+    annotations,
     testId,
     onLaunchActionInNewSession,
   }, ref) => {
@@ -1540,9 +1542,11 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
             annotations, and extension-provided items (node-like editors).
             Each chip has an × so the user can drop it from the next prompt. */}
         <SelectionChips
+          sessionId={sessionId}
           currentFilePath={currentFilePath}
           currentFileName={currentFileName}
         />
+        {annotations}
 
         {/* Inline controls row - hidden in memory mode */}
         {!isMemoryMode && (onModeChange || onModelChange || readOnlyModel || workspacePath || (tokenUsage && provider === 'claude-code')) && (

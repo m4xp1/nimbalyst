@@ -17,8 +17,9 @@ import { RemoteSessionTranscript } from './RemoteSessionTranscript';
 
 import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect, useState, useMemo } from 'react';
 import { appendChatAnnotations, type ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
+import { transcriptAnnotationLocation } from '@nimbalyst/runtime/ui/AgentTranscript/utils/transcriptAnnotationLocation';
 import type { CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
-import { chatAnnotationDraftAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
+import { chatAnnotationContextAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
 import { DraftAnnotationList, TranscriptAnnotationControls } from './ChatAnnotationControls';
 import { selectionPathsMatch } from './TextSelectionIndicator';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
@@ -392,7 +393,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   const [isSteering, setIsSteering] = useState(false);
   const [steeringSupported, setSteeringSupported] = useState(false);
   const [annotationTranscriptRoot, setAnnotationTranscriptRoot] = useState<HTMLDivElement | null>(null);
-  const transcriptPanelRef = useRef<{ scrollToMessage: (index: number) => void; scrollToTop: () => void }>(null);
+  const transcriptPanelRef = useRef<{ scrollToMessage: (index: number, endIndex?: number) => void; scrollToTop: () => void }>(null);
   const loadToolCallDiffs = useCallback(
     (toolCallItemId: string, toolCallTimestamp?: number): Promise<ToolCallDiffLoadResult> =>
       window.electronAPI.invoke(
@@ -1097,7 +1098,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       ] } });
       return;
     }
-    const annotations = store.get(chatAnnotationDraftAtom(sessionId));
+    const annotations = store.get(chatAnnotationContextAtom(sessionId));
     steerFlight.current = true;
     setIsSteering(true);
     try {
@@ -1127,7 +1128,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     try {
       const currentAttachments = store.get(sessionDraftAttachmentsAtom(sessionId)) ?? [];
       const annotations = isClaudeCliTerminalSession(provider) && isClaudeCliTuiTrigger(message, currentAttachments.length)
-        ? [] : store.get(chatAnnotationDraftAtom(sessionId));
+        ? [] : store.get(chatAnnotationContextAtom(sessionId));
       // Get fresh document context at queue time (reads from disk)
       const effectiveContext = await getEffectiveDocumentContext();
       const serializableContext = { ...serializeDocumentContext(effectiveContext), chatAnnotations: annotations };
@@ -1185,7 +1186,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   }, [sessionId, provider, currentModel]);
 
   const handleSend = useCallback(async () => {
-    const annotations = store.get(chatAnnotationDraftAtom(sessionId));
+    const annotations = store.get(chatAnnotationContextAtom(sessionId));
     // Read draft state imperatively — we deliberately don't subscribe to
     // these atoms in SessionTranscript (see SessionAIInput).
     const currentDraftInput = store.get(sessionDraftInputAtom(sessionId)) ?? '';
@@ -2903,18 +2904,18 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
 
       {/* Input area — wrapped so the draftInput subscription doesn't
           re-render the entire SessionTranscript on every keystroke. */}
-      <DraftAnnotationList sessionId={sessionId} navigate={annotation => {
+
+      <SessionAIInput
+        annotations={<DraftAnnotationList sessionId={sessionId} navigate={annotation => {
         if (annotation.source.type === 'file') {
           if (!currentFilePath || !selectionPathsMatch(currentFilePath, annotation.source.filePath)) {
             handleFileClick(annotation.source.filePath);
           }
         } else {
-          const messageId = annotation.source.messageId;
-          const index = messages.findIndex(message => String(message.id) === messageId);
-          if (index >= 0) transcriptPanelRef.current?.scrollToMessage(index);
+          const location = transcriptAnnotationLocation(messages, annotation.source);
+          if (location) transcriptPanelRef.current?.scrollToMessage(location.startIndex, location.endIndex);
         }
-      }} />
-      <SessionAIInput
+      }} />}
         ref={inputRef}
         testId={mode === 'chat' ? 'files-mode-chat-input' : 'agent-mode-chat-input'}
         onSend={handleSend}
