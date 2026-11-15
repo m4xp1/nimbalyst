@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.83.0+m4xp1.5]
+
+### Added
+- Copy a sent message with its annotations, selections, and editor context, then paste it into another draft.
+- Switch Nimbalyst's Codex workspace using an existing ChatGPT Desktop sign-in.
+- Try to reconnect a saved Codex conversation from its active-writer error.
+
+### Fixed
+- Keep the current Codex workspace usable while a new browser sign-in is pending.
+- Keep selected chat text while scrolling, highlight annotations, and bring their markers into view after reopening a session.
+- Reserve space for the active-turn buttons so the chat input stays the same height.
+- Load crisp Windows tray artwork at the current display scale.
+
 ## [0.83.0+m4xp1.4]
 
 ### Fixed

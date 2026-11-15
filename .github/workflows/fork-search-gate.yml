@@ -73,6 +73,20 @@ jobs:
           packages/electron/src/renderer/components/UnifiedAI/__tests__/ChatAnnotationControls.test.tsx
       - name: Reject OpenAI transcription before opening a socket
         run: pnpm exec vitest run packages/electron/src/main/services/credentials/__tests__/ProviderCredentialVault.test.ts -t "transcription socket"
+      - name: Verify workspace switching, annotation copying and writer recovery
+        run: >-
+          pnpm exec vitest run
+          packages/electron/src/main/services/__tests__/CodexDesktopWorkspace.test.ts
+          packages/electron/src/renderer/components/CodexUsageIndicator/__tests__/CodexUsagePopover.test.tsx
+          packages/electron/src/main/ipc/__tests__/WorkspaceHandlers.railProject.test.ts
+          packages/electron/src/main/tray/__tests__/windowsTrayIcon.test.ts
+          packages/electron/src/renderer/components/UnifiedAI/__tests__/messageDraftContext.test.ts
+          packages/electron/src/renderer/components/UnifiedAI/__tests__/transcriptAnnotationLocation.test.ts
+          packages/electron/src/renderer/components/UnifiedAI/__tests__/transcriptSelection.test.ts
+          packages/runtime/src/ai/__tests__/messageClipboard.test.ts
+          packages/runtime/src/ai/server/providers/__tests__/OpenAICodexProvider.lifecycle.test.ts
+          packages/runtime/src/ui/AgentTranscript/components/__tests__/CodexWriterConflictWidget.test.tsx
+          packages/runtime/src/ui/AgentTranscript/hooks/__tests__/useTranscriptSelectionRetention.test.tsx
       - name: Mandatory schema and editor coordination regressions
         run: >-
           pnpm exec vitest run
@@ -124,7 +138,7 @@ jobs:
       - name: Mandatory built-app search, Git and file tracker
         run: |
           $env:NIMBALYST_E2E_MAIN_PATH = (Resolve-Path 'packages/electron/out/main/index.js').Path
-          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts', 'sidebar-document-context.spec.ts', 'session-edit-batch.spec.ts', 'windows-tray-artwork.spec.ts', 'annotation-drafts.spec.ts')
+          $specs = @('codex-model-usage.spec.ts', 'russian-quick-open.spec.ts', 'memory-session-search.spec.ts', 'russian-wiki-search.spec.ts', 'git-stable.spec.ts', 'git-sync.spec.ts', 'attached-folder-search.spec.ts', 'tracker-file-storage.spec.ts', 'forced-sqlite-migration.spec.ts', 'multi-project-rail.spec.ts', 'markdown-source-preservation.spec.ts', 'transcript-activity.spec.ts', 'sidebar-document-context.spec.ts', 'session-edit-batch.spec.ts', 'windows-tray-artwork.spec.ts', 'annotation-drafts.spec.ts', 'annotation-reload.spec.ts', 'transcript-selection.spec.ts', 'composer-layout.spec.ts', 'codex-writer-recovery.spec.ts', 'message-context-clipboard.spec.ts')
           foreach ($spec in $specs) {
             pnpm --dir packages/electron exec playwright test $spec --config playwright.search.config.ts
             if ($LASTEXITCODE -ne 0) { throw "Built application regression failed: $spec" }
