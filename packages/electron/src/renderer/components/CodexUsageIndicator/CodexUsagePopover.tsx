@@ -140,7 +140,10 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await onRefresh();
+      setWorkspaceError('');
+      await Promise.all([onRefresh(), refreshCodexWorkspace(true)]);
+    } catch {
+      setWorkspaceError('Could not update workspaces. Try refreshing again.');
     } finally {
       setIsRefreshing(false);
     }
@@ -214,7 +217,7 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
                     aria-label="Workspace"
                     className="w-full appearance-none rounded-md border border-nim bg-nim-primary py-1.5 pl-2 pr-7 text-white disabled:opacity-60"
                     value={workspace.selectedId ?? ''}
-                    disabled={workspaceBusy || workspace.signingIn || !(workspace.canSwitch ?? workspace.independent)}
+                    disabled={workspaceBusy || !(workspace.canSwitch ?? workspace.independent)}
                     onPointerDown={() => { void refreshCodexWorkspace(true).catch(() => setWorkspaceError('Could not update workspaces.')); }}
                     onFocus={() => { void refreshCodexWorkspace(true).catch(() => setWorkspaceError('Could not update workspaces.')); }}
                     onChange={event => void updateWorkspace('codex-workspace:select', event.currentTarget.value)}
@@ -227,7 +230,7 @@ export const CodexUsagePopover: React.FC<CodexUsagePopoverProps> = ({
                   <MaterialSymbol icon="expand_more" size={18} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white" />
                 </div>
               )}
-              {workspace?.signingIn && <div role="status" className="text-nim-muted">Complete sign-in in your browser.</div>}
+              {workspace?.signInHintVisible && <div role="status" className="text-nim-muted">Complete sign-in in your browser.</div>}
             </div>
           {(workspaceError || workspace?.error) && (
             <div className="mb-2 text-[12px] text-nim-error" role="alert">{workspaceError || workspace?.error}</div>

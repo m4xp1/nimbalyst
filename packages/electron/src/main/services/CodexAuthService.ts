@@ -14,8 +14,10 @@ import { codexSandboxSetupCompleted, type WindowsSandboxMode } from '@nimbalyst/
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { homedir } from 'node:os';
 import { app, BrowserWindow } from 'electron';
 import { stripAmbientCodexCredentials, type CodexWorkspaceAuth } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/workspaceAuth';
 import { ModelRegistry } from '@nimbalyst/runtime/ai/server/ModelRegistry';
@@ -40,6 +42,7 @@ import type {
 import { logger } from '../utils/logger';
 import { getEnhancedPath } from './shellEnvironment';
 import { getAppSetting, setAppSetting } from '../utils/store';
+import { CodexDesktopWorkspace, type DesktopLoginIdentity } from './CodexDesktopWorkspace';
 
 export interface CodexAuthStatus {
   account: AccountKind;
@@ -69,6 +72,10 @@ interface CodexLoginSessions {
 }
 
 const independentWorkspaceSetting = 'codexIndependentWorkspace';
+const desktopIdentitySetting = 'codexDesktopWorkspaceIdentity';
+const authSlotSetting = 'codexWorkspaceAuthSlot';
+const authSlotPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+type AuthConnection = { client: JsonRpcClient; child: ChildProcessWithoutNullStreams };
 
 function activeLogin(accounts: CodexLoginSessions): CodexLoginSession | undefined {
   const active = accounts.sessions?.filter(session => session.isActive) ?? [];
@@ -90,14 +97,38 @@ class CodexAuthServiceImpl {
   private workspaceSwitching = false;
   private independentLoginStarting = false;
   private independentConnection: Promise<{ client: JsonRpcClient; child: ChildProcessWithoutNullStreams }> | undefined;
+  private independentLoginConnection: Promise<AuthConnection> | undefined;
+  private independentLoginSlot: string | undefined;
   private independentLoginId: string | null = null;
   private independentLoginError: string | undefined;
   private loginTimer: ReturnType<typeof setTimeout> | undefined;
+  private loginHintTimer: ReturnType<typeof setTimeout> | undefined;
   private earlyLoginNotifications: AccountLoginCompletedNotification[] = [];
   private workspaceSnapshot: CodexWorkspaceStatus | null = null;
   private workspaceRead: Promise<CodexWorkspaceStatus> | null = null;
   private workspaceMetadataAt = 0;
+  private workspaceMetadataAttemptAt = 0;
+  private workspaceIdentity: string | null = null;
+  private workspaceMetadataError: string | undefined;
+  private workspaceDiscoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private publishedWorkspace = '';
+  private desktopAvailable = false;
+  private readonly desktopWorkspace = new CodexDesktopWorkspace({
+    sourceHome: () => process.env.CODEX_HOME || path.join(homedir(), '.codex'),
+    ownedHome: () => path.join(app.getPath('userData'), 'codex-desktop-workspace-auth'),
+    connect: (name, home) => this.openConnection(name, home),
+  });
+
+  private desktopIdentity(): DesktopLoginIdentity | undefined {
+    const identity = getAppSetting<DesktopLoginIdentity>(desktopIdentitySetting);
+    return identity && typeof identity.userId === 'string' ? identity : undefined;
+  }
+
+  private selectedClient(force = false): Promise<{ client: JsonRpcClient; child: ChildProcessWithoutNullStreams }> {
+    const identity = this.desktopIdentity();
+    const selected = this.independentWorkspaceId();
+    return identity && selected ? this.desktopWorkspace.get(selected, identity, force) : this.independentClient();
+  }
 
   private independentEnabled(): boolean {
     return this.independentWorkspaceId() !== undefined;
@@ -109,7 +140,21 @@ class CodexAuthServiceImpl {
   }
 
   private independentHome(): string {
-    return path.join(app.getPath('userData'), 'codex-workspace-auth');
+    const slot = this.authSlot();
+    return slot ? this.authSlotHome(slot) : path.join(app.getPath('userData'), 'codex-workspace-auth');
+  }
+
+  private authSlot(): string | undefined {
+    const slot = getAppSetting<string>(authSlotSetting);
+    return typeof slot === 'string' && authSlotPattern.test(slot) ? slot : undefined;
+  }
+
+  private authSlotHome(slot: string): string {
+    if (!authSlotPattern.test(slot)) throw new Error('Invalid Codex sign-in store.');
+    const root = path.resolve(app.getPath('userData'), 'codex-workspace-logins');
+    const home = path.resolve(root, slot);
+    if (path.dirname(home) !== root) throw new Error('Invalid Codex sign-in store.');
+    return home;
   }
 
   private independentClient(): Promise<{ client: JsonRpcClient; child: ChildProcessWithoutNullStreams }> {
@@ -117,63 +162,104 @@ class CodexAuthServiceImpl {
     if (this.independentConnection) return this.independentConnection;
     const pending = this.openConnection('nimbalyst-workspace-auth', this.independentHome());
     this.independentConnection = pending;
+    this.observeIndependentConnection(pending);
+    return pending;
+  }
+
+  private observeIndependentConnection(pending: Promise<AuthConnection>): void {
     const clear = () => {
-      if (this.independentConnection !== pending) return;
-      this.independentConnection = undefined;
-      if (this.independentLoginId || this.independentLoginStarting) {
+      if (this.independentConnection === pending) this.independentConnection = undefined;
+      if (this.independentLoginConnection === pending) {
+        const slot = this.independentLoginSlot;
         this.clearLogin();
         this.independentLoginError = 'ChatGPT sign-in was interrupted. Select your account to try again.';
         this.publishWorkspaceState();
+        void this.retireIndependentConnection(pending, slot);
       }
     };
     void pending.then(({ client, child }) => {
       child.on('exit', clear);
       client.onNotification((method, params) => {
-        if (this.independentConnection !== pending) return;
         if (method === 'account/updated') {
-          this.workspaceMetadataAt = 0;
-          void this.getWorkspaceStatus(true).catch(() => {});
+          if (this.independentConnection !== pending || this.workspaceSwitching) return;
+          this.scheduleWorkspaceDiscovery(true);
           return;
         }
         if (method !== 'account/login/completed') return;
         const notification = params as AccountLoginCompletedNotification;
+        if (this.independentLoginConnection !== pending && !(this.independentConnection === pending && this.workspaceSwitching)) return;
         if (!this.independentLoginId && (this.independentLoginStarting || this.workspaceSwitching)) {
           this.earlyLoginNotifications.push(notification);
           return;
         }
         if (!this.independentLoginId || (notification.loginId && notification.loginId !== this.independentLoginId)) return;
-        void this.completeIndependentLogin(client, notification);
+        void this.completeIndependentLogin(pending, notification);
       });
     }, clear);
-    return pending;
   }
 
-  private async completeIndependentLogin(client: JsonRpcClient, notification: AccountLoginCompletedNotification): Promise<void> {
+  private async retireIndependentConnection(pending: Promise<AuthConnection>, slot?: string): Promise<void> {
+    try {
+      const connection = await pending.catch(() => undefined);
+      if (connection) {
+        const { child, client } = connection;
+        const exited = child.exitCode != null || child.signalCode != null ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Codex sign-in process did not exit.')), 3000);
+          timer.unref?.();
+          child.once('exit', () => { clearTimeout(timer); resolve(); });
+        });
+        try {
+          client.close('workspace connection retired');
+          child.stdin.end();
+          if (!child.killed) child.kill();
+        } finally {
+          await exited;
+        }
+      }
+      // Only an inactive, generated directory may be removed; never Desktop or the legacy store.
+      if (slot && slot !== this.authSlot()) await rm(this.authSlotHome(slot), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch {
+      logger.main.warn('[CodexAuth] Could not retire an inactive sign-in store.');
+    }
+  }
+
+  private async completeIndependentLogin(connection: Promise<AuthConnection>, notification: AccountLoginCompletedNotification): Promise<void> {
     const loginId = this.independentLoginId;
-    if (!loginId) return;
+    if (!loginId || connection !== this.independentLoginConnection) return;
     let account: CodexLoginSession | undefined;
     try {
       if (notification.success) {
-        let response: CodexLoginSessions;
-        try {
-          response = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: true }, 15_000);
-        } catch {
-          response = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }, 15_000);
-        }
+        // This local read confirms the selected account. Network membership
+        // discovery is optional and must not keep a completed login pending.
+        const { client } = await connection;
+        const response = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }, 15_000);
         account = activeLogin(response);
       }
     } catch {
       account = undefined;
     }
-    if (loginId !== this.independentLoginId) return;
+    if (loginId !== this.independentLoginId || connection !== this.independentLoginConnection) return;
+    const slot = this.independentLoginSlot;
     this.clearLogin();
     if (account?.selectedWorkspaceAccountId) {
+      if (slot) {
+        const previous = this.independentConnection;
+        const previousSlot = this.authSlot();
+        setAppSetting(authSlotSetting, slot);
+        this.independentConnection = connection;
+        if (previous && previous !== connection) void this.retireIndependentConnection(previous, previousSlot);
+      }
+      setAppSetting(desktopIdentitySetting, null);
+      this.desktopWorkspace.shutdown();
       setAppSetting(independentWorkspaceSetting, account.selectedWorkspaceAccountId);
       this.independentLoginError = undefined;
       this.rememberWorkspace(account);
+      this.workspaceMetadataAttemptAt = 0;
       this.workspaceChanged();
       this.broadcast('openai-codex:auth-login-completed', notification);
+      this.scheduleWorkspaceDiscovery(true);
     } else {
+      if (slot) void this.retireIndependentConnection(connection, slot);
       this.independentLoginError = 'ChatGPT sign-in did not complete. Try again.';
       this.publishWorkspaceState();
       this.broadcast('openai-codex:auth-login-completed', {
@@ -190,9 +276,17 @@ class CodexAuthServiceImpl {
     this.publishWorkspaceState(true);
   }
 
-  private rememberWorkspace(account: CodexLoginSession | undefined): CodexWorkspaceStatus {
+  private rememberWorkspace(account: CodexLoginSession | undefined, complete = false): CodexWorkspaceStatus {
+    const identity = account ? JSON.stringify([this.independentEnabled(), account.sessionId, account.userId ?? null, account.email ?? null]) : null;
+    const sameIdentity = identity !== null && identity === this.workspaceIdentity;
+    if (!sameIdentity) {
+      this.workspaceMetadataAt = 0;
+      this.workspaceMetadataAttemptAt = 0;
+      this.workspaceMetadataError = undefined;
+    }
+    this.workspaceIdentity = identity;
     const names = new Map<string, number>();
-    const choices = [...new Map((account?.workspaces ?? []).map(workspace => [workspace.accountId, workspace])).values()].map(workspace => ({
+    let choices = [...new Map((account?.workspaces ?? []).map(workspace => [workspace.accountId, workspace])).values()].map(workspace => ({
         id: workspace.accountId,
         name: workspace.name?.trim() || (workspace.kind === 'personal' ? 'Personal' : 'Workspace'),
     }));
@@ -200,12 +294,23 @@ class CodexAuthServiceImpl {
     for (const choice of choices) {
       if ((names.get(choice.name) ?? 0) > 1) choice.name += ' (' + choice.id.slice(-6) + ')';
     }
+    // Native refresh=false is a current-account observation, even after a
+    // complete discovery. It is not an authoritative membership replacement.
+    if (!complete && sameIdentity && this.workspaceMetadataAt && this.workspaceSnapshot) {
+      const known = this.workspaceSnapshot.choices;
+      choices = [...known, ...choices.filter(choice => !known.some(previous => previous.id === choice.id))];
+    }
+    if (complete) {
+      this.workspaceMetadataAt = Date.now();
+      this.workspaceMetadataAttemptAt = this.workspaceMetadataAt;
+      this.workspaceMetadataError = undefined;
+    }
     this.workspaceSnapshot = {
       independent: this.independentEnabled(), authenticated: Boolean(account?.selectedWorkspaceAccountId),
       email: account?.email || null, selectedId: account?.selectedWorkspaceAccountId ?? null,
       selectedName: choices.find(choice => choice.id === account?.selectedWorkspaceAccountId)?.name ?? null,
-      choices, signingIn: Boolean(this.independentLoginId),
-      canSwitch: this.independentEnabled(), error: this.independentLoginError,
+      choices, signingIn: Boolean(this.independentLoginId), signInHintVisible: Boolean(this.loginHintTimer),
+      canSwitch: this.independentEnabled() || this.desktopAvailable, error: this.independentLoginError ?? this.workspaceMetadataError,
     };
     this.publishWorkspaceState();
     return this.workspaceSnapshot;
@@ -218,7 +323,8 @@ class CodexAuthServiceImpl {
       selectedId: this.workspaceSnapshot?.selectedId ?? null,
       choices: this.workspaceSnapshot?.choices ?? [],
       signingIn: Boolean(this.independentLoginId),
-      error: this.independentLoginError,
+      signInHintVisible: Boolean(this.loginHintTimer),
+      error: this.independentLoginError ?? this.workspaceMetadataError,
     };
     this.workspaceSnapshot = snapshot;
     const serialized = JSON.stringify(snapshot);
@@ -228,20 +334,38 @@ class CodexAuthServiceImpl {
     }
   }
 
+  private scheduleWorkspaceDiscovery(afterLogin = false): void {
+    if (this.workspaceDiscoveryTimer || (this.workspaceMetadataAt && !afterLogin) || !this.workspaceSnapshot?.authenticated ||
+        this.independentLoginId || this.independentLoginStarting || this.workspaceSwitching ||
+        Date.now() - this.workspaceMetadataAttemptAt < 60_000) return;
+    this.workspaceDiscoveryTimer = setTimeout(() => {
+      this.workspaceDiscoveryTimer = undefined;
+      void this.getWorkspaceStatus(true).catch(() => {});
+    }, 0);
+  }
+
   async getWorkspaceStatus(refreshWorkspaceMetadata = false): Promise<CodexWorkspaceStatus> {
     if (!codexAccessAllowed()) return { independent: false, authenticated: false, selectedId: null, choices: [], signingIn: false };
-    const refresh = refreshWorkspaceMetadata && Date.now() - this.workspaceMetadataAt > 60_000;
+    const refresh = refreshWorkspaceMetadata && Date.now() - this.workspaceMetadataAttemptAt >= 60_000;
     if (this.workspaceSnapshot && !refresh) return this.workspaceSnapshot;
     if (this.workspaceRead) return this.workspaceRead;
     const revision = this.workspaceRevision;
+    if (refresh) this.workspaceMetadataAttemptAt = Date.now();
     const pending = (async () => {
       const independent = this.independentEnabled();
-      const { client, child } = await (independent ? this.independentClient() : this.openConnection('nimbalyst-workspace-read'));
+      const { client, child } = await (independent ? this.selectedClient() : this.openConnection('nimbalyst-workspace-read'));
       try {
         const accounts = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: refresh }, 15_000);
         if (revision !== this.workspaceRevision && this.workspaceSnapshot) return this.workspaceSnapshot;
-        if (refresh) this.workspaceMetadataAt = Date.now();
-        return this.rememberWorkspace(activeLogin(accounts));
+        if (!independent) this.desktopAvailable = await this.desktopWorkspace.canUse(activeLogin(accounts));
+        if (revision !== this.workspaceRevision && this.workspaceSnapshot) return this.workspaceSnapshot;
+        return this.rememberWorkspace(activeLogin(accounts), refresh);
+      } catch (error) {
+        if (refresh && revision === this.workspaceRevision) {
+          this.workspaceMetadataError = 'Could not update workspaces. Use Refresh to try again.';
+          this.publishWorkspaceState();
+        }
+        throw error;
       } finally {
         if (!independent) {
           client.close('workspace read completed');
@@ -251,31 +375,45 @@ class CodexAuthServiceImpl {
       }
     })();
     this.workspaceRead = pending;
-    const clear = () => { if (this.workspaceRead === pending) this.workspaceRead = null; };
+    const clear = () => {
+      if (this.workspaceRead === pending) {
+        this.workspaceRead = null;
+        if (!refresh) this.scheduleWorkspaceDiscovery();
+      }
+    };
     void pending.then(clear, clear);
     return pending;
   }
 
   private clearLogin(): void {
     if (this.loginTimer) clearTimeout(this.loginTimer);
+    if (this.loginHintTimer) clearTimeout(this.loginHintTimer);
     this.loginTimer = undefined;
+    this.loginHintTimer = undefined;
     this.independentLoginId = null;
+    this.independentLoginConnection = undefined;
+    this.independentLoginSlot = undefined;
     this.earlyLoginNotifications = [];
   }
 
-  private async beginLogin(client: JsonRpcClient, login: CodexLoginStartedChatGpt): Promise<void> {
+  private async beginLogin(connection: Promise<AuthConnection>, login: CodexLoginStartedChatGpt): Promise<void> {
+    this.independentLoginConnection = connection;
     this.independentLoginId = login.loginId;
+    this.independentLoginError = undefined;
+    this.loginHintTimer = setTimeout(() => {
+      this.loginHintTimer = undefined;
+      this.publishWorkspaceState();
+    }, 15_000);
+    this.loginHintTimer.unref?.();
     this.loginTimer = setTimeout(() => {
-      void this.cancelIndependentLogin().finally(() => {
-        this.independentLoginError = 'ChatGPT sign-in expired. Select your account to try again.';
-        this.publishWorkspaceState();
-      }).catch(() => {});
+      // Abandoning an optional account change is not an authentication failure.
+      void this.cancelIndependentLogin().catch(() => {});
     }, 5 * 60_000);
     this.loginTimer.unref?.();
     this.publishWorkspaceState();
     const early = this.earlyLoginNotifications.find(notification => !notification.loginId || notification.loginId === login.loginId);
     this.earlyLoginNotifications = [];
-    if (early) await this.completeIndependentLogin(client, early);
+    if (early) await this.completeIndependentLogin(connection, early);
   }
 
   async signInIndependently(): Promise<CodexLoginStartedChatGpt> {
@@ -284,43 +422,70 @@ class CodexAuthServiceImpl {
     }
     if (this.independentLoginId) await this.cancelIndependentLogin();
     this.independentLoginStarting = true;
+    const slot = randomUUID();
+    const connection = this.openConnection('nimbalyst-workspace-sign-in', this.authSlotHome(slot));
+    this.independentLoginSlot = slot;
+    this.independentLoginConnection = connection;
+    this.observeIndependentConnection(connection);
     try {
-      const { client } = await this.independentClient();
+      const { client } = await connection;
       this.independentLoginError = undefined;
       const response = await client.request<AccountLoginStartResponse>('account/login/start', { type: 'chatgpt' });
       if (response.type !== 'chatgpt') throw new Error('Codex could not start ChatGPT sign-in.');
-      await this.beginLogin(client, response);
+      if (this.independentLoginConnection !== connection) throw new Error('Codex sign-in was cancelled.');
+      await this.beginLogin(connection, response);
       return response;
+    } catch (error) {
+      if (this.independentLoginConnection === connection) {
+        this.clearLogin();
+        this.publishWorkspaceState();
+        await this.retireIndependentConnection(connection, slot);
+      }
+      throw error;
     } finally {
       this.independentLoginStarting = false;
+      this.scheduleWorkspaceDiscovery(true);
     }
   }
 
   async cancelIndependentLogin(): Promise<void> {
     const loginId = this.independentLoginId;
-    if (!loginId || !this.independentConnection) return;
+    const connection = this.independentLoginConnection;
+    const slot = this.independentLoginSlot;
+    if (!connection) return;
     this.clearLogin();
     this.publishWorkspaceState();
-    const connection = this.independentConnection;
-    const { client, child } = await connection;
     try {
-      await client.request('account/login/cancel', { loginId }, 10_000);
+      const { client } = await connection;
+      if (loginId) await client.request('account/login/cancel', { loginId }, 10_000);
     } catch {
-      if (this.independentConnection === connection) this.independentConnection = undefined;
-      client.close('cancelled sign-in');
-      if (!child.killed) child.kill();
+      if (this.independentConnection === connection) {
+        this.independentConnection = undefined;
+        await this.retireIndependentConnection(connection);
+      }
     } finally {
+      if (slot) await this.retireIndependentConnection(connection, slot);
       this.publishWorkspaceState();
+      this.scheduleWorkspaceDiscovery();
     }
   }
 
   async selectWorkspace(accountId: string): Promise<CodexLoginStartedChatGpt | void> {
-    if (!this.independentEnabled()) throw new Error('Sign in to Nimbalyst’s independent Codex account first.');
-    if (this.workspaceSwitching || this.independentLoginStarting || this.independentLoginId) {
+    if (this.workspaceSwitching || this.independentLoginStarting) {
       throw new Error('Finish or cancel the current Codex account change first.');
     }
     this.workspaceSwitching = true;
     try {
+      // An explicit workspace choice supersedes an unfinished browser account change.
+      await this.cancelIndependentLogin();
+      if (!this.independentEnabled() || this.desktopIdentity()) {
+        const selected = await this.desktopWorkspace.get(accountId, this.desktopIdentity());
+        setAppSetting(desktopIdentitySetting, selected.identity);
+        setAppSetting(independentWorkspaceSetting, accountId);
+        this.independentLoginError = undefined;
+        this.rememberWorkspace(selected.account);
+        return;
+      }
       const { client } = await this.independentClient();
       let login = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }));
       if (!login?.workspaces?.some(workspace => workspace.accountId === accountId)) {
@@ -336,7 +501,7 @@ class CodexAuthServiceImpl {
       });
       if ('login_id' in result) {
         const browserLogin: CodexLoginStartedChatGpt = { type: 'chatgpt', loginId: result.login_id, authUrl: result.auth_url };
-        await this.beginLogin(client, browserLogin);
+        await this.beginLogin(this.independentConnection!, browserLogin);
         return browserLogin;
       }
       if (activeLogin(result)?.selectedWorkspaceAccountId !== accountId) {
@@ -348,6 +513,7 @@ class CodexAuthServiceImpl {
     } finally {
       this.workspaceSwitching = false;
       this.workspaceChanged();
+      this.scheduleWorkspaceDiscovery();
     }
   }
 
@@ -356,6 +522,9 @@ class CodexAuthServiceImpl {
       throw new Error('Finish or cancel the current Codex account change first.');
     }
     setAppSetting(independentWorkspaceSetting, null);
+    setAppSetting(desktopIdentitySetting, null);
+    this.desktopWorkspace.shutdown();
+    this.workspaceSnapshot = null;
     this.workspaceChanged();
   }
 
@@ -368,11 +537,17 @@ class CodexAuthServiceImpl {
     };
     const expected = this.independentWorkspaceId();
     if (!expected) return { revision, assertCurrent };
+    const desktopIdentity = this.desktopIdentity();
     return {
       revision,
       assertCurrent,
       getTokens: async (refresh) => {
         assertCurrent();
+        if (desktopIdentity) {
+          const selected = await this.desktopWorkspace.get(expected, desktopIdentity, refresh);
+          assertCurrent();
+          return selected.tokens;
+        }
         const { client } = await this.independentClient();
         const login = activeLogin(await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false }));
         const accountId = login?.selectedWorkspaceAccountId;
@@ -416,8 +591,8 @@ class CodexAuthServiceImpl {
 
   async getStatus(refreshToken = false): Promise<CodexAuthStatus> {
     if (!codexAccessAllowed()) return { account: null, requiresOpenaiAuth: true, authMode: null, planType: null };
-    const client = this.independentEnabled() ? (await this.independentClient()).client : await this.ensureChild();
-    const res = await client.request<AccountReadResponse>('account/read', { refreshToken });
+    const client = this.independentEnabled() ? (await this.selectedClient(refreshToken)).client : await this.ensureChild();
+    const res = await client.request<AccountReadResponse>('account/read', { refreshToken: this.desktopIdentity() ? false : refreshToken });
     // logger.main.info('[CodexAuth] account/read result', {
     //   refreshToken,
     //   account: res.account ? { type: res.account.type, hasEmail: 'email' in res.account, planType: 'planType' in res.account ? res.account.planType : null } : null,
@@ -442,16 +617,19 @@ class CodexAuthServiceImpl {
     const auth = this.workspaceAuth();
     auth.assertCurrent();
     const expected = this.independentWorkspaceId();
-    const { client, child } = await (expected ? this.independentClient() : this.openConnection('nimbalyst-usage'));
+    const { client, child } = await (expected ? this.selectedClient() : this.openConnection('nimbalyst-usage'));
     try {
       const accounts = await client.request<CodexLoginSessions>('accountSession/list', { refreshWorkspaceMetadata: false });
       const account = activeLogin(accounts);
+      if (!expected) this.desktopAvailable = await this.desktopWorkspace.canUse(account);
+      auth.assertCurrent();
       if (!account?.selectedWorkspaceAccountId) {
         this.rememberWorkspace(undefined);
         onAccountIdentified?.(null);
         throw new Error('Current ChatGPT account could not be identified. Sign in with ChatGPT to view subscription limits.');
       }
       this.rememberWorkspace(account);
+      this.scheduleWorkspaceDiscovery();
       if (expected && account.selectedWorkspaceAccountId !== expected) {
         onAccountIdentified?.(null);
         throw new Error('Sign in to the selected Codex workspace.');
@@ -528,11 +706,16 @@ class CodexAuthServiceImpl {
 
   async logout(): Promise<void> {
     assertCodexAccessAllowed();
+    await this.cancelIndependentLogin();
     const independent = this.independentEnabled();
+    if (this.desktopIdentity()) {
+      setAppSetting(desktopIdentitySetting, null);
+      this.desktopWorkspace.shutdown();
+    }
     const client = independent ? (await this.independentClient()).client : await this.ensureChild();
     await client.request('account/logout', {});
     this.cachedStatus = null;
-    if (independent) this.workspaceChanged();
+    if (independent) { this.rememberWorkspace(undefined); this.workspaceChanged(); }
   }
 
   getCachedStatus(): CodexAuthStatus | null {
@@ -541,6 +724,8 @@ class CodexAuthServiceImpl {
   }
 
   shutdown(): void {
+    this.desktopWorkspace.shutdown();
+    this.desktopAvailable = false;
     this.connectionGeneration++;
     this.currentLoginId = null;
     try { this.client?.close('shutdown'); } catch { /* noop */ }
@@ -552,6 +737,8 @@ class CodexAuthServiceImpl {
     this.child = null;
     this.initializing = null;
     const independent = this.independentConnection;
+    const login = this.independentLoginConnection;
+    const loginSlot = this.independentLoginSlot;
     this.independentConnection = undefined;
     this.clearLogin();
     this.independentLoginStarting = false;
@@ -559,13 +746,15 @@ class CodexAuthServiceImpl {
     this.workspaceSnapshot = null;
     this.workspaceRead = null;
     this.workspaceMetadataAt = 0;
+    this.workspaceMetadataAttemptAt = 0;
+    this.workspaceIdentity = null;
+    this.workspaceMetadataError = undefined;
+    if (this.workspaceDiscoveryTimer) clearTimeout(this.workspaceDiscoveryTimer);
+    this.workspaceDiscoveryTimer = undefined;
     this.publishedWorkspace = '';
     this.independentLoginError = undefined;
-    void independent?.then(({ client, child }) => {
-      client.close('shutdown');
-      child.stdin.end();
-      if (!child.killed) child.kill();
-    }).catch(() => {});
+    if (independent) void this.retireIndependentConnection(independent);
+    if (login && login !== independent) void this.retireIndependentConnection(login, loginSlot);
   }
 
   private deriveAuthMode(account: AccountKind): AccountAuthMode {
