@@ -152,6 +152,7 @@ interface AppServerSessionRaw {
   stderrTail: string[];
   /** Prevent duplicate cleanup from re-targeting a PID after it exits. */
   cleanupStarted: boolean;
+  cleanupDone?: Promise<boolean>;
   shellTracking?: CodexShellTrackingRegistration;
 }
 
@@ -162,6 +163,8 @@ export type CodexAppServerMessage = ProtocolMessage & {
 };
 
 export class CodexAppServerProtocol implements AgentProtocol {
+  /** Only exits of children this application owns; never external process IDs. */
+  private static readonly pendingWriterExits = new Map<string, Set<Promise<boolean>>>();
   readonly platform = 'codex-app-server';
   /** Populated asynchronously by registerSkillRoots (#1253). */
   private skillNames: string[] = [];
@@ -247,6 +250,7 @@ export class CodexAppServerProtocol implements AgentProtocol {
    * Nimbalyst-internal tool that ships through the nimbalyst MCP servers.
    */
   async resumeSession(sessionId: string, options: SessionOptions): Promise<ProtocolSession> {
+    await this.waitForWriterRelease(sessionId);
     const raw = await this.spawnAndInit(options);
     const startParams = buildCodexThreadStartParams(raw.options);
     // ThreadResumeParams accepts the same surface as ThreadStartParams minus
@@ -571,6 +575,32 @@ export class CodexAppServerProtocol implements AgentProtocol {
     this.killChild(raw);
   }
 
+  /** Check the same saved thread without submitting a turn or changing its settings. */
+  async checkThreadResume(threadId: string, options: SessionOptions): Promise<void> {
+    await this.waitForWriterRelease(threadId);
+    const raw = await this.spawnAndInit(options, true);
+    try {
+      const response = await raw.client.request<ThreadResumeResponse>('thread/resume', {
+        threadId, cwd: options.workspacePath, excludeTurns: true,
+      }, 15_000);
+      if (response.thread?.id !== threadId) throw new Error('Codex did not reopen the requested conversation.');
+      raw.threadId = threadId;
+      (options.raw?.codexWorkspaceAuth as CodexWorkspaceAuth | undefined)?.assertCurrent();
+    } finally {
+      this.killChild(raw);
+      if (raw.threadId && !(await raw.cleanupDone)) {
+        throw new Error('The previous Nimbalyst connection is still closing. Try again shortly.');
+      }
+    }
+  }
+
+  private async waitForWriterRelease(threadId: string): Promise<void> {
+    const pending = CodexAppServerProtocol.pendingWriterExits.get(threadId);
+    if (pending && (await Promise.all(pending)).some(exited => !exited)) {
+      throw new Error('The previous Nimbalyst connection is still closing. Try again shortly.');
+    }
+  }
+
   // ---- internals ----
 
   private assertRaw(session: ProtocolSession): AppServerSessionRaw {
@@ -584,6 +614,23 @@ export class CodexAppServerProtocol implements AgentProtocol {
   private killChild(raw: AppServerSessionRaw): void {
     if (raw.cleanupStarted) return;
     raw.cleanupStarted = true;
+    if (raw.threadId && raw.child.exitCode == null && raw.child.signalCode == null) {
+      const pending = CodexAppServerProtocol.pendingWriterExits.get(raw.threadId) ?? new Set<Promise<boolean>>();
+      CodexAppServerProtocol.pendingWriterExits.set(raw.threadId, pending);
+      raw.cleanupDone = new Promise<boolean>(resolve => {
+        const timer = setTimeout(() => resolve(false), 6_000);
+        timer.unref?.();
+        raw.child.once('exit', () => {
+          clearTimeout(timer);
+          pending.delete(raw.cleanupDone!);
+          if (!pending.size && CodexAppServerProtocol.pendingWriterExits.get(raw.threadId) === pending) {
+            CodexAppServerProtocol.pendingWriterExits.delete(raw.threadId);
+          }
+          resolve(true);
+        });
+      });
+      pending.add(raw.cleanupDone);
+    } else raw.cleanupDone = Promise.resolve(true);
     raw.shellTracking?.dispose();
     try { raw.client.close('cleanup'); } catch { /* noop */ }
     this.terminateProcessTree(raw.child);

@@ -345,6 +345,8 @@ export interface InteractiveWidgetHost {
 
   /** Whether sessions resume on their own once a Claude usage limit resets. Optional: desktop only. */
   usageLimitAutoResumeEnabled?: boolean;
+  /** Reconnect an idle Codex thread without sending another message. */
+  resolveCodexWriter?(): Promise<{ success: boolean; error?: string }>;
 
   /**
    * The usage-limit card's switch. Enabling also schedules this session's

@@ -17,6 +17,7 @@ import {
 import { parseEffortLevel } from '@nimbalyst/runtime/ai/server/effortLevels';
 import { agentCapabilitiesForProviderType } from '@nimbalyst/runtime/ai/server/agentCapabilities';
 import { OpenAICodexProvider } from '@nimbalyst/runtime/ai/server/providers/OpenAICodexProvider';
+import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 import type { CodexSteerRequest, CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
 import { safeSend } from '../aiServiceUtils';
@@ -37,6 +38,43 @@ function getCodexProvider(sessionId: string): OpenAICodexProvider | null {
  * mid-conversation control operation, not a configuration read.
  */
 export function registerTurnControlHandlers(ctx: AIServiceContext): void {
+  const writerRecoveries = new Map<string, Promise<{ success: boolean; error?: string }>>();
+  safeHandle('ai:resolveCodexWriter', (_event, sessionId: string) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'Session ID is required.' };
+    const pending = writerRecoveries.get(sessionId);
+    if (pending) return pending;
+    const recover = (async () => {
+      try {
+        const session = await AISessionsRepository.get(sessionId);
+        const workspacePath = session?.worktreePath || session?.workspacePath;
+        if (session?.provider !== 'openai-codex' || !session.providerSessionId || !workspacePath
+          || !ctx.isProviderEnabledForWorkspace('openai-codex', workspacePath)) {
+          return { success: false, error: 'The saved Codex conversation is unavailable.' };
+        }
+        const busy = () => {
+          const status = getSessionStateManager().getSessionState(sessionId)?.status;
+          return status === 'running' || status === 'waiting_for_input' || ctx.sessionsProcessingQueue.has(sessionId);
+        };
+        if (busy()) return { success: false, error: 'This session is still working. Wait for it to finish.' };
+        let provider = getCodexProvider(sessionId);
+        if (!provider) {
+          provider = ProviderFactory.createProvider('openai-codex', sessionId) as OpenAICodexProvider;
+          await provider.initialize({ apiKey: ctx.getApiKeyForProvider('openai-codex', workspacePath) });
+        }
+        if (busy()) return { success: false, error: 'This session is still working. Wait for it to finish.' };
+        await provider.resolveWriterConflict(sessionId, { workspacePath, providerSessionId: session.providerSessionId });
+        return { success: true };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { success: false, error: /already has an active writer/i.test(detail)
+          ? 'This chat is still open in another Codex or Nimbalyst connection. Close it there, then try again. The saved history is unchanged.'
+          : detail };
+      }
+    })();
+    writerRecoveries.set(sessionId, recover);
+    void recover.finally(() => writerRecoveries.delete(sessionId));
+    return recover;
+  });
   // Cancel current request
   safeHandle('ai:cancelRequest', async (_event, sessionId: string, chunksReceived?: number) => {
     // console.log(`[AIService] ai:cancelRequest received for sessionId: ${sessionId}`);

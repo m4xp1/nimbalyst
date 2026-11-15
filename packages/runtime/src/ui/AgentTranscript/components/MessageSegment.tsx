@@ -11,6 +11,8 @@ import { ContextLimitWidget } from './ContextLimitWidget';
 import { classifyContextFailure, isCompactionFailureText } from './contextFailureDetection';
 import { RateLimitWidget } from './RateLimitWidget';
 import { ApiServiceErrorWidget, isApiServiceError } from './ApiServiceErrorWidget';
+import { isCodexWriterConflict } from '../../../ai/codexWriterConflict';
+import { CodexWriterConflictWidget } from './CodexWriterConflictWidget';
 import { FullscreenModal } from './FullscreenModal';
 import { MaterialSymbol } from '../../icons/MaterialSymbol';
 import { formatToolDisplayName } from '../utils/toolNameFormatter';
@@ -372,6 +374,10 @@ export const MessageSegment = React.memo(function MessageSegment({
     if (!message.isError || message.type === 'tool_call') return null;
 
     const errorMessage = message.text || 'Error';
+    if (provider === 'openai-codex' && sessionId && isCodexWriterConflict(errorMessage)) {
+      return <CodexWriterConflictWidget detail={errorMessage} sessionId={sessionId}
+        messageId={message.id} isLastMessage={isLastMessage} />;
+    }
 
     // Pre-flight Codex app-server auth failure -- prefer the structured CTA
     // over the generic OpenAIAuthWidget so the user gets a one-click jump to

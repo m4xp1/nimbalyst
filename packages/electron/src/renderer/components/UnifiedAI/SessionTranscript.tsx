@@ -2045,6 +2045,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
 
       // Usage-limit auto-resume (the rate-limit card's switch)
       usageLimitAutoResumeEnabled,
+      resolveCodexWriter: () => window.electronAPI.invoke('ai:resolveCodexWriter', sessionId),
       setUsageLimitAutoResume: async (enabled: boolean, resetsAtMs: number | null) => {
         const current = workspacePath && resetsAtMs != null ? { sessionId, workspacePath, resetsAtMs } : undefined;
         await window.electronAPI.invoke('wakeup:set-usage-limit-auto-resume', enabled, current);
@@ -2330,6 +2331,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       renderFeedbackArtifactPopover: (...args) => liveHostRef.current!.renderFeedbackArtifactPopover!(...args),
       setAutoCommitEnabled: (...args) => liveHostRef.current!.setAutoCommitEnabled(...args),
       setUsageLimitAutoResume: (...args) => liveHostRef.current!.setUsageLimitAutoResume!(...args),
+      resolveCodexWriter: () => liveHostRef.current!.resolveCodexWriter!(),
       gitCommit: (...args) => liveHostRef.current!.gitCommit(...args),
       gitCommitCancel: (...args) => liveHostRef.current!.gitCommitCancel(...args),
       gitFileDiff: (...args) => liveHostRef.current!.gitFileDiff!(...args),

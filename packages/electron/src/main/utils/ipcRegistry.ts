@@ -92,6 +92,7 @@ const UNTIMED_IPC_CHANNELS = new Set<string>([
   'ai:sendMessage',
   'ai:triggerQueueProcessing',
   'ai:compactSession',
+  'ai:resolveCodexWriter',
 ]);
 
 function ipcSlowLog(channel: string, durationMs: number): void {

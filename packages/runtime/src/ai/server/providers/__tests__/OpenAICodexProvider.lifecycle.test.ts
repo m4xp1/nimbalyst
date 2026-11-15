@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OpenAICodexProvider } from '../OpenAICodexProvider';
 import { configureMcpServers } from '../../services/mcpServerConfig';
+import { CodexAppServerProtocol } from '../../protocols/CodexAppServerProtocol';
 
 interface ManualTimerHandle {
   dueAt: number;
@@ -117,10 +118,42 @@ function createHarness(options: {
     cleanupSession,
     protocolSession,
     idleScheduler,
+    protocol,
   };
 }
 
 describe('OpenAICodexProvider app-server lifecycle retention', () => {
+  it('releases only its idle connection and preserves the thread when checking recovery', async () => {
+    const h = createHarness();
+    Object.setPrototypeOf(h.protocol, CodexAppServerProtocol.prototype);
+    const checkThreadResume = vi.fn().mockResolvedValue(undefined);
+    Object.assign(h.protocol, { checkThreadResume });
+    try {
+      await drainTurn(h.provider, 'Create a saved thread');
+      const turns = h.sendMessage.mock.calls.length;
+      await h.provider.resolveWriterConflict('session-lifecycle', { workspacePath: process.cwd(), providerSessionId: 'obsolete-id' });
+      expect(checkThreadResume).toHaveBeenCalledWith('thread-retained', expect.objectContaining({ workspacePath: process.cwd() }));
+      expect(h.cleanupSession).toHaveBeenCalledWith(h.protocolSession);
+      expect(h.sendMessage).toHaveBeenCalledTimes(turns);
+      await drainTurn(h.provider, 'Next real turn');
+      expect(h.resumeSession).toHaveBeenCalledWith('thread-retained', expect.anything());
+    } finally { h.provider.destroy(); }
+  });
+
+  it('never releases an active connection for recovery', async () => {
+    let finish!: () => void;
+    const h = createHarness({ beforeTurnCompletes: () => new Promise<void>(resolve => { finish = resolve; }) });
+    Object.setPrototypeOf(h.protocol, CodexAppServerProtocol.prototype);
+    const checkThreadResume = vi.fn();
+    Object.assign(h.protocol, { checkThreadResume });
+    const turn = drainTurn(h.provider, 'Still working');
+    try {
+      await vi.waitFor(() => expect(h.sendMessage).toHaveBeenCalled());
+      await expect(h.provider.resolveWriterConflict('session-lifecycle', { workspacePath: process.cwd() })).rejects.toThrow('still working');
+      expect(h.cleanupSession).not.toHaveBeenCalled();
+      expect(checkThreadResume).not.toHaveBeenCalled();
+    } finally { finish(); await turn; h.provider.destroy(); }
+  });
   beforeEach(() => {
     configureMcpServers({ mcpServerPort: null, extensionDevServerPort: null });
     OpenAICodexProvider.setTrustChecker(() => ({ trusted: true, mode: 'allow-all' }));
