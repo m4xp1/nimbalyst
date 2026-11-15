@@ -5,7 +5,10 @@ import type { JsonRpcClient } from '@nimbalyst/runtime/ai/server/protocols/codex
 import type { CodexWorkspaceTokens } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/workspaceAuth';
 import { writePrivateFile } from '../utils/privateFile';
 
-export interface DesktopLoginIdentity { userId: string; email: string | null }
+// A subject from the ChatGPT access token cannot be used as a Nimbalyst member ID.
+type ChatGPTSubject = string & { readonly __chatGPTSubject: unique symbol };
+
+export interface DesktopLoginIdentity { userId: ChatGPTSubject; email: string | null }
 interface NativeAccount {
   sessionId: string; isActive: boolean; selectedWorkspaceAccountId: string | null;
   userId?: unknown; email?: string | null;
@@ -62,7 +65,7 @@ export class CodexDesktopWorkspace {
       const subject = token['https://api.openai.com/auth']?.chatgpt_user_id;
       const email = token['https://api.openai.com/profile']?.email ?? token.email ?? claims(tokens.id_token).email;
       if (typeof subject !== 'string' || !subject || typeof token.exp !== 'number') throw new Error(unavailable);
-      return { identity: { userId: subject, email: typeof email === 'string' ? email : null },
+      return { identity: { userId: subject as ChatGPTSubject, email: typeof email === 'string' ? email : null },
         access: tokens.access_token, id: tokens.id_token, accountId: tokens.account_id, expires: token.exp * 1000 };
     } catch { throw new Error(unavailable); }
   }
