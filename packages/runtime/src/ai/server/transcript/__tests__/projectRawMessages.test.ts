@@ -29,6 +29,15 @@ function raw(overrides: Partial<RawMessage>): RawMessage {
 }
 
 describe('projectRawMessagesToViewMessages', () => {
+  it.each(['openai-codex', 'claude-code'])('preserves portable draft context through raw and canonical storage for %s', async provider => {
+    const draftContext = { document: { filePath: 'C:/project/notes.md', content: '# Notes',
+      textSelection: { text: 'Notes', filePath: 'C:/project/notes.md', timestamp: 10 } } };
+    const messages = await projectRawMessagesToViewMessages([raw({
+      direction: 'input', source: provider, content: JSON.stringify({ prompt: 'Explain this' }),
+      metadata: { draftContext },
+    })], provider);
+    expect(messages[0]).toMatchObject({ text: 'Explain this', draftContext });
+  });
   it('returns empty array for no messages', async () => {
     const vms = await projectRawMessagesToViewMessages([], 'claude-code');
     expect(vms).toEqual([]);

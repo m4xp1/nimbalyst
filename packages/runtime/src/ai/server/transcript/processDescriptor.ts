@@ -8,6 +8,7 @@
  */
 
 import { readChatAnnotations } from '../../chatAnnotations';
+import { readMessageDraftContext } from '../../messageClipboard';
 import type { TranscriptWriter } from './TranscriptWriter';
 import type { ITranscriptEventStore, TranscriptEvent } from './types';
 import type { CanonicalEventDescriptor } from './parsers/IRawMessageParser';
@@ -26,6 +27,7 @@ export function stampPromptSource(desc: CanonicalEventDescriptor, msg: Pick<RawM
   const turnId = msg.metadata?.turnId ?? msg.metadata?.codexSteerTurnId;
   if (!desc.turnId && typeof turnId === 'string' && turnId) desc.turnId = turnId;
   if (desc.type !== 'user_message' || !msg.metadata) return desc;
+  desc.draftContext = readMessageDraftContext(msg.metadata.draftContext);
   const annotations = readChatAnnotations(msg.metadata.annotations);
   if (annotations.length) {
     desc.annotations = annotations;
@@ -83,6 +85,7 @@ export async function processDescriptor(
         mode: desc.mode,
         attachments: desc.attachments,
         annotations: desc.annotations,
+        draftContext: desc.draftContext,
         createdAt: desc.createdAt,
         promptActor: desc.promptActor,
         promptOrigin: desc.promptOrigin,

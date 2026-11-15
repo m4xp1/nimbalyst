@@ -33,6 +33,7 @@ export interface TranscriptTurnEnd {
 }
 
 export interface UserMessagePayload extends TranscriptTurnMetadata {
+  draftContext?: import('../../messageClipboard').MessageDraftContext;
   annotations?: import('../../chatAnnotations').ChatAnnotation[];
   mode: 'agent' | 'planning' | 'auto';
   inputType: 'user' | 'system_message';

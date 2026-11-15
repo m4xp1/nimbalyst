@@ -7,7 +7,8 @@ import type { TranscriptSettings } from '../types';
 import type { TranscriptFileLocation } from './MarkdownRenderer';
 import { MaterialSymbol } from '../../icons/MaterialSymbol';
 import { formatMessageTime } from '../../../utils/dateUtils';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyToClipboard, copyMessageToClipboard } from '../../../utils/clipboard';
+import { readClipboardMessage } from '../../../ai/messageClipboard';
 import { TranscriptSearchBar } from './TranscriptSearchBar';
 import { setSessionIsAtBottom, getSessionIsAtBottom } from '../../../store/atoms/transcriptScroll';
 import { isAppleMobileWebKit } from '../../../utils/platform';
@@ -999,7 +1000,13 @@ export const RichTranscriptView = React.forwardRef<
 
   const copyTranscriptViewMessageContent = useCallback(async (message: TranscriptViewMessage, index: number) => {
     try {
-      await copyToClipboard(message.text ?? '');
+      if (message.type === 'user_message') {
+        await copyMessageToClipboard(readClipboardMessage({
+          version: 1, text: message.text ?? '', context: message.draftContext,
+          annotations: message.annotations?.filter(annotation => annotation.id !== message.draftContext?.selection?.id),
+          attachments: message.attachments,
+        })!);
+      } else await copyToClipboard(message.text ?? '');
       setCopiedMessageIndex(index);
       setTimeout(() => setCopiedMessageIndex(null), 2000);
     } catch (err) {

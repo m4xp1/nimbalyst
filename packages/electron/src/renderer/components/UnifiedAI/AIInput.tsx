@@ -35,6 +35,8 @@ import {
 import { useAIInputUndo } from '../../hooks/useAIInputUndo';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
 import type { AIInputSnapshot } from '../../store/atoms/aiInputUndo';
+import type { AIInputContextSnapshot } from '../../store/atoms/aiInputUndo';
+import { decodeMessageClipboard } from '@nimbalyst/runtime/ai/messageClipboard';
 import { parseCommandTokens, type CommandToken } from './commandPills/parseCommandTokens';
 import { parseMentionTokens } from './commandPills/parseMentionTokens';
 import { HighlightOverlay, type OverlayToken } from './commandPills/HighlightOverlay';
@@ -142,6 +144,8 @@ export interface AIInputProps {
   currentFilePath?: string;
   currentFileName?: string;
   annotations?: React.ReactNode;
+  messageContext?: AIInputContextSnapshot;
+  onMessageContextChange?: (context: AIInputContextSnapshot) => void;
 
   // Test ID for E2E testing
   testId?: string;
@@ -223,6 +227,8 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
     currentFilePath,
     currentFileName,
     annotations,
+    messageContext,
+    onMessageContextChange,
     testId,
     onLaunchActionInNewSession,
   }, ref) => {
@@ -371,15 +377,17 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       return {
         value,
         attachments,
+        messageContext,
         cursorStart: ta?.selectionStart ?? value.length,
         cursorEnd: ta?.selectionEnd ?? value.length,
       };
-    }, [value, attachments]);
+    }, [value, attachments, messageContext]);
 
     // Apply a restored snapshot to the live draft atoms and the textarea
     // cursor. Used by both undo and redo.
     const applySnapshot = useCallback((snap: AIInputSnapshot) => {
       onChange(snap.value);
+      if (snap.messageContext) onMessageContextChange?.(snap.messageContext);
       // Reconcile attachments to the snapshot. Reference equality is enough
       // because both add and remove paths allocate fresh arrays upstream.
       if (snap.attachments !== attachments) {
@@ -409,7 +417,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
           // best-effort, nothing actionable.
         }
       });
-    }, [onChange, attachments, onAttachmentAdd, onAttachmentRemove]);
+    }, [onChange, attachments, onAttachmentAdd, onAttachmentRemove, onMessageContextChange]);
 
     // Replace the draft with an action-prompt body and place the cursor at
     // the end. Pushes a boundary undo snapshot so Cmd+Z restores the prior
@@ -1017,10 +1025,11 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       // Handle undo/redo (Cmd+Z, Cmd+Shift+Z, Ctrl+Y on Windows). Runs after
       // typeahead navigation so Tab/Enter inside the typeahead still wins.
       // Skip while IME composition is active so we don't interrupt kanji input.
-      const isModUndo = (e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey && !e.nativeEvent.isComposing;
+      const editKey = e.key.toLowerCase();
+      const isModUndo = (e.metaKey || e.ctrlKey) && editKey === 'z' && !e.shiftKey && !e.nativeEvent.isComposing;
       const isModRedo =
-        ((e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey && !e.nativeEvent.isComposing) ||
-        ((e.metaKey || e.ctrlKey) && e.key === 'y' && !e.nativeEvent.isComposing);
+        ((e.metaKey || e.ctrlKey) && editKey === 'z' && e.shiftKey && !e.nativeEvent.isComposing) ||
+        ((e.metaKey || e.ctrlKey) && editKey === 'y' && !e.nativeEvent.isComposing);
       if (isModUndo) {
         e.preventDefault();
         const restored = undo(captureSnapshot());
@@ -1361,6 +1370,25 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
 
     // Paste handler for images and text
     const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+      const message = onMessageContextChange && messageContext
+        ? decodeMessageClipboard(e.clipboardData.getData('text/html'), e.clipboardData.getData('text/plain')) : null;
+      if (message && onMessageContextChange && messageContext) {
+        e.preventDefault();
+        pushSnapshot(captureSnapshot(), { boundary: true });
+        const ta = textareaRef.current;
+        const start = ta?.selectionStart ?? value.length, end = ta?.selectionEnd ?? start;
+        onChange(value.slice(0, start) + message.text + value.slice(end));
+        onMessageContextChange({
+          context: { ...messageContext.context, ...message.context },
+          annotations: [...messageContext.annotations, ...(message.annotations ?? []).map(annotation => ({ ...annotation, id: crypto.randomUUID() }))],
+          selection: messageContext.selection,
+        });
+        for (const attachment of message.attachments ?? []) {
+          if (!attachments.some(existing => existing.filepath === attachment.filepath)) onAttachmentAdd?.({ ...attachment, id: crypto.randomUUID(), addedAt: Date.now() });
+        }
+        requestAnimationFrame(() => textareaRef.current?.setSelectionRange(start + message.text.length, start + message.text.length));
+        return;
+      }
       const items = Array.from(e.clipboardData.items);
 
       // Handle image attachments
@@ -1419,7 +1447,7 @@ export const AIInput = forwardRef<AIInputRef, AIInputProps>(
       // Note: ordinary in-line text pastes fall through to the textarea's
       // native paste, which fires onChange and is recorded by the typing
       // path (with coalescing).
-    }, [onAttachmentAdd, handleFileAttachment, attachPastedImage, provider, value, onChange, sessionId, pushSnapshot, captureSnapshot]);
+    }, [onAttachmentAdd, handleFileAttachment, attachPastedImage, provider, value, onChange, sessionId, pushSnapshot, captureSnapshot, messageContext, onMessageContextChange, attachments]);
 
     // Handle attachment removal
     const handleRemoveAttachment = useCallback((attachmentId: string) => {

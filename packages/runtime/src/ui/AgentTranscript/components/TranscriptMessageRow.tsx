@@ -797,7 +797,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
           <button
             onClick={() => onCopy(message, index)}
             className={`rich-transcript-copy-button p-1.5 rounded-md bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] cursor-pointer transition-all flex items-center justify-center hover:bg-[var(--nim-bg-hover)] ${isCopied ? 'copied' : ''}`}
-            title="Copy as Markdown"
+            title={isUser ? 'Copy message with context' : 'Copy as Markdown'}
           >
             {isCopied ? (
               <MaterialSymbol icon="check" size={16} className="text-[var(--nim-success)]" />

@@ -19,8 +19,10 @@ import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect,
 import { appendChatAnnotations, type ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { transcriptAnnotationLocation } from '@nimbalyst/runtime/ui/AgentTranscript/utils/transcriptAnnotationLocation';
 import type { CodexSteerResult, CodexSteerTarget } from '@nimbalyst/runtime/ai/server/protocols/codexAppServer/turnSteering';
-import { chatAnnotationContextAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
+import { chatAnnotationContextAtom, chatTextSelectionAtom, annotationSourcePreviewAtom, consumeChatAnnotationDraft, flushChatAnnotationDraft, trackChatAnnotationSubmission } from './chatAnnotationDraft';
 import { DraftAnnotationList, TranscriptAnnotationControls } from './ChatAnnotationControls';
+import { messageDraftContextAtom, consumeMessageDraftContext } from './messageDraftContext';
+import { readMessageDraftContext, appendMessageDocumentContext, type MessageDraftContext } from '@nimbalyst/runtime/ai/messageClipboard';
 import { selectionPathsMatch } from './TextSelectionIndicator';
 import { useAtom, useSetAtom, useAtomValue } from 'jotai';
 import { store, registerInteractiveWidgetHost, unregisterInteractiveWidgetHost } from '@nimbalyst/runtime/store';
@@ -211,6 +213,7 @@ function makeOptimisticUserMessage(
   mode?: 'agent' | 'planning',
   attachments?: ChatAttachment[],
   annotations?: ChatAnnotation[],
+  draftContext?: MessageDraftContext,
 ): TranscriptViewMessage {
   return {
     id: nextOptimisticId(),
@@ -223,6 +226,7 @@ function makeOptimisticUserMessage(
     attachments,
     optimistic: true,
     annotations,
+    draftContext,
   };
 }
 
@@ -295,6 +299,8 @@ function serializeDocumentContext(
   if (!documentContext) return undefined;
   return {
     filePath: documentContext.filePath,
+    fileName: documentContext.fileName,
+    draftContext: documentContext.draftContext,
     content: documentContext.content,
     fileType: documentContext.fileType,
     textSelection: documentContext.textSelection,
@@ -408,8 +414,16 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
 
   // Get effective document context - prefer getter for fresh data (reads from disk at call time)
   const getEffectiveDocumentContext = useCallback(async () => {
-    return getDocumentContext ? await getDocumentContext() : documentContext;
-  }, [getDocumentContext, documentContext]);
+    const pasted = store.get(messageDraftContextAtom(sessionId));
+    const document = pasted?.document ?? (getDocumentContext ? await getDocumentContext() : documentContext);
+    return {
+      ...document,
+      draftContext: readMessageDraftContext({
+        document: serializeDocumentContext(document),
+        selection: store.get(chatTextSelectionAtom(sessionId)) ?? pasted?.selection,
+      }),
+    };
+  }, [getDocumentContext, documentContext, sessionId]);
 
   // Get current file path for selection indicator - use static prop only
   // (getDocumentContext is async so can't be used in render - it's called on-demand when sending messages)
@@ -1099,18 +1113,22 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       return;
     }
     const annotations = store.get(chatAnnotationContextAtom(sessionId));
+    const pastedContext = store.get(messageDraftContextAtom(sessionId));
     steerFlight.current = true;
     setIsSteering(true);
     try {
       const target: CodexSteerTarget = await window.electronAPI.invoke('ai:getSteerTarget', sessionId);
+      const effectiveContext = await getEffectiveDocumentContext();
       if (!target.turnId) throw new Error('There is no active Codex turn. Your message is still in the composer.');
       const result: CodexSteerResult = await window.electronAPI.invoke('ai:steerCurrentTurn', {
         sessionId, workspacePath, expectedTurnId: target.turnId,
-        message, prompt: appendChatAnnotations(message, annotations), annotations,
+        message, prompt: appendMessageDocumentContext(appendChatAnnotations(message, annotations), effectiveContext.draftContext),
+        annotations, draftContext: effectiveContext.draftContext,
       });
       if (!result.success) throw new Error(result.error);
       setDraftInput(previous => previous.trim() === message ? '' : previous);
       consumeAnnotations(annotations);
+      consumeMessageDraftContext(sessionId, pastedContext);
     } catch (error) {
       updateSessionStore({ sessionId, updates: { messages: [
         ...store.get(sessionMessagesAtom(sessionId)), makeOptimisticError(String(error)),
@@ -1119,11 +1137,12 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       steerFlight.current = false;
       setIsSteering(false);
     }
-  }, [sessionId, workspacePath, setDraftInput, consumeAnnotations, updateSessionStore]);
+  }, [sessionId, workspacePath, setDraftInput, consumeAnnotations, updateSessionStore, getEffectiveDocumentContext]);
 
   const handleQueue = useCallback(async (message: string) => {
     if (!message.trim() || isQueueing || steerFlight.current) return;
     setIsQueueing(true);
+    const pastedContext = store.get(messageDraftContextAtom(sessionId));
 
     try {
       const currentAttachments = store.get(sessionDraftAttachmentsAtom(sessionId)) ?? [];
@@ -1153,6 +1172,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       setDraftInput('');
       setDraftAttachments([]);
       consumeAnnotations(annotations);
+      consumeMessageDraftContext(sessionId, pastedContext);
       clearAIInputHistory(sessionId);
     } catch (error) {
       console.error('[SessionTranscript] Failed to queue prompt:', error);
@@ -1187,6 +1207,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
 
   const handleSend = useCallback(async () => {
     const annotations = store.get(chatAnnotationContextAtom(sessionId));
+    const pastedContext = store.get(messageDraftContextAtom(sessionId));
     // Read draft state imperatively — we deliberately don't subscribe to
     // these atoms in SessionTranscript (see SessionAIInput).
     const currentDraftInput = store.get(sessionDraftInputAtom(sessionId)) ?? '';
@@ -1282,6 +1303,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
           clearAIInputHistory(sessionId);
           resetHistory(sessionId);
           consumeAnnotations(cliAnnotations);
+          if (!isClaudeCliTuiTrigger(cliMessage, attachments.length)) consumeMessageDraftContext(sessionId, pastedContext);
         }
         recordClaudeActivity();
       } catch (error) {
@@ -1396,7 +1418,9 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     }
     submittingRef.current = true;
     let submissionId: string;
+    let effectiveContext: SerializableDocumentContext;
     try {
+      effectiveContext = await getEffectiveDocumentContext();
       ({ submissionId } = await window.electronAPI.invoke('ai:recordPendingSubmission', sessionId, message) as { submissionId: string });
     } catch (error) {
       console.error('[SessionTranscript] Failed to record submission:', error);
@@ -1423,6 +1447,7 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       overrideMode as 'agent' | 'planning' | undefined,
       attachments.length > 0 ? attachments : undefined,
       annotations,
+      effectiveContext.draftContext,
     );
     updateSessionStore({
       sessionId,
@@ -1432,9 +1457,6 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
     });
 
     try {
-      // Get fresh document context at send time (reads from disk)
-      const effectiveContext = await getEffectiveDocumentContext();
-
       // Always send full document content - backend handles diff optimization
       const docContext = {
         ...serializeDocumentContext(effectiveContext),
@@ -1446,13 +1468,15 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
       };
 
       await flushChatAnnotationDraft(sessionId);
-      const releaseSubmission = trackChatAnnotationSubmission(sessionId, annotations);
+      const releaseSubmission = trackChatAnnotationSubmission(sessionId, annotations, () => consumeMessageDraftContext(sessionId, pastedContext));
       try {
         await window.electronAPI.invoke('ai:sendMessage', message, docContext, sessionId, workspacePath);
       } finally {
         releaseSubmission();
       }
       consumeAnnotations(annotations);
+
+      consumeMessageDraftContext(sessionId, pastedContext);
 
       // Record activity for usage tracking (wake up polling if sleeping)
       if (provider?.startsWith('claude')) {
@@ -2450,6 +2474,15 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
   // Scroll-to-message: when PromptQuickOpen selects a prompt, scroll to the
   // matching user message by timestamp.
   const scrollToMessage = useAtomValue(scrollToMessageAtom);
+  const annotationPreview = useAtomValue(annotationSourcePreviewAtom);
+  useEffect(() => {
+    const source = annotationPreview?.annotation.source;
+    if (!annotationPreview?.pending || source?.type !== 'message' || source.sessionId !== sessionId) return;
+    const location = transcriptAnnotationLocation(messages, source);
+    if (!location) return;
+    transcriptPanelRef.current?.scrollToMessage(location.startIndex, location.endIndex);
+    store.set(annotationSourcePreviewAtom, { ...annotationPreview, pending: false });
+  }, [annotationPreview, sessionId, messages]);
   const setScrollToMessage = useSetAtom(scrollToMessageAtom);
   useEffect(() => {
     if (!scrollToMessage || scrollToMessage.sessionId !== sessionId) return;
@@ -2912,6 +2945,12 @@ const LocalSessionTranscript = forwardRef<SessionTranscriptRef, SessionTranscrip
             handleFileClick(annotation.source.filePath);
           }
         } else {
+          if (annotation.source.sessionId !== sessionId) {
+            store.set(annotationSourcePreviewAtom, { ownerSessionId: sessionId, annotation, pending: true });
+            window.dispatchEvent(new CustomEvent('open-ai-session', { detail: { sessionId: annotation.source.sessionId,
+              workspacePath: store.get(sessionStoreAtom(annotation.source.sessionId))?.workspacePath ?? workspacePath } }));
+            return;
+          }
           const location = transcriptAnnotationLocation(messages, annotation.source);
           if (location) transcriptPanelRef.current?.scrollToMessage(location.startIndex, location.endIndex);
         }

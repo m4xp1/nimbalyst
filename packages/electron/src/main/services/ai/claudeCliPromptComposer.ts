@@ -27,6 +27,7 @@ import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
 import { isCollabDocumentFileType, isCollabUri } from '@nimbalyst/collab-protocol';
 
 export interface ClaudeCliDocumentContext {
+  draftContext?: import('@nimbalyst/runtime/ai/messageClipboard').MessageDraftContext;
   filePath?: string | null;
   fileType?: string | null;
   /**

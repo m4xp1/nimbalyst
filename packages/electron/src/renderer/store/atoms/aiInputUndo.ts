@@ -21,8 +21,17 @@
 import { atom } from 'jotai';
 import { atomFamily } from '../debug/atomFamilyRegistry';
 import type { ChatAttachment } from '@nimbalyst/runtime/ai/server/types';
+import type { MessageDraftContext } from '@nimbalyst/runtime/ai/messageClipboard';
+import type { ChatAnnotation } from '@nimbalyst/runtime/ai/chatAnnotations';
+
+export interface AIInputContextSnapshot {
+  context: MessageDraftContext | null;
+  annotations: ChatAnnotation[];
+  selection: ChatAnnotation | null;
+}
 
 export interface AIInputSnapshot {
+  messageContext?: AIInputContextSnapshot;
   value: string;
   attachments: ChatAttachment[];
   cursorStart: number;

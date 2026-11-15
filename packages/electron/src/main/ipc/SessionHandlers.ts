@@ -319,6 +319,9 @@ export async function registerSessionHandlers() {
             if (updates.metadata && Object.hasOwn(updates.metadata, 'draftAnnotations')) {
                 rendererUpdate.metadata = { draftAnnotations: updates.metadata.draftAnnotations };
             }
+            if (updates.metadata && Object.hasOwn(updates.metadata, 'draftMessageContext')) {
+                rendererUpdate.metadata = { ...(rendererUpdate.metadata as object), draftMessageContext: updates.metadata.draftMessageContext };
+            }
 
             if (Object.keys(rendererUpdate).length > 0) {
                 for (const window of BrowserWindow.getAllWindows()) {

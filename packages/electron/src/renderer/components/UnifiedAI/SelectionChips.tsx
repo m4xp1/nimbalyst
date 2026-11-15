@@ -1,6 +1,8 @@
 import React, { useState, useSyncExternalStore } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { chatTextSelectionAtom } from './chatAnnotationDraft';
+import { messageDraftContextAtom, setMessageDraftContext } from './messageDraftContext';
+import type { MessageDocumentContext } from '@nimbalyst/runtime/ai/messageClipboard';
 import {
   getEditorContextEntry,
   dismissEditorContextItem,
@@ -71,6 +73,16 @@ function getCombinedSnapshot(): number {
 export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath, currentFileName, sessionId }) => {
   useSyncExternalStore(subscribeAll, getCombinedSnapshot);
   const [chatSelection, setChatSelection] = useAtom(chatTextSelectionAtom(sessionId ?? ''));
+  const pasted = useAtomValue(messageDraftContextAtom(sessionId ?? ''));
+  const pastedDocument = pasted?.document;
+  const removePastedField = (key: keyof MessageDocumentContext) => {
+    if (!sessionId || !pastedDocument) return;
+    const document = { ...pastedDocument };
+    delete document[key];
+    setMessageDraftContext(sessionId, { ...pasted, document });
+  };
+  const displayedFilePath = pastedDocument?.filePath ?? currentFilePath;
+  const displayedFileName = pastedDocument?.fileName ?? currentFileName;
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   const extensionChips: Chip[] = [];
@@ -81,6 +93,11 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
     otherChips.push({ key: 'chat-selection', icon: 'text_select_start', label: 'Selection', preview,
       tooltip: `Selected chat text will be included: "${preview}"`, onRemove: () => setChatSelection(null) });
   }
+  if (sessionId && pasted?.selection) {
+    otherChips.push({ key: 'pasted-selection', icon: 'text_select_start', label: 'Selection',
+      preview: pasted.selection.quote, tooltip: 'Copied chat selection',
+      onRemove: () => setMessageDraftContext(sessionId, { ...pasted, selection: undefined }) });
+  }
 
   // --- Extension-provided items (node-like editors, multi-selection) ---
   // Strictly scope to the panel's active document. Every mode that can hold a
@@ -89,7 +106,12 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
   // falling back to the most-recent entry — that fallback leaked a previous
   // mode's selection (e.g. a collab spreadsheet's cells) into an unrelated
   // panel after a mode switch.
-  const entry = currentFilePath ? getEditorContextEntry(currentFilePath) : null;
+  const entry = pastedDocument ? null : currentFilePath ? getEditorContextEntry(currentFilePath) : null;
+  for (const item of pastedDocument?.editorContextItems ?? []) {
+    extensionChips.push({ key: 'pasted:' + item.id, label: item.label, icon: item.icon, tooltip: item.description,
+      onRemove: () => sessionId && setMessageDraftContext(sessionId, { ...pasted,
+        document: { ...pastedDocument, editorContextItems: pastedDocument?.editorContextItems?.filter(other => other.id !== item.id) } }) });
+  }
   let dismissedCount = 0;
   if (entry) {
     for (const item of entry.items) {
@@ -113,7 +135,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
   // extension items above): show the selection only when it belongs to the doc
   // this panel is focused on, so a selection made in another mode does not leak
   // into an unrelated chat panel after a mode switch.
-  const textSelection = getTextSelectionForFile(currentFilePath);
+  const textSelection = pastedDocument ? pastedDocument.textSelection : getTextSelectionForFile(currentFilePath);
   if (textSelection?.text.trim()) {
     const normalizedText = textSelection.text.replace(/\s+/g, ' ').trim();
     const preview = normalizedText.length > 80 ? normalizedText.slice(0, 80) + '…' : normalizedText;
@@ -123,7 +145,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
       label: 'Selection',
       preview,
       tooltip: `Selected text will be included: "${preview}"`,
-      onRemove: () => clearTextSelection(),
+      onRemove: () => pastedDocument ? removePastedField('textSelection') : clearTextSelection(),
     });
   }
 
@@ -132,6 +154,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
   const hasMockupAnnotations =
     !!(window as any).__mockupDrawing || !!(window as any).__mockupSelectedElement;
   const mockupMatchesFile =
+    !pastedDocument &&
     !!mockupFilePath &&
     hasMockupAnnotations &&
     !!currentFilePath &&
@@ -144,6 +167,11 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
       tooltip: 'Annotations drawn on your mockup will be included with your prompt',
       onRemove: () => clearMockupAnnotationsForFile(mockupFilePath),
     });
+  }
+  if (pastedDocument?.mockupSelection || pastedDocument?.mockupDrawing) {
+    otherChips.push({ key: 'pasted-mockup', icon: 'draw', label: 'Mockup annotations', onRemove: () => {
+      if (sessionId) setMessageDraftContext(sessionId, { ...pasted, document: { ...pastedDocument, mockupSelection: undefined, mockupDrawing: undefined } });
+    } });
   }
 
   const grouped = new Map<string, Chip[]>();
@@ -173,7 +201,7 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
 
   const chips = [...visibleExtensionChips, ...otherChips];
 
-  if (!currentFilePath && chips.length === 0 && dismissedCount === 0) {
+  if (!displayedFilePath && chips.length === 0 && dismissedCount === 0) {
     return null;
   }
 
@@ -188,14 +216,18 @@ export const SelectionChips: React.FC<SelectionChipsProps> = ({ currentFilePath,
         marginBottom: '4px',
       }}
     >
-      {currentFilePath && (
+      {displayedFilePath && (
         <div
           className="document-context-indicator flex min-w-0 max-w-full items-center gap-1 rounded border border-nim bg-nim-secondary px-2 py-1 text-xs text-nim-muted"
-          title={`Included with your message: ${currentFilePath}`}
+          title={`Included with your message: ${displayedFilePath}`}
         >
           <span className="material-symbols-outlined shrink-0" style={{ fontSize: '14px' }} aria-hidden="true">description</span>
           <span className="shrink-0 text-nim-faint">Context:</span>
-          <span className="truncate text-nim">{currentFileName || currentFilePath.split(/[\\/]/).pop() || currentFilePath}</span>
+          <span className="truncate text-nim">{displayedFileName || displayedFilePath.split(/[\\/]/).pop() || displayedFilePath}</span>
+          {pastedDocument && sessionId && <button type="button" aria-label="Remove copied document context"
+            onClick={() => setMessageDraftContext(sessionId, { ...pasted, document: undefined })}>
+            <span className="material-symbols-outlined text-sm">close</span>
+          </button>}
         </div>
       )}
       {chips.map((chip) => (

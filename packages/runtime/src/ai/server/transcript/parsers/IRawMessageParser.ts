@@ -46,6 +46,7 @@ export interface ParseContext {
 // ---------------------------------------------------------------------------
 
 export interface UserMessageDescriptor extends TranscriptTurnMetadata {
+  draftContext?: UserMessagePayload['draftContext'];
   type: 'user_message';
   text: string;
   mode?: 'agent' | 'planning' | 'auto';

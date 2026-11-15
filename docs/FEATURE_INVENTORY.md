@@ -89,7 +89,7 @@ Twelve built-in provider lanes, plus any agent an extension contributes. Every l
 - Session pinning
 - Session branching / forking
 - Session tags and phase tracking
-- Session HTML export and clipboard copy
+- Session HTML export and clipboard copy. Desktop user-message copy includes annotations, chat/document Selection, document and editor context, and attachment references; ordinary paste restores these into another session draft, with undo/redo and persisted context. Other applications receive readable plain text. New messages retain their submitted context snapshot; older messages can only copy context already stored in their history.
 - Shareable session links (E2E encrypted, 1/7/30 day expiry)
 - Live import of external Claude Code and Codex CLI sessions — opt in with **Follow external agent sessions** under **Settings → Agent Features** (OFF by default); follow sessions in open workspaces and their worktrees into the session list and open transcripts, including later title updates while preserving names set in Nimbalyst
 - Manual import of earlier Claude Code and Codex CLI sessions remains available with live following OFF

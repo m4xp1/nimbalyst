@@ -10,6 +10,7 @@ export interface CodexSteerRequest {
   message: string;
   prompt?: string;
   annotations?: readonly unknown[];
+  draftContext?: import('../../../messageClipboard').MessageDraftContext;
 }
 
 export type CodexSteerResult =

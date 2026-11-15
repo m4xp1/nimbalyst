@@ -10,7 +10,7 @@ import {
 import type { FloatingTextToolbarAction } from '@nimbalyst/runtime/editor/plugins/FloatingTextFormatToolbarPlugin/types';
 import {
   AnnotationSessionContext, chatAnnotationDraftAtom, flushChatAnnotationDraft,
-  openChatAnnotationAtom, revealChatAnnotationAtom, updateChatAnnotationDraft, chatTextSelectionAtom,
+  openChatAnnotationAtom, revealChatAnnotationAtom, updateChatAnnotationDraft, chatTextSelectionAtom, annotationSourcePreviewAtom,
   type ChatAnnotationEditorRequest,
 } from './chatAnnotationDraft';
 import { annotationEndRect, annotationTextNodes, selectionFocusRect, transcriptTextRange } from './transcriptSelection';
@@ -323,6 +323,7 @@ export function FileAnnotationMarkers({ sessionId, root, filePath }: {
 }
 
 export function TranscriptAnnotationControls({ sessionId, root }: { sessionId: string; root: HTMLElement }) {
+  const preview = useAtomValue(annotationSourcePreviewAtom);
   const [, setOpen] = useAtom(openChatAnnotationAtom(sessionId));
   const [chatSelection, setChatSelection] = useAtom(chatTextSelectionAtom(sessionId));
   const ownedSelection = useRef<string | null>(null);
@@ -437,6 +438,8 @@ export function TranscriptAnnotationControls({ sessionId, root }: { sessionId: s
   return (
     <>
       <ChatAnnotationMarkers sessionId={sessionId} root={root} sourceRoot={sourceRoot} />
+      {preview && preview.ownerSessionId !== sessionId && preview.annotation.source.type === 'message' && preview.annotation.source.sessionId === sessionId &&
+        <ChatAnnotationMarkers sessionId={preview.ownerSessionId} root={root} sourceRoot={sourceRoot} />}
       {target && !dragging && (
         <FloatingPortal>
           <button ref={refs.setFloating} style={{ ...floatingStyles, visibility: middlewareData?.hide?.referenceHidden ? 'hidden' : undefined }} type="button"

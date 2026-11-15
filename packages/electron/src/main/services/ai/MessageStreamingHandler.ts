@@ -1,4 +1,5 @@
 import { appendChatAnnotations, readChatAnnotations } from '@nimbalyst/runtime/ai/chatAnnotations';
+import { readMessageDraftContext } from '@nimbalyst/runtime/ai/messageClipboard';
 import { claimExternalSessionForLocalExecution } from '../externalSessions/ExternalSessionService';
 import { warnIfUnpublished } from '@nimbalyst/runtime/sync/pushOutcome';
 import type { SessionChange } from '@nimbalyst/runtime/sync/types';
@@ -1415,6 +1416,7 @@ export class MessageStreamingHandler {
       const effectiveMode = documentContext?.mode ?? session.mode;
 
       const contextWithSession: DocumentContext = {
+        draftContext: readMessageDraftContext(documentContext?.draftContext),
         ...(chatAnnotations.length ? { chatAnnotations, annotationDisplayPrompt: message } : {}),
         // Document fields from prepared context
         filePath: preparedContext.filePath,

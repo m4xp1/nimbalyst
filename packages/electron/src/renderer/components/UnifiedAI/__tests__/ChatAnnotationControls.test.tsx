@@ -242,6 +242,20 @@ describe('chat annotation draft persistence', () => {
     release();
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+  it('acknowledges copied context once even when the submitted draft has no annotations', () => {
+    const accepted = vi.fn();
+    const release = trackChatAnnotationSubmission('copied-context-only', [], accepted);
+    expect(accepted).not.toHaveBeenCalled();
+    acceptChatAnnotationSubmission('copied-context-only');
+    acceptChatAnnotationSubmission('copied-context-only');
+    release();
+    expect(accepted).toHaveBeenCalledTimes(1);
+
+    const cancelled = vi.fn();
+    trackChatAnnotationSubmission('cancelled-context-only', [], cancelled)();
+    acceptChatAnnotationSubmission('cancelled-context-only');
+    expect(cancelled).not.toHaveBeenCalled();
+  });
   it('flushes the last keystroke once and does not write it again after the timer', async () => {
     vi.useFakeTimers();
     try {

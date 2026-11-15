@@ -3035,7 +3035,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     const result = await this.protocol.steerTurn(session, expectedTurnId, request.prompt ?? request.message);
     if (result.success) {
       await this.logAgentMessageBestEffort(sessionId, 'input', JSON.stringify({ prompt: request.message }), {
-        metadata: { annotations: request.annotations, codexSteerTurnId: result.turnId },
+        metadata: { annotations: request.annotations, draftContext: request.draftContext, codexSteerTurnId: result.turnId },
       });
     }
     return result;
