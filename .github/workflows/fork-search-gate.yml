@@ -87,6 +87,8 @@ jobs:
           packages/runtime/src/ai/server/providers/__tests__/OpenAICodexProvider.lifecycle.test.ts
           packages/runtime/src/ui/AgentTranscript/components/__tests__/CodexWriterConflictWidget.test.tsx
           packages/runtime/src/ui/AgentTranscript/hooks/__tests__/useTranscriptSelectionRetention.test.tsx
+          packages/runtime/src/editor/plugins/CommentPlugin/__tests__/toolbarAction.test.ts
+          packages/runtime/src/editor/plugins/PageMarkPlugin/__tests__/PageMarkEditorPlugin.test.tsx
       - name: Mandatory schema and editor coordination regressions
         run: >-
           pnpm exec vitest run
