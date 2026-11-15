@@ -11,9 +11,11 @@ import { DraftAnnotationList, FileAnnotationMarkers, TranscriptAnnotationControl
 import {
   AnnotationSessionContext, AnnotationSessionProvider, acceptChatAnnotationSubmission, applyChatAnnotationSnapshot, chatAnnotationDraftAtom,
   consumeChatAnnotationDraft, flushAllChatAnnotationDrafts, flushChatAnnotationDraft, trackChatAnnotationSubmission, updateChatAnnotationDraft,
+  chatAnnotationContextAtom, chatTextSelectionAtom, revealChatAnnotationAtom,
 } from '../chatAnnotationDraft';
 import { getTextSelection, setTextSelection } from '../TextSelectionIndicator';
 import { AnnotationEditorProvider } from '../AnnotationEditorProvider';
+import { SelectionChips } from '../SelectionChips';
 
 vi.mock('../../../store/atoms/sessions', async () => {
   const { atom } = await import('jotai');
@@ -42,7 +44,7 @@ vi.mock('@floating-ui/react', async (importOriginal) => {
   return {
     ...actual,
     FloatingPortal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    useFloating: () => ({ refs, floatingStyles: {} }),
+    useFloating: () => ({ refs, floatingStyles: {}, middlewareData: {} }),
   };
 });
 
@@ -72,7 +74,60 @@ function FileAnnotationHarness({ editor, filePath }: { editor: LexicalEditor; fi
 }
 
 const invoke = vi.fn();
+
+describe('annotation text highlights', () => {
+  it('keeps independent surfaces highlighted and removes only a deleted or unmounted annotation', () => {
+    const highlights = new Map<string, Set<Range>>();
+    vi.stubGlobal('CSS', { highlights });
+    vi.stubGlobal('Highlight', class extends Set<Range> {
+      constructor(...ranges: Range[]) { super(ranges); }
+    });
+    const roots = ['first', 'second'].map(name => {
+      const root = document.createElement('p');
+      root.textContent = 'Before the selected words after.';
+      document.body.append(root);
+      vi.spyOn(root, 'getClientRects').mockReturnValue([new DOMRect(0, 0, 400, 40)] as unknown as DOMRectList);
+      hydrate(`highlight-${name}`, [makeAnnotation('Saved note')]);
+      return root;
+    });
+    const view = (second = true) => <Provider store={store}>
+      <FileAnnotationMarkers sessionId="highlight-first" root={roots[0]} filePath="/workspace/notes.md" />
+      {second && <FileAnnotationMarkers sessionId="highlight-second" root={roots[1]} filePath="/workspace/notes.md" />}
+    </Provider>;
+    const original = roots.map(root => root.innerHTML);
+    const { rerender, unmount } = render(view());
+    const highlighted = () => [...(highlights.get('chat-annotations') ?? [])].map(range => range.toString());
+    expect(highlighted()).toEqual(['the selected words', 'the selected words']);
+    rerender(view(false));
+    expect(highlighted()).toEqual(['the selected words']);
+    act(() => updateChatAnnotationDraft('highlight-first', () => []));
+    expect(highlighted()).toEqual([]);
+    expect(roots.map(root => root.innerHTML)).toEqual(original);
+    unmount(); roots.forEach(root => root.remove());
+  });
+
+  it('highlights quoted text across messages without highlighting message headers', () => {
+    const highlights = new Map<string, Set<Range>>();
+    vi.stubGlobal('CSS', { highlights });
+    vi.stubGlobal('Highlight', class extends Set<Range> {
+      constructor(...ranges: Range[]) { super(ranges); }
+    });
+    const root = document.createElement('section');
+    root.innerHTML = '<div data-annotation-message-id="new-1" data-annotation-message-sequence="1"><header class="rich-transcript-message-header">OpenAI 12:00</header><p>first</p></div><div data-annotation-message-id="new-2" data-annotation-message-sequence="2"><header class="rich-transcript-message-header">You 12:01</header><p>last</p></div>';
+    document.body.append(root);
+    for (const child of root.children) vi.spyOn(child, 'getClientRects').mockReturnValue([new DOMRect(0, 0, 400, 40)] as unknown as DOMRectList);
+    const sessionId = 'highlight-span';
+    hydrate(sessionId, [{ ...makeAnnotation('Comment'), quote: 'firstlast', before: '', after: '',
+      source: { type: 'message', sessionId, messageId: 'old-1', messageSequence: 1, endMessageId: 'old-2', endMessageSequence: 2 } }]);
+    const { unmount } = render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /></Provider>);
+    expect([...(highlights.get('chat-annotations') ?? [])].map(range => range.toString())).toEqual(['first', 'last']);
+    unmount(); root.remove();
+    expect(highlights.has('chat-annotations')).toBe(false);
+  });
+});
+
 beforeEach(() => {
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect(20, 200, 100, 20);
   positionReference.mockClear();
   invoke.mockReset().mockResolvedValue({ success: true });
   vi.stubGlobal('electronAPI', { invoke });
@@ -86,7 +141,21 @@ afterEach(async () => {
 });
 
 describe('chat annotation draft persistence', () => {
-  it('finds a file marker from the separate draft root and reopens its editor', async () => {
+  it('sends a transient chat selection once and preserves a newer selection while sending', async () => {
+    const sessionId = 'transient-selection-send';
+    const selected = { ...makeAnnotation(''), source: { type: 'message' as const, sessionId, messageId: 'first' } };
+    store.set(chatTextSelectionAtom(sessionId), selected);
+    const sent = store.get(chatAnnotationContextAtom(sessionId));
+    expect(sent).toEqual([selected]);
+    const next = { ...selected, id: 'next-selection', quote: 'Another selection' };
+    store.set(chatTextSelectionAtom(sessionId), next);
+    await consumeChatAnnotationDraft(sessionId, sent);
+    expect(store.get(chatAnnotationContextAtom(sessionId))).toEqual([next]);
+    await consumeChatAnnotationDraft(sessionId, [next]);
+    expect(store.get(chatAnnotationContextAtom(sessionId))).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('finds a file marker from the separate draft root without opening either editor', async () => {
     const click = (button: HTMLElement) => {
       fireEvent.pointerDown(button);
       act(() => button.focus());
@@ -96,11 +165,12 @@ describe('chat annotation draft persistence', () => {
     const sessionId = 'annotation-find-separate-root';
     const paragraph = document.createElement('p');
     paragraph.textContent = 'Before the selected words after.';
-    paragraph.scrollIntoView = vi.fn();
+    paragraph.scrollBy = vi.fn();
+    vi.spyOn(paragraph, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 200, 100));
     const rect = new DOMRect(20, 200, 400, 25);
     vi.spyOn(paragraph, 'getClientRects').mockReturnValue(Object.assign([rect], { item: () => rect }));
     document.body.append(paragraph);
-    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => { listener(paragraph); return () => {}; } } as LexicalEditor;
+    const editor = { update: vi.fn(), registerRootListener: (listener: (root: HTMLElement) => void) => { listener(paragraph); return () => {}; } } as unknown as LexicalEditor;
     hydrate(sessionId, [makeAnnotation('Find this note')]);
     try {
       render(<Provider store={store}><AnnotationSessionProvider value={sessionId}><FileAnnotationHarness editor={editor} filePath="/workspace/notes.md" /></AnnotationSessionProvider></Provider>);
@@ -111,9 +181,55 @@ describe('chat annotation draft persistence', () => {
       click(ui.getByText('1 annotation'));
       click(ui.getByRole('button', { name: '1. the selected words' }));
       click(ui.getByRole('button', { name: 'Find annotation source' }));
-      await waitFor(() => expect(paragraph.scrollIntoView).toHaveBeenCalled());
-      expect((await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment' })).value).toBe('Find this note');
+      await waitFor(() => expect(paragraph.scrollBy).toHaveBeenCalled());
+      await waitFor(() => expect(store.get(revealChatAnnotationAtom(sessionId))).toBeNull());
+      expect(screen.queryByRole('textbox', { name: 'Annotation comment' })).toBeNull();
+      expect(screen.queryByRole('textbox', { name: 'Annotation comment in draft' })).toBeNull();
     } finally { paragraph.remove(); }
+  });
+  it('opens from the toolbar click even when the selected source has no rendered marker', () => {
+    const sessionId = 'annotation-editor-without-marker';
+    const paragraph = document.createElement('p');
+    paragraph.textContent = 'the selected words';
+    document.body.append(paragraph);
+    const editor = { update: vi.fn(), registerRootListener: (listener: (root: HTMLElement) => void) => { listener(paragraph); return () => {}; } } as unknown as LexicalEditor;
+    try {
+      render(<Provider store={store}><AnnotationSessionProvider value={sessionId}>
+        <FileAnnotationHarness editor={editor} filePath="/workspace/notes.md" />
+      </AnnotationSessionProvider></Provider>);
+      const range = document.createRange(); range.selectNodeContents(paragraph);
+      window.getSelection()!.addRange(range);
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }), { detail: 1, clientX: 315, clientY: 125 });
+      expect(screen.queryByRole('button', { name: 'Edit annotation 1' })).toBeNull();
+      const comment = screen.getByRole('textbox', { name: 'Annotation comment' });
+      fireEvent.change(comment, { target: { value: 'Visible at the click' } });
+      expect(store.get(chatAnnotationDraftAtom(sessionId))[0].comment).toBe('Visible at the click');
+      expect(positionReference.mock.calls.some(([reference]) => {
+        const rect = reference.getBoundingClientRect();
+        return rect.x === 315 && rect.y === 125 && rect.width === 0 && rect.height === 0;
+      })).toBe(true);
+    } finally { paragraph.remove(); }
+  });
+  it('opens the marker editor only in the clicked surface and anchors it to that click', () => {
+    const sessionId = 'annotation-click-surface';
+    hydrate(sessionId, [makeAnnotation('Saved comment')]);
+    const roots = [0, 1].map(() => {
+      const root = document.createElement('p');
+      root.textContent = 'the selected words';
+      document.body.append(root);
+      vi.spyOn(root, 'getClientRects').mockReturnValue([new DOMRect(20, 200, 400, 40)] as unknown as DOMRectList);
+      return root;
+    });
+    try {
+      render(<Provider store={store}>{roots.map((root, index) =>
+        <FileAnnotationMarkers key={index} sessionId={sessionId} root={root} filePath="/workspace/notes.md" />)}</Provider>);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Edit annotation 1' })[0], { detail: 1, clientX: 425, clientY: 280 });
+      expect(screen.getAllByRole('textbox', { name: 'Annotation comment' })).toHaveLength(1);
+      expect(positionReference.mock.calls.some(([reference]) => {
+        const rect = reference.getBoundingClientRect();
+        return rect.x === 425 && rect.y === 280 && rect.width === 0 && rect.height === 0;
+      })).toBe(true);
+    } finally { roots.forEach(root => root.remove()); }
   });
   it('clears annotations when the user message is persisted while the agent is still running', async () => {
     const sessionId = 'annotation-accepted-message';
@@ -125,6 +241,20 @@ describe('chat annotation draft persistence', () => {
     await flushChatAnnotationDraft(sessionId);
     release();
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+  it('acknowledges copied context once even when the submitted draft has no annotations', () => {
+    const accepted = vi.fn();
+    const release = trackChatAnnotationSubmission('copied-context-only', [], accepted);
+    expect(accepted).not.toHaveBeenCalled();
+    acceptChatAnnotationSubmission('copied-context-only');
+    acceptChatAnnotationSubmission('copied-context-only');
+    release();
+    expect(accepted).toHaveBeenCalledTimes(1);
+
+    const cancelled = vi.fn();
+    trackChatAnnotationSubmission('cancelled-context-only', [], cancelled)();
+    acceptChatAnnotationSubmission('cancelled-context-only');
+    expect(cancelled).not.toHaveBeenCalled();
   });
   it('flushes the last keystroke once and does not write it again after the timer', async () => {
     vi.useFakeTimers();
@@ -217,12 +347,126 @@ describe('chat annotation draft persistence', () => {
 });
 
 describe('adding and editing chat annotations', () => {
+  it.each(['collapse', 'remove'] as const)('removes transient context when the native chat selection is cancelled (%s)', method => {
+    const sessionId = `cancel-chat-selection-${method}`;
+    const root = document.createElement('section');
+    root.innerHTML = '<p data-annotation-message-id="answer" data-annotation-message-sequence="1">Selected answer text</p>';
+    document.body.append(root);
+    hydrate(sessionId, [makeAnnotation('Keep the saved annotation')]);
+    try {
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /><SelectionChips sessionId={sessionId} /></Provider>);
+      const selection = window.getSelection()!;
+      const range = document.createRange(); range.selectNodeContents(root.firstElementChild!);
+      selection.addRange(range); fireEvent(document, new Event('selectionchange'));
+      expect(store.get(chatAnnotationContextAtom(sessionId))).toHaveLength(2);
+      if (method === 'collapse') selection.collapseToEnd(); else selection.removeAllRanges();
+      fireEvent(document, new Event('selectionchange'));
+      expect(screen.queryByRole('button', { name: 'Remove Selection from context' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Add annotation' })).toBeNull();
+      expect(store.get(chatAnnotationContextAtom(sessionId))).toEqual([makeAnnotation('Keep the saved annotation')]);
+    } finally { root.remove(); }
+  });
+
+  it('clears the native selection when its chip is dismissed so it cannot return on a later selection event', () => {
+    const sessionId = 'dismiss-chat-selection';
+    const root = document.createElement('section'); root.innerHTML = '<p data-annotation-message-id="answer" data-annotation-message-sequence="1">Selected answer</p>';
+    document.body.append(root);
+    try {
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /><SelectionChips sessionId={sessionId} /></Provider>);
+      const range = document.createRange(); range.selectNodeContents(root.firstElementChild!);
+      window.getSelection()!.addRange(range); fireEvent(document, new Event('selectionchange'));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Selection from context' }));
+      fireEvent(document, new Event('selectionchange'));
+      expect(window.getSelection()!.toString()).toBe('');
+      expect(store.get(chatTextSelectionAtom(sessionId))).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Add annotation' })).toBeNull();
+    } finally { root.remove(); }
+  });
+
+  it('keeps the selection owned by another open view of the same session and clears only the current owner', () => {
+    const sessionId = 'selection-multiple-views';
+    const first = document.createElement('section'), second = document.createElement('section');
+    first.innerHTML = second.innerHTML = '<p data-annotation-message-id="answer" data-annotation-message-sequence="1">Same selected answer</p>';
+    document.body.append(first, second);
+    try {
+      // Reverse registration order makes the former view handle the event last.
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={second} /><TranscriptAnnotationControls sessionId={sessionId} root={first} /></Provider>);
+      const select = (root: HTMLElement) => {
+        window.getSelection()!.removeAllRanges();
+        const range = document.createRange(); range.selectNodeContents(root.firstElementChild!);
+        window.getSelection()!.addRange(range); fireEvent(document, new Event('selectionchange'));
+      };
+      select(first); select(second);
+      expect(store.get(chatTextSelectionAtom(sessionId))?.quote).toBe('Same selected answer');
+      window.getSelection()!.collapseToEnd(); fireEvent(document, new Event('selectionchange'));
+      expect(store.get(chatTextSelectionAtom(sessionId))).toBeNull();
+    } finally { first.remove(); second.remove(); }
+  });
+
+  it('keeps selected context while composing but drops it when the user deselects in the transcript', () => {
+    const sessionId = 'selection-compose';
+    const root = document.createElement('section'); root.innerHTML = '<p data-annotation-message-id="answer" data-annotation-message-sequence="1">Selected answer</p>';
+    document.body.append(root);
+    try {
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /><div className="ai-chat-input"><textarea aria-label="Message" /></div></Provider>);
+      const range = document.createRange(); range.selectNodeContents(root.firstElementChild!);
+      window.getSelection()!.addRange(range); fireEvent(document, new Event('selectionchange'));
+      screen.getByRole('textbox', { name: 'Message' }).focus();
+      window.getSelection()!.removeAllRanges(); fireEvent(document, new Event('selectionchange'));
+      expect(store.get(chatTextSelectionAtom(sessionId))?.quote).toBe('Selected answer');
+      (document.activeElement as HTMLElement).blur();
+      fireEvent(root, new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+      fireEvent(root, new MouseEvent('pointerup', { button: 0, bubbles: true }));
+      expect(store.get(chatTextSelectionAtom(sessionId))).toBeNull();
+    } finally { root.remove(); }
+  });
+
+  it('offers Find and Delete on a closed annotation without opening its editor', async () => {
+    const sessionId = 'annotation-row-actions';
+    const annotation = makeAnnotation('A retained note');
+    hydrate(sessionId, [annotation]);
+    const navigate = vi.fn();
+    render(<Provider store={store}><DraftAnnotationList sessionId={sessionId} navigate={navigate} /></Provider>);
+    fireEvent.click(screen.getByText('1 annotation'));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Find annotation source' }));
+    expect(navigate).toHaveBeenCalledWith(annotation);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete annotation' }));
+    expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([]);
+    await flushChatAnnotationDraft(sessionId);
+    expect(invoke).toHaveBeenLastCalledWith('sessions:update-metadata', sessionId,
+      expect.objectContaining({ metadata: { draftAnnotations: [] } }));
+  });
+
+  it('adds a selection across assistant, collapsed tools and user messages to the active session context', () => {
+    const sessionId = 'annotation-multiple-messages';
+    const root = document.createElement('section');
+    root.innerHTML = '<p data-annotation-message-id="reply" data-annotation-message-sequence="2">Assistant answer</p><div data-annotation-message-id="tools" data-annotation-message-sequence="3">Worked for 1m</div><p data-annotation-message-id="user" data-annotation-message-sequence="4">User message</p>';
+    document.body.append(root);
+    try {
+      render(<Provider store={store}><TranscriptAnnotationControls sessionId={sessionId} root={root} /><SelectionChips sessionId={sessionId} /></Provider>);
+      const range = document.createRange();
+      range.setStart(root.firstElementChild!.firstChild!, 0);
+      range.setEnd(root.lastElementChild!.firstChild!, 12);
+      window.getSelection()!.addRange(range);
+      fireEvent(document, new Event('selectionchange'));
+      expect(screen.getByRole('button', { name: 'Remove Selection from context' })).toBeDefined();
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
+      expect(screen.queryByRole('button', { name: 'Remove Selection from context' })).toBeNull();
+      expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([expect.objectContaining({
+        quote: 'Assistant answerWorked for 1mUser message',
+        source: { type: 'message', sessionId, messageId: 'reply', endMessageId: 'user', messageSequence: 2, endMessageSequence: 4 },
+      })]);
+    } finally { root.remove(); }
+  });
+
   it.each([false, true])('anchors a multiline transcript selection at its focus and adds the exact quote (backward=%s)', backward => {
     vi.stubGlobal('CSS', { escape: (value: string) => value });
     const sessionId = `annotation-focus-${backward}`;
     const root = document.createElement('section');
     const paragraph = document.createElement('p');
     paragraph.dataset.annotationMessageId = 'multiline-message';
+    paragraph.dataset.annotationMessageSequence = '5';
     paragraph.textContent = 'First line\nSecond line';
     root.append(paragraph); document.body.append(root);
     const savedRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect');
@@ -239,8 +483,8 @@ describe('adding and editing chat annotations', () => {
       const reference = positionReference.mock.calls.at(-1)![0];
       const rect = reference.getBoundingClientRect();
       expect({ x: rect.x, y: rect.y, width: rect.width }).toEqual({ x: backward ? 10 : 90, y: backward ? 20 : 50, width: 0 });
-      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
-      expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([expect.objectContaining({ quote: 'First line\nSecond line', source: { type: 'message', sessionId, messageId: 'multiline-message' } })]);
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
+      expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([expect.objectContaining({ quote: 'First line\nSecond line', source: { type: 'message', sessionId, messageId: 'multiline-message', messageSequence: 5 } })]);
     } finally {
       if (savedRect) Object.defineProperty(Range.prototype, 'getBoundingClientRect', savedRect); else delete (Range.prototype as any).getBoundingClientRect;
       if (savedRects) Object.defineProperty(Range.prototype, 'getClientRects', savedRects); else delete (Range.prototype as any).getClientRects;
@@ -256,17 +500,18 @@ describe('adding and editing chat annotations', () => {
     const paragraph = document.createElement('p');
     paragraph.textContent = 'Before the selected words after.';
     document.body.append(paragraph);
-    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => {
+    const editor = { update: vi.fn(), registerRootListener: (listener: (root: HTMLElement) => void) => {
       listener(paragraph);
       return () => {};
-    } } as LexicalEditor;
+    } } as unknown as LexicalEditor;
     render(<AnnotationEditorProvider target={target}><FileAnnotationHarness editor={editor} filePath="/workspace/root.md" /></AnnotationEditorProvider>);
     const add = () => {
       const range = document.createRange();
       range.setStart(paragraph.firstChild!, 7);
       range.setEnd(paragraph.firstChild!, 25);
+      window.getSelection()!.removeAllRanges();
       window.getSelection()!.addRange(range);
-      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
     };
     try {
       add();
@@ -292,26 +537,27 @@ describe('adding and editing chat annotations', () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith(annotation);
   });
 
-  it('replaces the matching Selection when adding a file annotation', () => {
+  it('replaces file Selection even when its text formatting differs from the annotation quote', () => {
     const sessionId = 'annotation-replaces-selection';
     const paragraph = document.createElement('p');
     paragraph.textContent = 'Before the selected words after.';
-    const editor = { registerRootListener: (listener: (root: HTMLElement) => void) => {
+    const editor = { update: vi.fn(), registerRootListener: (listener: (root: HTMLElement) => void) => {
       listener(paragraph);
       return () => {};
-    } } as LexicalEditor;
+    } } as unknown as LexicalEditor;
     document.body.append(paragraph);
     try {
       render(<Provider store={store}><AnnotationSessionProvider value={sessionId}>
         <FileAnnotationHarness editor={editor} filePath="/workspace/notes.md" />
       </AnnotationSessionProvider></Provider>);
-      setTextSelection('the selected words', '/workspace/notes.md');
+      setTextSelection('the selected\nwords', '/workspace/notes.md');
       const range = document.createRange();
       range.setStart(paragraph.firstChild!, 7);
       range.setEnd(paragraph.firstChild!, 25);
       window.getSelection()!.addRange(range);
-      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
       expect(getTextSelection()).toBeNull();
+      expect(window.getSelection()!.isCollapsed).toBe(true);
       expect(store.get(chatAnnotationDraftAtom(sessionId))).toEqual([
         expect.objectContaining({ quote: 'the selected words' }),
       ]);
@@ -329,11 +575,12 @@ describe('adding and editing chat annotations', () => {
     const rect = new DOMRect();
     vi.spyOn(paragraph, 'getClientRects').mockReturnValue(Object.assign([rect], { item: () => rect }));
     const editor = {
+      update: vi.fn(),
       registerRootListener: (listener: (root: HTMLElement) => void) => {
         listener(paragraph);
         return () => {};
       },
-    } as LexicalEditor;
+    } as unknown as LexicalEditor;
     const view = (sessionId: string) => (
       <Provider store={store}>
         <AnnotationSessionProvider value={sessionId}>
@@ -348,7 +595,7 @@ describe('adding and editing chat annotations', () => {
       range.setStart(paragraph.firstChild!, 7);
       range.setEnd(paragraph.firstChild!, 25);
       window.getSelection()!.addRange(range);
-      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
       const comment = screen.getByRole('textbox', { name: 'Annotation comment' });
       fireEvent.change(comment, { target: { value: 'First draft only' } });
       fireEvent.pointerDown(document.body);
@@ -381,6 +628,7 @@ describe('adding and editing chat annotations', () => {
     const root = document.createElement('section');
     const paragraph = document.createElement('p');
     paragraph.dataset.annotationMessageId = 'message-1';
+    paragraph.dataset.annotationMessageSequence = '6';
     paragraph.textContent = 'Before the selected words after.';
     paragraph.scrollIntoView = vi.fn();
     const rect = new DOMRect();
@@ -395,7 +643,7 @@ describe('adding and editing chat annotations', () => {
       range.setEnd(paragraph.firstChild!, 25);
       selection.addRange(range);
       fireEvent(document, new Event('selectionchange'));
-      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add annotation' }));
       const editor = await screen.findByRole('textbox', { name: 'Annotation comment' });
       fireEvent.change(editor, { target: { value: 'Keep this note' } });
       fireEvent.keyDown(editor, { key: 'Escape' });
@@ -411,7 +659,7 @@ describe('adding and editing chat annotations', () => {
       await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('sessions:update-metadata', sessionId, {
         annotationDraftBase: expect.any(Array),
         metadata: { draftAnnotations: [expect.objectContaining({
-          source: { type: 'message', sessionId, messageId: 'message-1' },
+          source: { type: 'message', sessionId, messageId: 'message-1', messageSequence: 6 },
           quote: 'the selected words',
           comment: 'Keep this note',
         })] },

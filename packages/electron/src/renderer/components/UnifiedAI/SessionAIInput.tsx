@@ -1,4 +1,7 @@
-import React, { forwardRef, useCallback, useEffect } from "react";
+import React, { forwardRef, useCallback, useEffect, useMemo } from "react";
+import { chatAnnotationDraftAtom, chatTextSelectionAtom, updateChatAnnotationDraft } from './chatAnnotationDraft';
+import { messageDraftContextAtom, setMessageDraftContext } from './messageDraftContext';
+import type { AIInputContextSnapshot } from '../../store/atoms/aiInputUndo';
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { ChatAttachment } from "@nimbalyst/runtime/ai/server/types";
 import { AIInput, type AIInputRef } from "./AIInput";
@@ -66,6 +69,15 @@ export const SessionAIInput = forwardRef<AIInputRef, SessionAIInputProps>(
     );
 
     const promptSuggestion = useAtomValue(sessionPromptSuggestionAtom(sessionId));
+    const context = useAtomValue(messageDraftContextAtom(sessionId));
+    const annotations = useAtomValue(chatAnnotationDraftAtom(sessionId));
+    const [selection, setSelection] = useAtom(chatTextSelectionAtom(sessionId));
+    const messageContext = useMemo(() => ({ context, annotations, selection }), [context, annotations, selection]);
+    const changeMessageContext = useCallback((snapshot: AIInputContextSnapshot) => {
+      setMessageDraftContext(sessionId, snapshot.context);
+      updateChatAnnotationDraft(sessionId, () => snapshot.annotations);
+      setSelection(snapshot.selection);
+    }, [sessionId, setSelection]);
     const setPromptSuggestion = useSetAtom(sessionPromptSuggestionAtom(sessionId));
     const clearPromptSuggestion = useCallback(
       () => setPromptSuggestion(null),
@@ -125,6 +137,8 @@ export const SessionAIInput = forwardRef<AIInputRef, SessionAIInputProps>(
         onAttachmentAdd={enableAttachments ? onAttachmentAdd : undefined}
         onAttachmentRemove={enableAttachments ? onAttachmentRemove : undefined}
         promptSuggestion={promptSuggestion}
+        messageContext={rest.remoteSession ? undefined : messageContext}
+        onMessageContextChange={rest.remoteSession ? undefined : changeMessageContext}
         {...rest}
       />
     );

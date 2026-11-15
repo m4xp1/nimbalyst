@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Channel-set gate for the AIService IPC extraction.
@@ -92,6 +92,7 @@ import { AIService } from '../AIService';
 import { logger } from '../../../utils/logger';
 import { resetPushOutcomeWarnings } from '@nimbalyst/runtime/sync/pushOutcome';
 import { AISessionsRepository } from '@nimbalyst/runtime/storage/repositories/AISessionsRepository';
+import { getSessionStateManager } from '@nimbalyst/runtime/ai/server/SessionStateManager';
 
 /**
  * A context whose every member throws when called. Registration must only
@@ -152,6 +153,7 @@ const EXPECTED_CHANNELS: Record<string, string[]> = {
     'claude-code:cancel-tool-permission',
   ],
   registerTurnControlHandlers: [
+    'ai:resolveCodexWriter',
     'ai:cancelRequest',
     'ai:interruptCurrentTurn',
     'ai:getSteerTarget',
@@ -275,6 +277,58 @@ const REGISTRARS: Record<string, (ctx: AIServiceContext) => void> = {
   registerExtensionChatHandlers,
 };
 
+describe('Codex writer recovery handler', () => {
+  beforeEach(() => {
+    getProvider.mockReset(); createProvider.mockReset();
+    vi.mocked(AISessionsRepository.get).mockResolvedValue({
+      id: 'writer-session', provider: 'openai-codex', workspacePath: '/project', worktreePath: '/worktree',
+      providerSessionId: 'saved-thread', messages: [], createdAt: 0, updatedAt: 0,
+    });
+    registerTurnControlHandlers({
+      ...stubContext, sessionsProcessingQueue: new Set(), isProviderEnabledForWorkspace: () => true,
+      getApiKeyForProvider: () => 'synthetic-key',
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+  it('deduplicates clicks and only reconnects the stored session', async () => {
+    let finish!: () => void;
+    const resolveWriterConflict = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    getProvider.mockReturnValue({ resolveWriterConflict });
+    const handler = handlers.get('ai:resolveCodexWriter')!;
+    const first = handler(null, 'writer-session'), second = handler(null, 'writer-session');
+    await vi.waitFor(() => expect(resolveWriterConflict).toHaveBeenCalledTimes(1));
+    expect(resolveWriterConflict).toHaveBeenCalledWith('writer-session', { workspacePath: '/worktree', providerSessionId: 'saved-thread' });
+    finish();
+    await expect(first).resolves.toEqual({ success: true });
+    await expect(second).resolves.toEqual({ success: true });
+    expect(createProvider).not.toHaveBeenCalled();
+  });
+  it('restores a provider after restart using the current configured credentials', async () => {
+    getProvider.mockReturnValue(null);
+    const initialize = vi.fn().mockResolvedValue(undefined), resolveWriterConflict = vi.fn().mockResolvedValue(undefined);
+    createProvider.mockReturnValue({ initialize, resolveWriterConflict });
+    await expect(handlers.get('ai:resolveCodexWriter')!(null, 'writer-session')).resolves.toEqual({ success: true });
+    expect(initialize).toHaveBeenCalledWith({ apiKey: 'synthetic-key' });
+    expect(createProvider).toHaveBeenCalledWith('openai-codex', 'writer-session');
+    expect(resolveWriterConflict).toHaveBeenCalledTimes(1);
+  });
+  it.each(['running', 'waiting_for_input'] as const)('leaves a %s session alone', async status => {
+    vi.spyOn(getSessionStateManager(), 'getSessionState').mockReturnValue({
+      sessionId: 'writer-session', status, lastActivity: new Date(), isStreaming: true,
+    });
+    await expect(handlers.get('ai:resolveCodexWriter')!(null, 'writer-session')).resolves.toMatchObject({ success: false, error: expect.stringContaining('still working') });
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(createProvider).not.toHaveBeenCalled();
+  });
+  it('explains a foreign lock and does not discard the thread or retry a prompt', async () => {
+    const resolveWriterConflict = vi.fn().mockRejectedValue(new Error('thread saved-thread already has an active writer'));
+    getProvider.mockReturnValue({ resolveWriterConflict });
+    const result = await handlers.get('ai:resolveCodexWriter')!(null, 'writer-session');
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Close it there') });
+    expect(resolveWriterConflict).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AIService IPC registrars', () => {
   beforeEach(() => {
     registered.length = 0;
@@ -287,12 +341,12 @@ describe('AIService IPC registrars', () => {
     });
   }
 
-  it('registers all 66 channels across the modules, with no duplicates', () => {
+  it('registers all 67 channels across the modules, with no duplicates', () => {
     for (const register of Object.values(REGISTRARS)) {
       register(stubContext);
     }
-    expect(registered).toHaveLength(66);
-    expect(new Set(registered).size).toBe(66);
+    expect(registered).toHaveLength(67);
+    expect(new Set(registered).size).toBe(67);
   });
 });
 

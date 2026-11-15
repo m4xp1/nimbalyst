@@ -2,6 +2,7 @@ import {getPrivilegedExtensionHost} from '../extensions/PrivilegedExtensionHost'
 import { decodeRipgrepMatch, fileContentPattern } from '../utils/fileContentSearch';
 import { describeWorkspaceSearchRoots, owningSearchRoot, canonicalSearchPath, searchPathKey, scanSearchRoots } from '../utils/workspaceSearchRoots';
 import { BrowserWindow, shell, clipboard, nativeImage } from 'electron';
+import { encodeMessageClipboard, readClipboardMessage } from '@nimbalyst/runtime/ai/messageClipboard';
 import { systemShell } from '../utils/systemShell';
 import { readWindowsClipboardImage } from '../utils/windowsClipboard';
 import { readFileSync, readdirSync, statSync, existsSync, promises as fsPromises } from 'fs';
@@ -931,6 +932,13 @@ export function registerWorkspaceHandlers() {
 
     safeHandle('copy-to-clipboard', async (_event, text: string) => {
         clipboard.writeText(text);
+        return { success: true };
+    });
+
+    safeHandle('copy-chat-message', async (_event, value: unknown) => {
+        const message = readClipboardMessage(value);
+        if (!message) throw new Error('Invalid message clipboard data');
+        clipboard.write(encodeMessageClipboard(message));
         return { success: true };
     });
 

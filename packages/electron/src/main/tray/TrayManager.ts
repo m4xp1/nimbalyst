@@ -1538,8 +1538,8 @@ export class TrayManager {
     if (process.platform === 'win32') {
       let icon = this.windowsIcons.get(needsColorDot);
       if (!icon) {
-        // icon.png is shipped in app.asar as well as at the development package root.
-        icon = createWindowsTrayIcon(path.join(getPackageRoot(), 'icon.png'), needsColorDot);
+        const resourcesDir = app.isPackaged ? process.resourcesPath : path.join(getPackageRoot(), 'resources');
+        icon = createWindowsTrayIcon(path.join(resourcesDir, 'tray-windows'), needsColorDot);
         this.windowsIcons.set(needsColorDot, icon);
       }
       return icon;

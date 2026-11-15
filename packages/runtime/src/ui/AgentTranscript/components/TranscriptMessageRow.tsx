@@ -639,7 +639,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
 
     case 'orphanTool':
       return (
-        <div data-message-index={index} ref={setRef}>
+        <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence} ref={setRef}>
           {activityHeader}
           <div className="rich-transcript-tool-container orphan ml-6 mb-2">
             {(activity && !activityExpanded ? interactiveEntries : info.toolEntries)?.map(entry => renderToolEntry(entry, toolShared))}
@@ -659,6 +659,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
       return (
         <div
           data-message-index={index}
+          data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence}
           ref={setRef}
           className="rich-transcript-message rich-transcript-teammate-notification rounded-md relative max-w-full overflow-x-hidden break-words mb-1"
         >
@@ -686,7 +687,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
 
     case 'attachmentDenied':
       return (
-        <div data-message-index={index}>
+        <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence}>
           <AttachmentStagingDeniedCard
             sessionId={sessionId}
             systemMessage={message.systemMessage!}
@@ -698,14 +699,14 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
 
     case 'permissionDenied':
       return (
-        <div data-message-index={index} ref={setRef}>
+        <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence} ref={setRef}>
           <PermissionDeniedCard message={message} />
         </div>
       );
 
     case 'system':
       return (
-        <div data-message-index={index} ref={setRef}>
+        <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence} ref={setRef}>
           <SystemReminderCard message={message} />
         </div>
       );
@@ -717,7 +718,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   const turn = info.turn;
   if (activity && !activity.answer && !activityExpanded) {
     return (
-      <div data-message-index={index} ref={setRef}>
+      <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence} ref={setRef}>
         {activityHeader}
         {!!interactiveEntries?.length && <div className="rich-transcript-interactive-tools ml-6 mb-2">
           {interactiveEntries.map(entry => renderToolEntry(entry, toolShared))}
@@ -726,12 +727,9 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
     );
   }
   return (
-    <>
+    <div data-message-index={index} data-annotation-message-id={message.id} data-annotation-message-sequence={message.sequence} ref={setRef}>
     {activityHeader}
     <div
-      data-message-index={index}
-      data-annotation-message-id={message.id}
-      ref={setRef}
       className={`rich-transcript-message rounded-md relative max-w-full overflow-x-hidden break-words mb-2 ${isUser ? 'user bg-[var(--nim-chat-user-bg,var(--nim-bg-secondary))]' : 'assistant bg-[var(--nim-bg)]'} ${compactMode ? 'compact p-2' : 'normal p-3'} ${!isNewGroup ? 'continuation -mt-1' : ''}`}
     >
       {/* Restart indicator line (dev mode only) - rendered before the first message after restart */}
@@ -799,7 +797,7 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
           <button
             onClick={() => onCopy(message, index)}
             className={`rich-transcript-copy-button p-1.5 rounded-md bg-[var(--nim-bg-secondary)] border border-[var(--nim-border)] cursor-pointer transition-all flex items-center justify-center hover:bg-[var(--nim-bg-hover)] ${isCopied ? 'copied' : ''}`}
-            title="Copy as Markdown"
+            title={isUser ? 'Copy message with context' : 'Copy as Markdown'}
           >
             {isCopied ? (
               <MaterialSymbol icon="check" size={16} className="text-[var(--nim-success)]" />
@@ -843,6 +841,6 @@ export const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
         </div>
       )}
     </div>
-    </>
+    </div>
   );
 });

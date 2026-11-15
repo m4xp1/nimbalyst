@@ -5,6 +5,7 @@ import { mergeChatAnnotationChanges, readChatAnnotations, sameChatAnnotation, ty
 import { store } from '@nimbalyst/runtime/store';
 import { sessionStoreAtom, updateSessionStoreAtom } from '../../store/atoms/sessions';
 import { errorNotificationService } from '../../services/ErrorNotificationService';
+import { messageDraftContextAtom } from './messageDraftContext';
 
 export const AnnotationSessionContext = createContext<Atom<string | null> | null>(null);
 
@@ -38,14 +39,33 @@ export const chatAnnotationDraftAtom = atomFamily((sessionId: string) => atom(ge
   const pending = get(pendingDraft(sessionId));
   return pending ? mergeDraft(remote, pending) : remote;
 }));
-export const openChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
+/** Ephemeral editor location belongs to the surface that received the click. */
+export interface ChatAnnotationEditorRequest {
+  id: string;
+  root: HTMLElement;
+  x: number;
+  y: number;
+}
+export const openChatAnnotationAtom = atomFamily((_sessionId: string) => atom<ChatAnnotationEditorRequest | null>(null));
 export const revealChatAnnotationAtom = atomFamily((_sessionId: string) => atom<string | null>(null));
+/** One explicit Find request may reveal a copied annotation in its original chat. */
+export const annotationSourcePreviewAtom = atom<{ ownerSessionId: string; annotation: ChatAnnotation; pending: boolean } | null>(null);
+/** Transient transcript selection uses the same session context as annotations,
+ * without persisting a draft annotation until the user chooses Add annotation. */
+export const chatTextSelectionAtom = atomFamily((_sessionId: string) => atom<ChatAnnotation | null>(null));
+export const chatAnnotationContextAtom = atomFamily((sessionId: string) => atom(get => {
+  const draft = get(chatAnnotationDraftAtom(sessionId));
+  const selection = get(chatTextSelectionAtom(sessionId));
+  const pastedSelection = get(messageDraftContextAtom(sessionId))?.selection;
+  const selections = [pastedSelection, selection].filter((value): value is ChatAnnotation => !!value);
+  return selections.length ? [...draft, ...selections] : draft;
+}));
 
 const saves = new Map<string, Promise<void>>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const dirtySessions = new Set<string>();
 const remoteVersions = new Map<string, number>();
-const submissions = new Map<string, readonly ChatAnnotation[]>();
+const submissions = new Map<string, { annotations: readonly ChatAnnotation[]; onAccepted?: () => void }>();
 export const ANNOTATION_SAVE_DELAY_MS = 300;
 
 /** Called by the existing session metadata listener, including for unloaded sessions. */
@@ -105,21 +125,26 @@ export async function flushAllChatAnnotationDrafts(): Promise<void> {
 
 export function consumeChatAnnotationDraft(sessionId: string, sent: readonly ChatAnnotation[]): Promise<void> {
   const snapshot = new Map(sent.map(annotation => [annotation.id, annotation]));
+  const selection = store.get(chatTextSelectionAtom(sessionId));
+  if (selection && sameChatAnnotation(snapshot.get(selection.id), selection)) store.set(chatTextSelectionAtom(sessionId), null);
   updateChatAnnotationDraft(sessionId, draft => draft.filter(annotation => !sameChatAnnotation(snapshot.get(annotation.id), annotation)));
   return flushChatAnnotationDraft(sessionId);
 }
 
-export function trackChatAnnotationSubmission(sessionId: string, annotations: readonly ChatAnnotation[]): () => void {
-  submissions.set(sessionId, annotations);
-  return () => { if (submissions.get(sessionId) === annotations) submissions.delete(sessionId); };
+export function trackChatAnnotationSubmission(sessionId: string, annotations: readonly ChatAnnotation[], onAccepted?: () => void): () => void {
+  const submission = { annotations, onAccepted };
+  submissions.set(sessionId, submission);
+  return () => { if (submissions.get(sessionId) === submission) submissions.delete(sessionId); };
 }
 
 /** A persisted user message acknowledges the send before a long agent turn finishes. */
 export function acceptChatAnnotationSubmission(sessionId: string): void {
-  const annotations = submissions.get(sessionId);
-  if (!annotations) return;
+  const submission = submissions.get(sessionId);
+  if (!submission) return;
   submissions.delete(sessionId);
+  const { annotations, onAccepted } = submission;
   if (annotations.length) void consumeChatAnnotationDraft(sessionId, annotations).catch(() => {});
+  onAccepted?.();
 }
 
 export function updateChatAnnotationDraft(sessionId: string, update: (draft: ChatAnnotation[]) => ChatAnnotation[]): void {

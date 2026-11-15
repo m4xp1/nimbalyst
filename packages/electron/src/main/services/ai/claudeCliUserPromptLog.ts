@@ -37,6 +37,7 @@ export interface LogClaudeCliUserPromptInput {
    */
   attachments?: ChatAttachment[];
   annotations?: ChatAnnotation[];
+  draftContext?: import('@nimbalyst/runtime/ai/messageClipboard').MessageDraftContext;
   promptProvenance?: PromptProvenance;
 }
 
@@ -88,6 +89,7 @@ export async function logClaudeCliUserPrompt(
     const metadata = {
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(annotations.length > 0 ? { annotations } : {}),
+      ...(input.draftContext ? { draftContext: input.draftContext } : {}),
       ...(input.promptProvenance ? { promptProvenance: input.promptProvenance } : {}),
     };
     await deps.createMessage({

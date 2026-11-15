@@ -255,6 +255,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
   private readonly liveProtocolSessions = new Map<string, ProtocolSession>();
   private readonly liveProtocolSessionPermissionKeys = new Map<string, string>();
   private readonly activeProtocolSessionCounts = new Map<string, number>();
+  private readonly writerRecoveries = new Map<string, Promise<void>>();
   private readonly protocolSessionIdleTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -1024,6 +1025,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     workspacePath?: string,
     attachments?: ChatAttachment[]
   ): AsyncIterableIterator<StreamChunk> {
+    if (sessionId) await this.writerRecoveries.get(sessionId)?.catch(() => {});
     const unusableWorkspace = describeUnusableWorkspacePath(workspacePath);
     if (unusableWorkspace || !workspacePath) {
       yield { type: 'error', error: unusableWorkspace ?? 'No project folder is set for this session.' };
@@ -1969,6 +1971,35 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     this.evictLiveProtocolSession(sessionId);
     this.sessions.deleteSession(sessionId);
     this.appServerNotificationDeduper.delete(sessionId);
+  }
+
+  /** Reconnect only an idle saved conversation; no prompts or history replacement. */
+  async resolveWriterConflict(sessionId: string, options: {
+    workspacePath?: string; providerSessionId?: string;
+  }): Promise<void> {
+    const pending = this.writerRecoveries.get(sessionId);
+    if (pending) return pending;
+    if (this.transport !== 'app-server' || !(this.protocol instanceof CodexAppServerProtocol)) {
+      throw new Error('This Codex transport cannot reconnect a saved conversation.');
+    }
+    if ((this.activeProtocolSessionCounts.get(sessionId) ?? 0) > 0) {
+      throw new Error('This session is still working. Wait for it to finish before trying again.');
+    }
+    const threadId = this.sessions.getSessionId(sessionId) || options.providerSessionId;
+    const problem = describeUnusableWorkspacePath(options.workspacePath);
+    if (!threadId || problem || !options.workspacePath) {
+      throw new Error(problem ?? 'The saved Codex conversation or project is unavailable.');
+    }
+    const workspaceAuth = this.config?.apiKey ? undefined : OpenAICodexProvider.workspaceAuthResolver?.();
+    workspaceAuth?.assertCurrent();
+    this.evictLiveProtocolSession(sessionId);
+    const recovery = this.protocol.checkThreadResume(threadId, {
+      workspacePath: options.workspacePath,
+      raw: { nimbalystSessionId: sessionId, ...(workspaceAuth ? { codexWorkspaceAuth: workspaceAuth } : {}) },
+    });
+    this.writerRecoveries.set(sessionId, recovery);
+    try { await recovery; }
+    finally { this.writerRecoveries.delete(sessionId); }
   }
 
   destroy(): void {
@@ -3004,7 +3035,7 @@ export class OpenAICodexProvider extends BaseAgentProvider {
     const result = await this.protocol.steerTurn(session, expectedTurnId, request.prompt ?? request.message);
     if (result.success) {
       await this.logAgentMessageBestEffort(sessionId, 'input', JSON.stringify({ prompt: request.message }), {
-        metadata: { annotations: request.annotations, codexSteerTurnId: result.turnId },
+        metadata: { annotations: request.annotations, draftContext: request.draftContext, codexSteerTurnId: result.turnId },
       });
     }
     return result;

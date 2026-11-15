@@ -17,13 +17,14 @@ const mocks = vi.hoisted(() => {
     getWorkspaceRecentFiles: vi.fn(() => [] as string[]),
     getSyncId: vi.fn(() => 'sync-id'),
     trashItem: vi.fn(async () => {}),
+    clipboardWrite: vi.fn(),
   };
 });
 
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => mocks.fakeWindow, getAllWindows: () => [] },
   shell: { trashItem: mocks.trashItem },
-  clipboard: {},
+  clipboard: { write: mocks.clipboardWrite },
   nativeImage: {},
 }));
 vi.mock('../../utils/ipcRegistry', () => ({
@@ -58,6 +59,7 @@ vi.mock('../../services/analytics/AnalyticsService', () => ({
 }));
 vi.mock('../../utils/systemShell', () => ({ systemShell: {} }));
 vi.mock('../../utils/windowsClipboard', () => ({}));
+vi.mock('../../extensions/PrivilegedExtensionHost', () => ({ getPrivilegedExtensionHost: vi.fn() }));
 vi.mock('@nimbalyst/runtime', () => ({ fuzzyMatchPath: vi.fn() }));
 vi.mock('../../file/FileWatcher', () => ({ startFileWatcher: vi.fn(), stopFileWatcher: vi.fn() }));
 vi.mock('../../utils/FileTree', () => ({}));
@@ -100,6 +102,14 @@ describe('workspace handlers in a project-rail window', () => {
   it('records a recent file under the rail project that contains it', async () => {
     await mocks.handlers.get('add-to-workspace-recent-files')!({ sender: {} }, join(projectB, 'a.md'));
     expect(mocks.addWorkspaceRecentFile).toHaveBeenCalledWith(projectB, join(projectB, 'a.md'));
+  });
+
+  it('writes native plain text and portable HTML together without accepting execution settings', async () => {
+    await mocks.handlers.get('copy-chat-message')!({}, { version: 1, text: 'Copy this', context: {
+      document: { filePath: 'notes.md' }, permissionsPath: 'unexpected' } });
+    expect(mocks.clipboardWrite).toHaveBeenCalledWith({ text: expect.stringContaining('notes.md'), html: expect.stringContaining('data-nimbalyst-message=') });
+    expect(mocks.clipboardWrite.mock.lastCall?.[0].html).not.toContain('unexpected');
+    await expect(mocks.handlers.get('copy-chat-message')!({}, { version: 2, text: 'future' })).rejects.toThrow('Invalid');
   });
 
   it('lists recent files for the project on screen when the renderer names none', async () => {

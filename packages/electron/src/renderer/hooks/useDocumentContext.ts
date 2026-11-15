@@ -39,6 +39,7 @@ export interface DocumentContext {
  * Subset of DocumentContext with all optional fields.
  */
 export interface SerializableDocumentContext {
+  draftContext?: import('@nimbalyst/runtime/ai/messageClipboard').MessageDraftContext;
   filePath?: string;
   /** Display title for the context indicator; the path remains the model's identity. */
   fileName?: string;

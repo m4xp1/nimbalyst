@@ -24,6 +24,7 @@ export type { ToolResult } from './protocols/ProtocolInterface';
 export type { TranscriptViewMessage } from './transcript/TranscriptProjector';
 
 export interface DocumentContext {
+  draftContext?: import('../messageClipboard').MessageDraftContext;
   chatAnnotations?: import('../chatAnnotations').ChatAnnotation[];
   /** Display text before annotated quotes are appended to the provider prompt. */
   annotationDisplayPrompt?: string;

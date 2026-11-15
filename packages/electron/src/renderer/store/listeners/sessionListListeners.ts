@@ -10,6 +10,7 @@
 import { store } from '../index';
 import { sessionBackgroundTasksAtom, type BackgroundTaskSummary } from '../atoms/sessionBackgroundTasks';
 import { applyChatAnnotationSnapshot } from '../../components/UnifiedAI/chatAnnotationDraft';
+import { applyMessageDraftContextSnapshot } from '../../components/UnifiedAI/messageDraftContext';
 import {
   refreshSessionListAtom,
   sessionListWorkspaceAtom,
@@ -66,6 +67,7 @@ export function initSessionListListeners(): () => void {
     if (metadata && Object.hasOwn(metadata, 'draftAnnotations')) {
       applyChatAnnotationSnapshot(sessionId, metadata.draftAnnotations);
     }
+    if (metadata && Object.hasOwn(metadata, 'draftMessageContext')) applyMessageDraftContextSnapshot(sessionId, metadata.draftMessageContext);
     // console.log('[sessionListListeners] session-updated received:', sessionId, updates);
     // Live-only drain state; it is not a registry field, so a list refresh cannot drop it.
     if (Array.isArray(updates.backgroundTasks)) {

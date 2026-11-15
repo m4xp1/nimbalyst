@@ -159,6 +159,62 @@ describe('CodexAppServerProtocol', () => {
     if (!child.killed) child.kill();
   });
 
+  it('checks the same saved thread without a turn, fork or settings overrides', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.checkThreadResume('saved-writer-thread', { workspacePath: '/tmp/ws' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const resume = await nextWrittenMatching(child, 'thread/resume');
+    expect(resume.params).toEqual({ threadId: 'saved-writer-thread', cwd: '/tmp/ws', excludeTurns: true });
+    child.emitLine({ id: resume.id, result: { thread: { id: 'saved-writer-thread' } } });
+    await pending;
+    expect(child.killed).toBe(true);
+    expect(child.writtenLines.some((line: any) => /^(turn\/|thread\/(start|fork|delete|archive))/.test(line.method))).toBe(false);
+  });
+
+  it('reports a foreign writer without creating a replacement conversation', async () => {
+    const protocol = new CodexAppServerProtocol();
+    const pending = protocol.checkThreadResume('foreign-writer', { workspacePath: '/tmp/ws' });
+    const failed = expect(pending).rejects.toThrow('already has an active writer');
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const resume = await nextWrittenMatching(child, 'thread/resume');
+    child.emitLine({ id: resume.id, error: { code: -32600, message: 'thread foreign-writer already has an active writer' } });
+    await failed;
+    expect(child.killed).toBe(true);
+    expect(child.writtenLines.filter((line: any) => /^(turn|thread)\//.test(line.method))).toHaveLength(1);
+  });
+
+  it('waits for its previous writer to exit before spawning a replacement', async () => {
+    const terminate = vi.fn();
+    const protocol = new CodexAppServerProtocol({ terminateProcessTreeOverride: terminate });
+    const created = protocol.createSession({ workspacePath: '/tmp/ws' });
+    const init = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: init.id, result: {} });
+    const skills = await nextWrittenMatching(child, 'skills/extraRoots/set');
+    child.emitLine({ id: skills.id, result: {} });
+    const start = await nextWrittenMatching(child, 'thread/start');
+    child.emitLine({ id: start.id, result: { thread: { id: 'closing-writer' } } });
+    const session = await created;
+    protocol.cleanupSession(session);
+    expect(terminate).toHaveBeenCalledTimes(1);
+    const previous = child;
+    const resumed = protocol.resumeSession('closing-writer', { workspacePath: '/tmp/ws' });
+    await Promise.resolve();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    previous.kill();
+    const nextInit = await nextWrittenMatching(child, 'initialize');
+    child.emitLine({ id: nextInit.id, result: {} });
+    const nextSkills = await nextWrittenMatching(child, 'skills/extraRoots/set');
+    child.emitLine({ id: nextSkills.id, result: {} });
+    const resume = await nextWrittenMatching(child, 'thread/resume');
+    child.emitLine({ id: resume.id, result: { thread: { id: 'closing-writer' } } });
+    expect((await resumed).id).toBe('closing-writer');
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
   it('steers only the expected active user turn and waits for Codex acknowledgement', async () => {
     const protocol = new CodexAppServerProtocol();
     const assertCurrent = vi.fn();

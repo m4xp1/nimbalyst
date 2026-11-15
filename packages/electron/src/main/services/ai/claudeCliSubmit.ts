@@ -167,6 +167,7 @@ export async function submitClaudeCliPrompt(
     prompt,
     attachments,
     ...(annotations.length ? { annotations } : {}),
+    ...(!isTuiTrigger && input.documentContext?.draftContext ? { draftContext: input.documentContext.draftContext } : {}),
     promptProvenance: input.documentContext?.promptProvenance,
   });
 

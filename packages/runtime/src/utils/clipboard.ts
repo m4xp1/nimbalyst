@@ -6,6 +6,23 @@
  * native clipboard module via IPC when available, falling back to the web API
  * for non-Electron contexts.
  */
+import { encodeMessageClipboard, type ClipboardMessage } from '../ai/messageClipboard';
+
+export async function copyMessageToClipboard(message: ClipboardMessage): Promise<void> {
+  const api = (window as any).electronAPI;
+  if (api?.invoke) {
+    await api.invoke('copy-chat-message', message);
+    return;
+  }
+  const data = encodeMessageClipboard(message);
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/plain': new Blob([data.text], { type: 'text/plain' }),
+      'text/html': new Blob([data.html], { type: 'text/html' }),
+    })]);
+  } else await copyToClipboard(data.text);
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   // Prefer Electron's native clipboard (always works, no focus requirement)
   const electronAPI = (window as any).electronAPI;

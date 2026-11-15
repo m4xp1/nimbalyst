@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Provider, createStore } from 'jotai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AIInput } from '../AIInput';
+import { encodeMessageClipboard, type ClipboardMessage } from '@nimbalyst/runtime/ai/messageClipboard';
+import type { AIInputContextSnapshot } from '../../../store/atoms/aiInputUndo';
 import { DEFAULT_DICTATION_SETTINGS } from '../../../../shared/dictation';
 import { dictationSettingsAtom } from '../../../store/atoms/dictation';
 import { getDictationTarget } from '../../../dictation/dictationTargets';
@@ -93,6 +95,38 @@ describe('Windows clipboard image paste', () => {
     await act(async () => { finishSave({ success: true, attachment: { id: 'pasted' } }); });
     expect(onAttachmentAdd).toHaveBeenCalledTimes(1);
     expect(input.value).toMatch(/^edited during save @pasted-image-.*\.png $/);
+  });
+});
+
+describe('message context paste', () => {
+  it('inserts at the caret and restores text, annotations and selection together on undo and redo', async () => {
+    const annotation = { id: 'original', source: { type: 'message' as const, sessionId: 'source', messageId: '42', messageSequence: 12 },
+      quote: 'Quote', before: '', after: '', comment: 'Comment' };
+    const message: ClipboardMessage = { version: 1, text: 'Pasted '.repeat(400), annotations: [annotation],
+      context: { document: { filePath: 'C:/project/notes.md', content: '# Notes' }, selection: { ...annotation, id: 'selected', comment: '' } } };
+    const clipboard = encodeMessageClipboard(message);
+    let state: AIInputContextSnapshot;
+    function Harness() {
+      const [value, change] = useState('before AFTER');
+      const [context, setContext] = useState<AIInputContextSnapshot>({ context: null, annotations: [], selection: null });
+      state = context;
+      return <AIInput value={value} onChange={change} onSend={vi.fn()} remoteSession
+        sessionId="context-paste-test" messageContext={context} onMessageContextChange={setContext} />;
+    }
+    render(<Provider store={createStore()}><Harness /></Provider>);
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement;
+    input.setSelectionRange(7, 12);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: (type: string) => type === 'text/html' ? clipboard.html : clipboard.text } });
+    expect(input.value).toBe('before ' + message.text);
+    expect(state!.context).toEqual(message.context);
+    expect(state!.annotations).toEqual([{ ...annotation, id: expect.any(String) }]);
+    expect(state!.annotations[0].id).not.toBe(annotation.id);
+    fireEvent.keyDown(input, { key: 'z', ctrlKey: true });
+    expect(input.value).toBe('before AFTER');
+    expect(state!).toEqual({ context: null, annotations: [], selection: null });
+    fireEvent.keyDown(input, { key: 'Z', ctrlKey: true, shiftKey: true });
+    expect(input.value).toBe('before ' + message.text);
+    expect(state!.context?.selection?.source).toEqual(annotation.source);
   });
 });
 

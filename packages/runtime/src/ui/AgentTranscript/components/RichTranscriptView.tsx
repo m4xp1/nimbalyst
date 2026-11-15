@@ -7,7 +7,8 @@ import type { TranscriptSettings } from '../types';
 import type { TranscriptFileLocation } from './MarkdownRenderer';
 import { MaterialSymbol } from '../../icons/MaterialSymbol';
 import { formatMessageTime } from '../../../utils/dateUtils';
-import { copyToClipboard } from '../../../utils/clipboard';
+import { copyToClipboard, copyMessageToClipboard } from '../../../utils/clipboard';
+import { readClipboardMessage } from '../../../ai/messageClipboard';
 import { TranscriptSearchBar } from './TranscriptSearchBar';
 import { setSessionIsAtBottom, getSessionIsAtBottom } from '../../../store/atoms/transcriptScroll';
 import { isAppleMobileWebKit } from '../../../utils/platform';
@@ -18,6 +19,7 @@ import type { SubagentChildContext, TranscriptToolShared } from './TranscriptToo
 import { TranscriptMessageRow, computeTranscriptRowInfos, type TranscriptRowInfo } from './TranscriptMessageRow';
 import { TranscriptImageGalleryProvider } from './TranscriptImageGallery';
 import { buildTranscriptActivity, isActivityExpanded, type ActivityExpandedOverride, type TranscriptActivityPart } from '../utils/transcriptActivity';
+import { useTranscriptSelectionRetention } from '../hooks/useTranscriptSelectionRetention';
 
 // Edit/diff extraction moved with the tool card; re-exported for existing importers.
 export {
@@ -524,7 +526,7 @@ const getTranscriptMessageKey = (
 
 
 export const RichTranscriptView = React.forwardRef<
-  { scrollToMessage: (index: number, toolCallId?: string) => void; scrollToTop: () => void },
+  { scrollToMessage: (index: number, toolCallId?: string, endIndex?: number) => void; scrollToTop: () => void },
   RichTranscriptViewProps
 >(({ sessionId, sessionStatus, isProcessing, hasPendingInteractivePrompt, messages, provider, settings: propsSettings, onSettingsChange, showSettings, documentContext, workspacePath, renderEmptyExtra, hideEmptyHelp, readFile, onOpenFile, onOpenSession, onCompact, promptAdditions, currentTeammates, waitingForNoun, backgroundTasks, appStartTime, renderEmbeddedFile, canEmbedFile, loadToolCallDiffs, onSearchBarVisibilityChange, persistScrollState = true, activityExpandedOverrides, onActivityExpandedChange }, ref) => {
   const [localActivityOverrides, setLocalActivityOverrides] = useState<Record<string, Record<string, ActivityExpandedOverride>>>({});
@@ -556,6 +558,30 @@ export const RichTranscriptView = React.forwardRef<
   const [isContainerVisible, setIsContainerVisible] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const viewRootRef = useRef<HTMLDivElement>(null);
+  const selectionMessageIds = useMemo(() => messages.map((message, index) => getTranscriptMessageKey(sessionId, message, index)), [sessionId, messages]);
+  const selectedMessageIndices = useTranscriptSelectionRetention(viewRootRef, selectionMessageIds);
+  const [annotationRange, setAnnotationRange] = useState<{ sessionId: string; start: number; end: number } | null>(null);
+  const keptMessageIndices = useMemo(() => {
+    if (!annotationRange || annotationRange.sessionId !== sessionId) return selectedMessageIndices;
+    const indices = new Set(selectedMessageIndices);
+    for (let index = annotationRange.start; index <= annotationRange.end && index < messages.length; index++) indices.add(index);
+    return [...indices].sort((first, second) => first - second);
+  }, [annotationRange, sessionId, selectedMessageIndices, messages.length]);
+  useEffect(() => {
+    if (!annotationRange) return;
+    // Keep only the requested span while revealing it. A subsequent user
+    // navigation releases it; native selection retention remains independent.
+    const root = viewRootRef.current;
+    const release = () => setAnnotationRange(null);
+    root?.addEventListener('wheel', release, { passive: true });
+    root?.addEventListener('pointerdown', release);
+    root?.addEventListener('keydown', release);
+    return () => {
+      root?.removeEventListener('wheel', release);
+      root?.removeEventListener('pointerdown', release);
+      root?.removeEventListener('keydown', release);
+    };
+  }, [annotationRange]);
   const vlistRef = useRef<VListHandle>(null);
   // Set when a scroll gesture hits a false top (see isAtFalseTranscriptTop);
   // onScrollEnd finishes the trip to the first row once virtua applies its jump.
@@ -823,8 +849,9 @@ export const RichTranscriptView = React.forwardRef<
 
   // Expose scroll method via ref
   React.useImperativeHandle(ref, () => ({
-    scrollToMessage: (index: number, toolCallId?: string) => {
+    scrollToMessage: (index: number, toolCallId?: string, endIndex?: number) => {
       if (!vlistRef.current) return;
+      setAnnotationRange(endIndex === undefined ? null : { sessionId, start: index, end: endIndex });
       revealActivityRef.current(index);
       vlistRef.current.scrollToIndex(index, { align: toolCallId ? 'start' : 'center' });
       // Highlight after scroll settles
@@ -851,7 +878,7 @@ export const RichTranscriptView = React.forwardRef<
     scrollToTop: () => {
       vlistRef.current?.scrollToIndex(0, { align: 'start' });
     }
-  }), []);
+  }), [sessionId]);
 
   // Reset scroll-ready state when session changes or container hides
   useEffect(() => {
@@ -973,7 +1000,13 @@ export const RichTranscriptView = React.forwardRef<
 
   const copyTranscriptViewMessageContent = useCallback(async (message: TranscriptViewMessage, index: number) => {
     try {
-      await copyToClipboard(message.text ?? '');
+      if (message.type === 'user_message') {
+        await copyMessageToClipboard(readClipboardMessage({
+          version: 1, text: message.text ?? '', context: message.draftContext,
+          annotations: message.annotations?.filter(annotation => annotation.id !== message.draftContext?.selection?.id),
+          attachments: message.attachments,
+        })!);
+      } else await copyToClipboard(message.text ?? '');
       setCopiedMessageIndex(index);
       setTimeout(() => setCopiedMessageIndex(null), 2000);
     } catch (err) {
@@ -1174,6 +1207,7 @@ export const RichTranscriptView = React.forwardRef<
                     className="rich-transcript-vlist !h-full !w-full"
                     style={{ height: '100%' }}
                     bufferSize={vlistBufferSize}
+                    keepMounted={keptMessageIndices}
                     itemSize={90}
                     cache={vlistCacheMap.get(sessionId)}
                     onScrollEnd={() => {
