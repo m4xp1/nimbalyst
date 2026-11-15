@@ -583,7 +583,7 @@ Companion app; pairs with a desktop over encrypted sync. Voice mode is not inclu
 - Reorder project rail icons by dragging, Move up/down, or Sort by name; order persists without changing the active project.
 - Drag a project from one window's rail to another window's rail to move it there, or drop it outside every window to open it in a new window at that spot. A window whose last project is dragged away closes.
 - Project Manager (Cmd+P)
-- System tray with session status and click-to-navigate. The Windows icon uses an outline for visibility on light backgrounds.
+- System tray with session status and click-to-navigate. Windows loads multi-size ICO files through native LoadImage, selecting exact bitmap sizes from 100% to 400% display scaling without stretching Electron's 1x image. The original logo, reduced padding and notification badge are retained.
 - macOS menu bar fleet monitoring -- follow active sessions, see which need attention, and open them from the menu bar
 - Dock badge for sessions needing attention
 - OS notifications for session events

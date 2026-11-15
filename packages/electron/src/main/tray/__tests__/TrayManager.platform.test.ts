@@ -334,13 +334,13 @@ describe('TrayManager - cross-platform initialisation (#39)', () => {
     expect(systemPrefsSubscribe).not.toHaveBeenCalled();
   });
 
-  it.each(['idle', 'running', 'attention', 'error'])('uses Windows application artwork for %s without monochrome outlining', (state) => {
+  it.each(['idle', 'running', 'attention', 'error'])('uses the upstream tray artwork on Windows for %s', (state) => {
     restorePlatform = stubPlatform('win32');
     const tray = TrayManager.getInstance() as unknown as {
       getIconForState: (state: string) => Electron.NativeImage;
     };
     const renderedImage = tray.getIconForState(state);
-    expect(createWindowsTrayIcon).toHaveBeenCalledWith(expect.stringMatching(/root[/\\]icon\.png$/), state === 'attention' || state === 'error');
+    expect(createWindowsTrayIcon).toHaveBeenCalledWith(expect.stringMatching(/root[/\\]resources[/\\]tray-windows$/), state === 'attention' || state === 'error');
     expect(renderedImage).toBeTruthy();
     const calls = vi.mocked(createWindowsTrayIcon).mock.calls.length;
     expect(tray.getIconForState(state)).toBe(renderedImage);

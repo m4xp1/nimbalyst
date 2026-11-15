@@ -381,6 +381,10 @@
         ]
       },
       {
+        "from": "resources/tray-windows",
+        "to": "tray-windows"
+      },
+      {
         "from": "resources/trayTemplate.png",
         "to": "trayTemplate.png"
       },

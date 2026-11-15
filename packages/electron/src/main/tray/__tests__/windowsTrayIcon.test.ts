@@ -1,19 +1,18 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest';
-vi.mock('electron', () => ({ nativeImage: {} }));
-import { paintWindowsTrayBadge, WINDOWS_TRAY_SCALES } from '../windowsTrayIcon';
+import { nativeImage } from 'electron';
+vi.mock('electron', () => ({ nativeImage: { createFromPath: vi.fn() } }));
+import { createWindowsTrayIcon } from '../windowsTrayIcon';
 
-it.each(WINDOWS_TRAY_SCALES)('preserves artwork outside the notification badge at scale %s', scale => {
-  const size = Math.round(16 * scale);
-  const source = Buffer.alloc(size * size * 4, 77);
-  const output = paintWindowsTrayBadge(source, size);
-  expect(output).not.toBe(source);
-  expect(source.every(value => value === 77)).toBe(true);
-  expect(output.subarray(0, Math.floor(size / 2) * size * 4)).toEqual(source.subarray(0, Math.floor(size / 2) * size * 4));
-  const center = (Math.floor(size * .77) * size + Math.floor(size * .77)) * 4;
-  expect([...output.subarray(center, center + 4)]).toEqual([246, 130, 59, 255]);
+it.each([false, true])('loads a native ICO path for notification=%s, preserving Windows frame selection', badge => {
+  const image = { isEmpty: () => false, setTemplateImage: vi.fn() };
+  vi.mocked(nativeImage.createFromPath).mockReturnValue(image as unknown as Electron.NativeImage);
+  expect(createWindowsTrayIcon('artwork', badge)).toBe(image);
+  expect(nativeImage.createFromPath).toHaveBeenLastCalledWith(expect.stringMatching(badge ? /notification\.ico$/ : /idle\.ico$/));
+  expect(image.setTemplateImage).toHaveBeenCalledWith(false);
 });
 
-it('rejects a bitmap with the wrong dimensions instead of corrupting pixels', () => {
-  expect(() => paintWindowsTrayBadge(Buffer.alloc(4), 32)).toThrow('dimensions');
+it('rejects missing ICO artwork', () => {
+  vi.mocked(nativeImage.createFromPath).mockReturnValue({ isEmpty: () => true } as Electron.NativeImage);
+  expect(() => createWindowsTrayIcon('missing', false)).toThrow('missing');
 });
